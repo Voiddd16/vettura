@@ -112,11 +112,22 @@ impl AcdArchive {
             let encoded_len = content_len.checked_mul(4).ok_or_else(|| {
                 Error::InvalidAcd(format!("content length {content_len} overflows at {pos}"))
             })?;
-            let encoded = bytes.get(pos..pos + encoded_len).ok_or_else(|| {
-                Error::InvalidAcd(format!(
+
+            // Reject absurd sizes before touching the slice, so a corrupted
+            // header cannot accidentally cause an enormous allocation or a
+            // pathological memory access pattern.
+            const MAX_ENCODED_LEN: usize = 512 * 1024 * 1024; // 512 MiB
+            if encoded_len > MAX_ENCODED_LEN {
+                return Err(Error::InvalidAcd(format!(
+                    "content of {encoded_len} bytes at {pos} exceeds the {MAX_ENCODED_LEN} byte limit"
+                )));
+            }
+            if encoded_len > bytes.len().saturating_sub(pos) {
+                return Err(Error::InvalidAcd(format!(
                     "content of {encoded_len} bytes exceeds file at {pos}"
-                ))
-            })?;
+                )));
+            }
+            let encoded = &bytes[pos..pos + encoded_len];
             pos += encoded_len;
 
             entries.push(AcdEntry {
@@ -148,96 +159,140 @@ impl AcdArchive {
     }
 }
 
-/// Derive the ACD key string from a car folder name.
+/// The ASCII bytes of the derived key are the actual cipher key.
+///
+/// The function implements the classic Assetto Corsa "seven parts + checksum"
+/// key derivation: eight decimal numbers, each masked to one byte (`& 0xff`)
+/// and joined by hyphens. Each part uses a distinct reduction over the folder
+/// name's character codes; the loops are deliberately kept close to the
+/// original Pascal so the resulting bytes stay bit-for-bit compatible.
+///
+/// # Arguments
+///
+/// * `folder_name` — the car folder name (e.g. `"cim_2008_ferrari"`).
+///   The bytes of the returned string are used directly as the cipher key.
 pub fn derive_key(folder_name: &str) -> String {
     let chars: Vec<i64> = folder_name.chars().map(|c| c as i64).collect();
     let n = chars.len() as i64;
 
-    let mut part1 = 0i64;
-    for &c in &chars {
-        part1 = part1.wrapping_add(c);
-    }
+    // Each part is masked to a single byte (0-255) before formatting.
+    let parts = [
+        derive_part_sum_all(&chars, n),
+        derive_part_alternating_product(&chars, n),
+        derive_part_scaled_difference(&chars, n),
+        derive_part_subtract_from_constant(&chars, n),
+        derive_part_scaled_accumulator(&chars, n),
+        derive_part_subtract_every_other(&chars, n),
+        derive_part_modulo_every_other(&chars, n),
+        derive_part_dividing_accumulator(&chars, n),
+    ];
 
-    let mut part2 = 0i64;
+    parts
+        .iter()
+        .map(|p| (p & 0xff).to_string())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Part 1: sum of all character codes.
+fn derive_part_sum_all(chars: &[i64], _n: i64) -> i64 {
+    chars.iter().fold(0i64, |acc, &c| acc.wrapping_add(c))
+}
+
+/// Part 2: alternating multiply–subtract over consecutive characters.
+fn derive_part_alternating_product(chars: &[i64], n: i64) -> i64 {
+    let mut part = 0i64;
     let mut i = 0i64;
     while i < n - 1 {
-        part2 = part2.wrapping_mul(chars[i as usize]);
+        part = part.wrapping_mul(chars[i as usize]);
         i += 1;
-        part2 = part2.wrapping_sub(chars[i as usize]);
+        part = part.wrapping_sub(chars[i as usize]);
         i += 1;
     }
+    part
+}
 
-    let mut part3 = 0i64;
+/// Part 3: divide by an offset divisor then subtract the divisor again.
+fn derive_part_scaled_difference(chars: &[i64], n: i64) -> i64 {
+    let mut part = 0i64;
     let mut i = 1i64;
     while i < n - 3 {
-        part3 = part3.wrapping_mul(chars[i as usize]);
+        part = part.wrapping_mul(chars[i as usize]);
         i += 1;
         let divisor = chars[i as usize] + 0x1b;
-        part3 = if part3 < 0 {
-            -(part3.abs() / divisor)
+        part = if part < 0 {
+            -(part.abs() / divisor)
         } else {
-            part3 / divisor
+            part / divisor
         };
         i -= 2;
-        part3 = part3.wrapping_add(-0x1b - chars[i as usize]);
+        part = part.wrapping_add(-0x1b - chars[i as usize]);
         i += 4;
     }
+    part
+}
 
-    let mut part4 = 0x1683i64;
-    for &c in chars.iter().skip(1) {
-        part4 = part4.wrapping_sub(c);
-    }
+/// Part 4: start at a fixed seed and subtract every character after the first.
+fn derive_part_subtract_from_constant(chars: &[i64], _n: i64) -> i64 {
+    chars
+        .iter()
+        .skip(1)
+        .fold(0x1683i64, |acc, &c| acc.wrapping_sub(c))
+}
 
-    let mut part5 = 0x42i64;
+/// Part 5: multiply-accumulate with bounded stride of 4.
+fn derive_part_scaled_accumulator(chars: &[i64], n: i64) -> i64 {
+    let mut part = 0x42i64;
     let mut i = 1i64;
     while i < n - 4 {
-        let a = part5.wrapping_mul(chars[i as usize] + 0xf);
+        let a = part.wrapping_mul(chars[i as usize] + 0xf);
         i -= 1;
         let b = chars[i as usize];
         i += 1;
-        part5 = b.wrapping_add(0xf).wrapping_mul(a).wrapping_add(0x16);
+        part = b.wrapping_add(0xf).wrapping_mul(a).wrapping_add(0x16);
         i += 4;
     }
+    part
+}
 
-    let mut part6 = 0x65i64;
+/// Part 6: subtract every other character starting from index 0.
+fn derive_part_subtract_every_other(chars: &[i64], n: i64) -> i64 {
+    let mut part = 0x65i64;
     let mut i = 0i64;
     while i < n - 2 {
-        part6 = part6.wrapping_sub(chars[i as usize]);
+        part = part.wrapping_sub(chars[i as usize]);
         i += 2;
     }
+    part
+}
 
-    let mut part7 = 0xabi64;
+/// Part 7: modulo every other character (guarding against zero).
+fn derive_part_modulo_every_other(chars: &[i64], n: i64) -> i64 {
+    let mut part = 0xabi64;
     let mut i = 0i64;
     while i < n - 2 {
         let divisor = chars[i as usize];
         if divisor != 0 {
-            part7 %= divisor;
+            part %= divisor;
         }
         i += 2;
     }
+    part
+}
 
-    let mut part8 = 0xabi64;
+/// Part 8: divide by successive characters and accumulate the next one.
+fn derive_part_dividing_accumulator(chars: &[i64], n: i64) -> i64 {
+    let mut part = 0xabi64;
     let mut i = 0i64;
     while i < n - 1 {
         let divisor = chars[i as usize];
         if divisor != 0 {
-            part8 /= divisor;
+            part /= divisor;
         }
         i += 1;
-        part8 = part8.wrapping_add(chars[i as usize]);
+        part = part.wrapping_add(chars[i as usize]);
     }
-
-    format!(
-        "{}-{}-{}-{}-{}-{}-{}-{}",
-        part1 & 0xff,
-        part2 & 0xff,
-        part3 & 0xff,
-        part4 & 0xff,
-        part5 & 0xff,
-        part6 & 0xff,
-        part7 & 0xff,
-        part8 & 0xff,
-    )
+    part
 }
 
 fn decrypt(encoded: &[u8], key: &[u8]) -> Vec<u8> {
@@ -277,6 +332,67 @@ mod tests {
     #[test]
     fn derives_known_f1_2008_key() {
         assert_eq!(derive_key("cim_2008_ferrari"), "172-5-6-58-214-253-22-106");
+    }
+
+    /// The one folder name we have a real, captured key for. Any other folder
+    /// name MUST be added together with its key captured from a real AC
+    /// installation, not guessed.
+    #[test]
+    fn derives_known_keys_from_real_installations() {
+        let cases = [("cim_2008_ferrari", "172-5-6-58-214-253-22-106")];
+        for (folder, expected) in cases {
+            assert_eq!(derive_key(folder), expected, "key for {folder} mismatched");
+        }
+    }
+
+    /// Short folder names exercise loop bounds that the multi-character tests
+    /// cannot reach.
+    #[test]
+    fn derives_keys_for_short_folder_names() {
+        for folder in ["", "a", "ab", "abc", "abcd", "abcde"] {
+            let key = derive_key(folder);
+            // 8 decimal parts joined by hyphens.
+            assert_eq!(key.split('-').count(), 8);
+            for part in key.split('-') {
+                let value: u64 = part.parse().expect("parts are decimal digits");
+                assert!(value <= 255, "part {part} escaped one byte in {key}");
+            }
+        }
+    }
+
+    /// The helper must not panic on non-ASCII folder names; `chars()` returns
+    /// `char` code points, not bytes.
+    #[test]
+    fn derive_key_handles_unicode_folder_names() {
+        let key = derive_key("フェラーリ");
+        assert_eq!(key.split('-').count(), 8);
+    }
+
+    /// 单个空 key 必须被拒绝，否则 `decrypt` 会对 key 取模而 panic。
+    #[test]
+    fn rejects_empty_key() {
+        assert!(matches!(
+            AcdArchive::from_bytes(b"", "").unwrap_err(),
+            Error::EmptyKey
+        ));
+    }
+
+    #[test]
+    fn rejects_oversized_content_length_instead_of_reading() {
+        // name "x", then a content_len of u32::MAX => encoded_len overflows
+        // the 512 MiB limit before we ever index into the buffer.
+        let mut container = Vec::new();
+        container.extend_from_slice(&1i32.to_le_bytes());
+        container.extend_from_slice(b"x");
+        container.extend_from_slice(&u32::MAX.to_le_bytes());
+        // A handful of trailing bytes that look like the start of a payload.
+        container.extend_from_slice(&[0u8; 32]);
+
+        let err = AcdArchive::from_bytes(&container, "key").unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidAcd(_)),
+            "expected InvalidAcd, got {err:?}"
+        );
     }
 
     #[test]

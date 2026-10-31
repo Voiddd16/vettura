@@ -3,6 +3,8 @@
 //! 这里刻意不解码像素：Godot 层可以把原始 DDS 字节交给
 //! `Image::load_dds_from_buffer`，检查工具也只需要尺寸和格式元数据。
 
+use thiserror::Error;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DdsInfo {
     pub width: u32,
@@ -18,21 +20,55 @@ impl DdsInfo {
     }
 }
 
+/// DDS 头部检查失败的原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum DdsError {
+    /// 数据不足 128 字节。
+    #[error("DDS data too short: {0} bytes, need at least 128")]
+    TooShort(usize),
+
+    /// 前四个字节不是 `DDS `。
+    #[error("bad DDS magic")]
+    BadMagic,
+
+    /// 头部字段在试图转换定长数组时失败（理论上不会发生，因为在
+    /// [`parse`] 中已检查过长度）。
+    #[error("truncated DDS header field")]
+    TruncatedField,
+}
+
 /// 从 DDS 字节中读取尺寸、mip 数量和 FourCC。
 ///
-/// 数据不足 128 字节、magic 不是 `DDS ` 或头部被截断时返回 `None`。
-pub fn parse(data: &[u8]) -> Option<DdsInfo> {
+/// 数据不足 128 字节、magic 不是 `DDS ` 或头部被截断时返回 [`DdsError`]。
+pub fn parse(data: &[u8]) -> Result<DdsInfo, DdsError> {
     const HEADER_LEN: usize = 128;
-    if data.len() < HEADER_LEN || &data[..4] != b"DDS " {
-        return None;
+    if data.len() < HEADER_LEN {
+        return Err(DdsError::TooShort(data.len()));
+    }
+    if &data[..4] != b"DDS " {
+        return Err(DdsError::BadMagic);
     }
 
-    let height = u32::from_le_bytes(data[12..16].try_into().ok()?);
-    let width = u32::from_le_bytes(data[16..20].try_into().ok()?);
-    let mipmaps = u32::from_le_bytes(data[28..32].try_into().ok()?);
-    let fourcc = data[84..88].try_into().ok()?;
+    let height = u32::from_le_bytes(
+        data[12..16]
+            .try_into()
+            .map_err(|_| DdsError::TruncatedField)?,
+    );
+    let width = u32::from_le_bytes(
+        data[16..20]
+            .try_into()
+            .map_err(|_| DdsError::TruncatedField)?,
+    );
+    let mipmaps = u32::from_le_bytes(
+        data[28..32]
+            .try_into()
+            .map_err(|_| DdsError::TruncatedField)?,
+    );
+    let fourcc = data[84..88]
+        .try_into()
+        .map_err(|_| DdsError::TruncatedField)?;
 
-    Some(DdsInfo {
+    Ok(DdsInfo {
         width,
         height,
         mipmaps,
@@ -69,16 +105,16 @@ mod tests {
     }
 
     #[test]
-    fn rejects_short_data() {
-        assert!(parse(b"DDS ").is_none());
-        assert!(parse(&[0; 127]).is_none());
+    fn rejects_short_data_with_len() {
+        assert_eq!(parse(b"DDS "), Err(DdsError::TooShort(4)));
+        assert_eq!(parse(&[0; 127]), Err(DdsError::TooShort(127)));
     }
 
     #[test]
-    fn rejects_bad_magic() {
+    fn rejects_bad_magic_with_error() {
         let mut bytes = dds_header(1, 1, 1, b"DXT1");
         bytes[..4].copy_from_slice(b"NOPE");
 
-        assert!(parse(&bytes).is_none());
+        assert_eq!(parse(&bytes), Err(DdsError::BadMagic));
     }
 }

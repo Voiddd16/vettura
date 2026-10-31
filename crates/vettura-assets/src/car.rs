@@ -62,11 +62,10 @@ impl CarData {
     }
 
     pub fn get(&self, name: &str) -> Option<&[u8]> {
-        if let Some(bytes) = self.files.get(name) {
-            return Some(bytes);
-        }
-        let normalized = name.replace('\\', "/");
-        self.files.get(&normalized).map(Vec::as_slice)
+        self.files
+            .get(name)
+            .or_else(|| self.files.get(&normalize_key(name)))
+            .map(Vec::as_slice)
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
@@ -105,6 +104,16 @@ fn read_directory(root: &Path, dir: &Path, files: &mut BTreeMap<String, Vec<u8>>
         }
     }
     Ok(())
+}
+
+/// Normalize a lookup key so that Windows-style backslash paths can be found
+/// in the forward-slash map produced by [`read_directory`].
+///
+/// The in-memory map always stores relative paths with `/` separators; the
+/// caller may still pass a Windows path (e.g. from an INI list), so we try the
+/// original key first and only fall back to this normalized form.
+fn normalize_key(name: &str) -> String {
+    name.replace('\\', "/")
 }
 
 /// A car folder on disk.

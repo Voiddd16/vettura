@@ -50,10 +50,22 @@ impl VehicleState {
 pub struct WheelState {
     /// Accumulated rotation angle, radians.
     pub rotation: f32,
+    /// Current steering angle, radians. `0` when the wheel is not steerable.
     pub steer_angle: f32,
+    /// Wheel spin rate, rad/s.
     pub angular_velocity: f32,
+    /// Longitudinal slip ratio, dimensionless. `0` for a free-rolling wheel.
     pub slip_ratio: f32,
+    /// Lateral slip angle, radians. `0` for pure rolling.
     pub slip_angle: f32,
+    /// Tyre vertical load, newtons.
+    ///
+    /// The derived `Default` is `0`, which represents "resting on loose
+    /// ground" rather than a physically accurate weight. Backends that model
+    /// load transfer / suspension (see
+    /// [`crate::backends::SimpleBackend::reset`]) overwrite this on the first
+    /// step, so consumers should treat it as "uninitialised until reset".
     pub load_n: f32,
+    /// Whether the tyre is currently touching the road.
     pub contact: bool,
 }

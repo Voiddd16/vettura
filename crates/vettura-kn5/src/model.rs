@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use glam::Vec3;
 
-use crate::dds::{self, DdsInfo};
+use crate::dds::{self, DdsError, DdsInfo};
 
 /// 共享的 KN5 原始字节缓冲区。
 ///
@@ -83,8 +83,10 @@ pub struct Texture {
 }
 
 impl Texture {
-    /// 尝试读取内嵌 DDS 的尺寸与格式信息；不是 DDS 时返回 `None`。
-    pub fn dds_info(&self) -> Option<DdsInfo> {
+    /// 尝试读取内嵌 DDS 的尺寸与格式信息。
+    ///
+    /// 不是 DDS（或数据被截断）时返回 [`DdsError`]。
+    pub fn dds_info(&self) -> Result<DdsInfo, DdsError> {
         dds::parse(self.data.as_slice())
     }
 }

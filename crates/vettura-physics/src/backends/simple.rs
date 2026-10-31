@@ -13,6 +13,14 @@ const AIR_DENSITY: f32 = 1.225;
 const ROLLING_RESISTANCE: f32 = 0.015;
 const MAX_STEER_ANGLE: f32 = 0.5;
 
+/// Fallback driven-wheel radius, metre. Guards against division by zero when a
+/// [`VehicleSpec`] has no driven wheel at all.
+const FALLBACK_WHEEL_RADIUS: f32 = 0.33;
+
+/// Speed (m/s) below which the car is treated as stationary when computing the
+/// direction of rolling-resistance / drag forces.
+const MIN_DIRECTION_SPEED: f32 = 0.05;
+
 pub struct SimpleBackend {
     spec: VehicleSpec,
     state: VehicleState,
@@ -86,7 +94,8 @@ impl VehicleBackend for SimpleBackend {
             .iter()
             .find(|wheel| wheel.driven)
             .map(|wheel| wheel.radius_m)
-            .unwrap_or(0.33);
+            .filter(|radius| *radius > 0.0)
+            .unwrap_or(FALLBACK_WHEEL_RADIUS);
         let wheel_rpm = forward_speed.abs() / (std::f32::consts::TAU * driven_radius) * 60.0;
         let engine_rpm = (wheel_rpm * gear_ratio)
             .max(self.spec.engine.idle_rpm)
@@ -105,8 +114,16 @@ impl VehicleBackend for SimpleBackend {
         let rolling_force = ROLLING_RESISTANCE * self.spec.mass_kg * 9.806_65;
         let resistance = brake_force + drag_force + rolling_force;
 
-        let direction = forward_speed.signum();
-        let longitudinal_force = if speed < 0.05 && controls.throttle > 0.0 {
+        // Below MIN_DIRECTION_SPEED the sign of `forward_speed` is meaningless
+        // (and may jitter between +/- when the car is rolling backwards at a
+        // crawl), so resistance is not applied in that regime. Throttle still
+        // works so the car can pull away from rest.
+        let direction = if forward_speed.abs() > MIN_DIRECTION_SPEED {
+            forward_speed.signum()
+        } else {
+            0.0
+        };
+        let longitudinal_force = if controls.throttle > 0.0 && speed < MIN_DIRECTION_SPEED {
             drive_force
         } else {
             drive_force - resistance * direction
@@ -120,7 +137,10 @@ impl VehicleBackend for SimpleBackend {
 
         let speed_factor = 1.0 / (1.0 + speed * 0.04);
         let steer_angle = controls.steering * MAX_STEER_ANGLE * speed_factor;
-        let yaw_rate = if speed > 0.2 {
+        // Steering is only meaningful once the car actually rolls; below this
+        // threshold the bicycle model would divide by a near-zero forward speed
+        // and produce a huge, meaningless yaw rate.
+        let yaw_rate = if speed >= MIN_DIRECTION_SPEED {
             forward_speed / self.spec.wheelbase_m * steer_angle.tan()
         } else {
             0.0

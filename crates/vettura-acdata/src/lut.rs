@@ -22,9 +22,25 @@ pub struct Lut {
     points: Vec<LutPoint>,
 }
 
+/// 详细解析结果，比 [`Lut::parse`] 多报告跳过了多少行。
+#[derive(Debug, Clone)]
+pub struct LutParseReport {
+    /// 解析得到的查找表。
+    pub table: Lut,
+    /// 被跳过的格式错误行数（不包含空行和注释）。
+    pub skipped: usize,
+}
+
 impl Lut {
+    /// 宽松解析：跳过空行、注释与无法解析的行。
     pub fn parse(text: &str) -> Self {
+        Self::parse_with_report(text).table
+    }
+
+    /// 宽松解析，并返回被跳过的行数，便于调用方在调试时输出诊断信息。
+    pub fn parse_with_report(text: &str) -> LutParseReport {
         let mut points = Vec::new();
+        let mut skipped = 0usize;
 
         for raw_line in text.lines() {
             let line = raw_line.trim();
@@ -36,29 +52,18 @@ impl Lut {
                 continue;
             }
 
-            let (left, right) = if let Some((left, right)) = line.split_once('|') {
-                (left, Some(right))
-            } else if let Some((left, right)) = line.split_once(',') {
-                (left, Some(right))
-            } else {
-                let mut parts = line.split_whitespace();
-                (parts.next().unwrap_or(""), parts.next())
-            };
-
-            let Some(right) = right else {
-                continue;
-            };
-            let Ok(x) = left.trim().parse::<f32>() else {
-                continue;
-            };
-            let Ok(y) = right.trim().parse::<f32>() else {
+            let Some((x, y)) = parse_row(line) else {
+                skipped += 1;
                 continue;
             };
             points.push(LutPoint { x, y });
         }
 
         points.sort_by(|a, b| a.x.total_cmp(&b.x));
-        Self { points }
+        LutParseReport {
+            table: Self { points },
+            skipped,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -99,6 +104,23 @@ impl Lut {
     }
 }
 
+/// 解析单行并返回 `(x, y)`。支持的格式：`x|y`、`x,y` 或两个空白分隔的列。
+fn parse_row(line: &str) -> Option<(f32, f32)> {
+    let (left, right) = if let Some((left, right)) = line.split_once('|') {
+        (left, Some(right))
+    } else if let Some((left, right)) = line.split_once(',') {
+        (left, Some(right))
+    } else {
+        let mut parts = line.split_whitespace();
+        (parts.next().unwrap_or(""), parts.next())
+    };
+
+    let right = right?;
+    let x = left.trim().parse::<f32>().ok()?;
+    let y = right.trim().parse::<f32>().ok()?;
+    Some((x, y))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +139,28 @@ mod tests {
     fn skips_garbage() {
         let lut = Lut::parse("rpm|torque\n1000|100\nnot a number\n");
         assert_eq!(lut.len(), 1);
+    }
+
+    #[test]
+    fn report_counts_skipped_rows() {
+        let report = Lut::parse_with_report("rpm|torque\n1000|100\nnot a number\n");
+        assert_eq!(report.table.len(), 1);
+        assert_eq!(report.skipped, 2);
+        assert_eq!(report.table.sample(1000.0), Some(100.0));
+    }
+
+    #[test]
+    fn report_counts_nothing_for_clean_input() {
+        let report = Lut::parse_with_report("0|0\n1000|100\n");
+        assert_eq!(report.skipped, 0);
+    }
+
+    #[test]
+    fn parse_row_accepts_all_delimiters() {
+        assert_eq!(parse_row("1|2"), Some((1.0, 2.0)));
+        assert_eq!(parse_row("1,2"), Some((1.0, 2.0)));
+        assert_eq!(parse_row(" 1   2 "), Some((1.0, 2.0)));
+        assert_eq!(parse_row("1"), None);
+        assert_eq!(parse_row("a|2"), None);
     }
 }

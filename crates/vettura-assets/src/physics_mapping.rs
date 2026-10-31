@@ -135,9 +135,21 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
         && let Some(span) = aero.get_f32("WING_0", "SPAN")
     {
         spec.frontal_area_m2 = chord * span;
+    } else {
+        debug!(
+            car = %spec.name,
+            frontal_area_m2 = spec.frontal_area_m2,
+            "aero.ini WING_0 CHORD/SPAN missing, using default frontal area"
+        );
     }
     if let Some(cd) = aero.get_f32("WING_0", "CD_GAIN") {
         spec.drag_coefficient = cd;
+    } else {
+        debug!(
+            car = %spec.name,
+            drag_coefficient = spec.drag_coefficient,
+            "aero.ini WING_0 CD_GAIN missing, using default drag coefficient"
+        );
     }
 
     debug!(

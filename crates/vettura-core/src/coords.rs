@@ -31,13 +31,13 @@ pub const GODOT_FORWARD: Vec3 = Vec3::NEG_Z;
 
 /// Convert a point (or direction) from AC space to Godot space.
 #[inline]
-pub fn ac_to_godot(value: Vec3) -> Vec3 {
+pub const fn ac_to_godot(value: Vec3) -> Vec3 {
     Vec3::new(-value.x, value.y, -value.z)
 }
 
 /// Convert a point (or direction) from Godot space to AC space.
 #[inline]
-pub fn godot_to_ac(value: Vec3) -> Vec3 {
+pub const fn godot_to_ac(value: Vec3) -> Vec3 {
     ac_to_godot(value)
 }
 

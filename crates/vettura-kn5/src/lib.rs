@@ -18,7 +18,7 @@ mod error;
 mod model;
 mod reader;
 
-pub use dds::DdsInfo;
+pub use dds::{DdsError, DdsInfo};
 pub use error::{Error, Result};
 pub use model::{
     BlendMode, Bone, DepthMode, Kn5, Material, MaterialProperty, Mesh, MeshFlags, Node, NodeKind,
