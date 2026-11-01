@@ -16,6 +16,8 @@ pub mod spec;
 pub mod state;
 
 pub use backend::VehicleBackend;
+#[cfg(feature = "chrono")]
+pub use backends::{ChronoBackend, ChronoError};
 pub use controls::Controls;
 pub use simulation::Simulation;
 pub use spec::{
