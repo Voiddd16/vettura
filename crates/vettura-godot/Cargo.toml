@@ -10,11 +10,14 @@ description = "Godot 4 GDExtension bindings for Vettura"
 
 [lib]
 name = "vettura_native"
-crate-type = ["cdylib"]
+# `cdylib` 给 Godot 加载，`rlib` 让 `cargo test -p vettura-godot` 能跑单元测试
+# （纯数据转换，不依赖引擎初始化）。
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 glam.workspace = true
 godot.workspace = true
 vettura-assets.workspace = true
+vettura-core.workspace = true
 vettura-kn5.workspace = true
 vettura-physics.workspace = true

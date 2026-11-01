@@ -1,13 +1,15 @@
-use godot::classes::Resource;
+use godot::classes::{Node, Node3D, Resource};
 use godot::prelude::*;
 use vettura_assets::CarFolder;
 use vettura_physics::VehicleSpec;
 
+use crate::kn5::scene::{self, SceneOptions};
+
 /// Assetto Corsa 车辆目录资源。
 ///
 /// 打开一个车目录，自动选择 `data.acd` 或已解包的 `data/` 目录，并把 INI /
-/// LUT 数据映射为物理参数。当前只开放少量查询接口，完整物理与网格桥接属于
-/// 后续工作。
+/// LUT 数据映射为物理参数；同时负责解析主模型 `.kn5`（`lods.ini` 优先，否则取
+/// 目录下体积最大的文件）。
 ///
 /// 用法示例：
 ///
@@ -15,6 +17,8 @@ use vettura_physics::VehicleSpec;
 /// var car := AcCar.new()
 /// if car.open("res://cars/my_car"):
 ///     print(car.display_name(), " ", car.total_mass())
+///     var root := car.instantiate(self)
+///     print(root.get_node("WHEEL_LF").position)
 /// ```
 #[derive(GodotClass)]
 #[class(tool, init, base = Resource)]
@@ -104,6 +108,50 @@ impl AcCar {
                 None
             }
         }
+    }
+
+    /// 主模型 `.kn5` 的路径（`lods.ini` 优先，否则目录下体积最大的 `.kn5`）。
+    ///
+    /// 找不到时返回空字符串。
+    #[func]
+    pub fn model_path(&self) -> GString {
+        match self.car.as_ref().and_then(CarFolder::main_model_path) {
+            Some(path) => GString::from(path.to_string_lossy().as_ref()),
+            None => GString::new(),
+        }
+    }
+
+    /// 把车模实例化到 `parent` 下，返回根节点。
+    ///
+    /// 找不到主模型时返回 `null` 并打印错误。
+    #[func]
+    pub fn instantiate(&mut self, parent: Gd<Node>) -> Option<Gd<Node3D>> {
+        self.instantiate_with_options(parent, true)
+    }
+
+    /// 与 `instantiate` 相同，但可以选择保留 KN5 里标记为不可见的节点。
+    #[func]
+    pub fn instantiate_with_options(
+        &mut self,
+        mut parent: Gd<Node>,
+        skip_hidden: bool,
+    ) -> Option<Gd<Node3D>> {
+        let path = self.car.as_ref().and_then(CarFolder::main_model_path)?;
+
+        let kn5 = match vettura_kn5::Kn5::from_path(&path) {
+            Ok(kn5) => kn5,
+            Err(err) => {
+                godot_error!("AC car model load failed for '{}': {}", path.display(), err);
+                return None;
+            }
+        };
+
+        let options = SceneOptions { skip_hidden };
+        let root = scene::instantiate(&kn5, &mut parent, None, options);
+        if root.is_none() {
+            godot_error!("AC car model produced no nodes: {}", path.display());
+        }
+        root
     }
 
     /// 访问底层车目录，给未来的网格/物理桥接使用。
