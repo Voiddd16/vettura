@@ -163,6 +163,7 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
     Ok(spec)
 }
 
+/// 读取一个可选的 ini 文件：缺失/损坏不报错，返回空表让调用方走默认值。
 fn optional_ini(data: &CarData, name: &str) -> Ini {
     match data.ini(name) {
         Ok(ini) => ini,
@@ -173,6 +174,7 @@ fn optional_ini(data: &CarData, name: &str) -> Ini {
     }
 }
 
+/// 从 `[TRACTION] TYPE` 推导驱动形式；无法识别的值一律按 RWD 处理。
 fn drivetrain_layout(ini: &Ini) -> DrivetrainLayout {
     match ini
         .get("TRACTION", "TYPE")
@@ -187,6 +189,8 @@ fn drivetrain_layout(ini: &Ini) -> DrivetrainLayout {
     }
 }
 
+/// 读 1 起的 `GEAR_1..GEAR_n` 齿比列表；列表不完整时返回 `None`（调用方
+/// 退回默认齿比，而不是装上一段残缺的变速箱）。
 fn read_gear_ratios(ini: &Ini) -> Option<Vec<f32>> {
     let count = ini.get_i32("GEARS", "COUNT")?.max(1) as usize;
     let mut gears = Vec::with_capacity(count);
@@ -212,6 +216,7 @@ struct AxleData {
 }
 
 impl AxleData {
+    /// 读一个轴（`FRONT` / `REAR`）的轮胎与悬挂字段；没写的字段是 `None`。
     fn from_ini(suspensions: &Ini, tyres: &Ini, axle: &str) -> Self {
         Self {
             radius: tyres.get_f32(axle, "RADIUS"),
@@ -250,5 +255,68 @@ fn require_file(data: &CarData, name: &str) -> Result<()> {
         Ok(())
     } else {
         Err(AssetError::MissingFile(name.to_owned()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drivetrain_layout_normalizes_case_and_whitespace() {
+        let parse = |traction: &str| {
+            drivetrain_layout(&Ini::parse(&format!("[TRACTION]\nTYPE={traction}\n")))
+        };
+
+        assert_eq!(parse("FWD"), DrivetrainLayout::Fwd);
+        assert_eq!(parse(" fwd "), DrivetrainLayout::Fwd);
+        assert_eq!(parse("RWD"), DrivetrainLayout::Rwd);
+        assert_eq!(parse("AWD"), DrivetrainLayout::Awd);
+        assert_eq!(parse("4WD"), DrivetrainLayout::Awd);
+        // 缺失或无法识别的值一律 RWD（与 AC 默认一致）。
+        assert_eq!(parse(""), DrivetrainLayout::Rwd);
+        assert_eq!(parse("banana"), DrivetrainLayout::Rwd);
+        assert_eq!(
+            drivetrain_layout(&Ini::parse("[OTHER]\nTYPE=FWD\n")),
+            DrivetrainLayout::Rwd
+        );
+    }
+
+    #[test]
+    fn gear_ratios_need_a_complete_one_based_list() {
+        let ratios = |ini: &str| read_gear_ratios(&Ini::parse(ini));
+
+        assert_eq!(
+            ratios("[GEARS]\nCOUNT=3\nGEAR_1=3.5\nGEAR_2=2.0\nGEAR_3=1.4\n"),
+            Some(vec![3.5, 2.0, 1.4])
+        );
+        // 少一档 → None（调用方退回默认齿比，而不是塞一段残缺列表）。
+        assert_eq!(ratios("[GEARS]\nCOUNT=3\nGEAR_1=3.5\nGEAR_2=2.0\n"), None);
+        // COUNT 缺失 / GEARS 段缺失 → None。
+        assert_eq!(ratios("[GEARS]\nGEAR_1=3.5\n"), None);
+        assert_eq!(ratios("[TRACTION]\nTYPE=FWD\n"), None);
+        // COUNT=0 被抬到 1，于是要求 GEAR_1 存在。
+        assert_eq!(ratios("[GEARS]\nCOUNT=0\nGEAR_1=3.5\n"), Some(vec![3.5]));
+        assert_eq!(ratios("[GEARS]\nCOUNT=0\n"), None);
+    }
+
+    #[test]
+    fn axle_data_reads_tyre_and_suspension_fields() {
+        let suspensions =
+            Ini::parse("[FRONT]\nTRACK=1.6\nBASEY=0.1\nSPRING_RATE=120000\n[ARB]\nFRONT=8000\n");
+        let tyres = Ini::parse("[FRONT]\nRADIUS=0.35\nWIDTH=0.28\nDY0=1.2\n");
+
+        let front = AxleData::from_ini(&suspensions, &tyres, "FRONT");
+        assert_eq!(front.radius, Some(0.35));
+        assert_eq!(front.width, Some(0.28));
+        assert_eq!(front.track, Some(1.6));
+        assert_eq!(front.base_y, Some(0.1));
+        assert_eq!(front.spring_rate, Some(120_000.0));
+        assert_eq!(front.anti_roll, Some(8000.0));
+        assert_eq!(front.peak_friction, Some(1.2));
+        // 完全没写的 REAR 段 → 全 None，映射层用默认值兜底。
+        let rear = AxleData::from_ini(&suspensions, &tyres, "REAR");
+        assert!(rear.radius.is_none());
+        assert!(rear.track.is_none());
     }
 }
