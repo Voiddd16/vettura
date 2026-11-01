@@ -3,4 +3,16 @@
 .DS_Store
 *.dSYM/
 .agents/
+# 本地 AI 技能安装器产物：.claude/skills 只是指向 .agents/skills 的符号链接
+.claude/
+skills-lock.json
 godot/
+
+# vendored C++ 源码按需拉取（体积大），只跟踪说明文档。
+# 拉取方式与版本记录在 third_party/README.md。
+third_party/*
+!third_party/README.md
+
+# 误入仓库构建目录时也别提交
+CMakeCache.txt
+CMakeFiles/

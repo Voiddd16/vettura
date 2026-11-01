@@ -1,0 +1,24 @@
+[package]
+name = "vettura-physics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Backend-neutral vehicle dynamics interface, with an optional Chrono::Vehicle backend"
+
+[features]
+default = []
+# 启用 Chrono::Vehicle 后端：`vettura_physics::backends::chrono`。
+# 默认关闭，保证 workspace 默认是纯 Rust 快速构建。Chrono 没就位时
+# build.rs 会链 `cpp/chrono_bridge_stub.cpp`（返回 NotLinked），真正链接 Chrono
+# 需要把源码放进 `third_party/chrono`（或用 `CHRONO_ROOT` 指向已安装位置），
+# 详见 docs/build.md §8。
+chrono = []
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

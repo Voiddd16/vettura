@@ -1,0 +1,57 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/vettura-core",
+    "crates/vettura-kn5",
+    "crates/vettura-acdata",
+    "crates/vettura-assets",
+    "crates/vettura-physics",
+    "crates/vettura-godot",
+    "tools/kn5-inspect",
+    "tools/acd-inspect",
+]
+# `cargo build` / `cargo test` stay fast and headless.
+# Build the Godot extension explicitly with `cargo build -p vettura-godot`.
+default-members = [
+    "crates/vettura-core",
+    "crates/vettura-kn5",
+    "crates/vettura-acdata",
+    "crates/vettura-assets",
+    "crates/vettura-physics",
+    "tools/kn5-inspect",
+    "tools/acd-inspect",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT OR Apache-2.0"
+authors = ["Vettura contributors"]
+publish = false
+
+[workspace.dependencies]
+# Internal crates
+vettura-core = { path = "crates/vettura-core" }
+vettura-kn5 = { path = "crates/vettura-kn5" }
+
+vettura-acdata = { path = "crates/vettura-acdata" }
+vettura-assets = { path = "crates/vettura-assets" }
+vettura-physics = { path = "crates/vettura-physics" }
+
+# Shared third-party dependencies
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+glam = { version = "0.34", features = ["serde"] }
+godot = { version = "0.5.5", features = ["api-4-7", "register-docs"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.dev]
+# KN5 files are large; keep debug builds usable for the inspect tools.
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
