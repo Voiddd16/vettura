@@ -20,8 +20,8 @@
 | AC 车数据 → `VehicleSpec` 映射 | 初版 |
 | 物理后端接口 + 固定步长调度 | 可用 |
 | SimpleBackend（占位动力学） | 可用，仅用于联调 |
-| Chrono::Vehicle FFI | 占位，待接 |
-| KN5 → Godot ArrayMesh/贴图 | 下一步 |
+| Chrono::Vehicle FFI | 可用：vehicle 平地工况（`--features chrono`，需先拉 Chrono 源码） |
+| KN5 → Godot 场景（节点树 / ArrayMesh / 贴图 / 材质） | 可用 |
 | Godot 扩展类（Kn5File / AcCar / VehicleBody） | 骨架可用 |
 
 ## 快速开始
@@ -30,9 +30,12 @@
 cd vettura-native
 
 cargo fmt
-cargo check --workspace --exclude vettura-godot
-cargo test --workspace --exclude vettura-godot
+cargo check --workspace
+cargo test --workspace
 ```
+
+`vettura-godot`（crates/vettura-godot）的单元测试只覆盖不依赖引擎的纯转换，
+不需要启动 Godot；端到端验证见下面的冒烟测试。
 
 用测试 mod 检查解析器：
 
@@ -50,11 +53,20 @@ cargo run -p acd-inspect -- \
 
 ```bash
 cargo build -p vettura-godot
+cargo test -p vettura-godot   # kn5::convert 的纯转换单测
 ```
 
 `godot/vettura_native.gdextension` 已把库路径指向
-`res://vettura-godot/target/debug/libvettura_godot.dylib`（macOS）。
+`res://vettura-native/target/debug/libvettura_native.dylib`（macOS）。
 Godot 项目根目录就是本目录的上一级，所以打开现有 `project.godot` 即可识别扩展。
+
+用真实 mod 车做端到端冒烟测试（无头 Godot）：
+
+```bash
+cd ..
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . \
+  res://vettura-native/godot/kn5_probe.tscn
+```
 
 ## 目录结构
 
@@ -67,13 +79,17 @@ vettura-native/
 │   ├── vettura-acdata/        # data.acd / INI / LUT
 │   ├── vettura-assets/        # 车目录解析 + AC 数据 → 物理 spec
 │   ├── vettura-physics/       # 物理后端接口、状态、固定步长调度、SimpleBackend
-│   ├── vettura-physics-chrono/# Chrono::Vehicle 适配器（占位）
-│   └── vettura-godot/        # Godot 4 GDExtension (cdylib)
+│   │   └── src/backends/      #   simple / chrono（后者由 `chrono` feature 门控）
+│   └── vettura-godot/         # Godot 4 GDExtension (cdylib + rlib)
+│       └── src/kn5/           # KN5 → Godot 桥接（convert/texture/material/mesh/scene）
+├── third_party/               # 远端拉取的第三方源码（vendored）
+│   └── chrono/                # Project Chrono C++（Chrono::Vehicle），按需拉取，见 third_party/README.md
 ├── tools/
 │   ├── kn5-inspect/           # 查看/导出 KN5
 │   └── acd-inspect/           # 解密/解包 data.acd
 ├── godot/
-│   └── vettura_native.gdextension
+│   ├── vettura_native.gdextension
+│   └── kn5_probe.tscn/.gd     # 无头端到端冒烟测试
 └── docs/
     ├── architecture.md
     ├── kn5-format.md
@@ -90,9 +106,10 @@ vettura-godot (Godot)
    ├── vettura-assets ──> vettura-kn5
    │        │            vettura-acdata
    │        └──> vettura-physics
+   ├── vettura-core
    └── vettura-physics
 
-vettura-physics-chrono ──> vettura-physics
+third_party/chrono ──(build.rs, 仅 `--features chrono`)──> vettura-physics
 ```
 
 规则：
@@ -100,7 +117,8 @@ vettura-physics-chrono ──> vettura-physics
 - `vettura-kn5`、`vettura-acdata`、`vettura-physics` **不依赖 Godot**，可单独测试；
 - AC 格式知识只放在 `vettura-kn5` / `vettura-acdata` / `vettura-assets`；
 - `vettura-physics` 不知道 Assetto Corsa 的存在；
-- Godot 层只做类型转换和生命周期管理。
+- Godot 层只做类型转换和生命周期管理；其中 `kn5/convert.rs` 刻意写成纯 Rust，
+  让坐标/命名/材质参数映射可以在没有引擎的环境下单元测试。
 
 ## 前提
 
