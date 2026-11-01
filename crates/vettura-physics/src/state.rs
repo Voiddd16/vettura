@@ -8,7 +8,9 @@ pub struct VehicleState {
     /// World position. Physics frame: +X right, +Y up, -Z forward.
     pub position: Vec3,
     pub orientation: Quat,
+    /// World-frame linear velocity, m/s.
     pub linear_velocity: Vec3,
+    /// World-frame angular velocity, rad/s.
     pub angular_velocity: Vec3,
     /// Signed forward speed in m/s.
     pub speed_mps: f32,
@@ -43,6 +45,55 @@ impl VehicleState {
 
     pub fn wheel_mut(&mut self, wheel: Wheel) -> &mut WheelState {
         &mut self.wheels[wheel.index()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wheel_accessors_agree_with_direct_indexing() {
+        let mut state = VehicleState::default();
+        state.wheel_mut(Wheel::RearRight).load_n = 1234.5;
+
+        for wheel in Wheel::ALL {
+            assert_eq!(
+                state.wheel(wheel) as *const WheelState,
+                &state.wheels[wheel.index()] as *const WheelState,
+                "{wheel:?} accessor must alias the direct slot",
+            );
+        }
+        assert_eq!(state.wheel(Wheel::RearRight).load_n, 1234.5);
+    }
+
+    #[test]
+    fn forward_rotates_with_orientation() {
+        let mut state = VehicleState::default();
+        assert_eq!(state.forward(), Vec3::NEG_Z);
+
+        // 绕 Y 转 90°（yaw）：前向 -Z 转到 -X。
+        state.orientation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let forward = state.forward();
+        assert!(forward.x < -0.99 && forward.z.abs() < 1e-6 && forward.y.abs() < 1e-6);
+
+        // 抬头 90°（pitch）：前向 -Z 转到 +Y。
+        state.orientation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        assert!(state.forward().y > 0.99);
+    }
+
+    #[test]
+    fn default_state_rests_at_the_origin() {
+        let state = VehicleState::default();
+        assert_eq!(state.position, Vec3::ZERO);
+        assert_eq!(state.linear_velocity, Vec3::ZERO);
+        assert_eq!(state.speed_mps, 0.0);
+        assert_eq!(state.gear, 1);
+        // 文档约定：默认 load_n 是 0（“未初始化”），contact 为 false。
+        for wheel in &state.wheels {
+            assert_eq!(wheel.load_n, 0.0);
+            assert!(!wheel.contact);
+        }
     }
 }
 

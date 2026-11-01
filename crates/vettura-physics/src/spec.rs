@@ -199,3 +199,83 @@ impl Pose {
         self.orientation * Vec3::NEG_Z
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wheel_indices_and_axle_predicates_agree() {
+        for wheel in Wheel::ALL {
+            assert_eq!(wheel.index(), wheel as usize);
+            // 索引必须直接可用来寻址 wheels 数组。
+            assert_eq!(Wheel::ALL[wheel.index()], wheel);
+        }
+
+        assert!(Wheel::FrontLeft.is_front() && Wheel::FrontLeft.is_left());
+        assert!(Wheel::FrontRight.is_front() && !Wheel::FrontRight.is_left());
+        assert!(!Wheel::RearLeft.is_front() && Wheel::RearLeft.is_left());
+        assert!(!Wheel::RearRight.is_front() && !Wheel::RearRight.is_left());
+    }
+
+    #[test]
+    fn default_spec_is_symmetric_and_rwd() {
+        let spec = VehicleSpec::default();
+
+        assert_eq!(spec.mass_kg, 1200.0);
+        assert_eq!(spec.wheels.len(), 4);
+
+        let fl = &spec.wheels[Wheel::FrontLeft.index()];
+        let fr = &spec.wheels[Wheel::FrontRight.index()];
+        let rl = &spec.wheels[Wheel::RearLeft.index()];
+        let rr = &spec.wheels[Wheel::RearRight.index()];
+
+        // 前后轴距 = wheelbase；左右对称。
+        assert_eq!(fl.position.z, -spec.wheelbase_m * 0.5);
+        assert_eq!(rr.position.z, spec.wheelbase_m * 0.5);
+        assert_eq!(fl.position.x, -fr.position.x);
+        assert_eq!(rl.position.x, -rr.position.x);
+
+        // RWD：前轮转向不驱动，后轮驱动不转向。
+        assert!(fl.steerable && !fl.driven);
+        assert!(fr.steerable && !fr.driven);
+        assert!(!rl.steerable && rl.driven);
+        assert!(!rr.steerable && rr.driven);
+        assert_eq!(spec.drivetrain.layout, DrivetrainLayout::Rwd);
+
+        // 四个轮子共用合理的默认值。
+        for wheel in &spec.wheels {
+            assert!(wheel.radius_m > 0.0);
+            assert_eq!(
+                wheel.suspension.spring_rate_n_per_m,
+                SuspensionSpec::default().spring_rate_n_per_m
+            );
+        }
+    }
+
+    #[test]
+    fn pose_forward_points_along_negative_z_when_identity() {
+        let pose = Pose::default();
+        assert_eq!(pose.forward(), Vec3::NEG_Z);
+
+        // 绕 Y 转 90°：-Z 前向变成 -X。
+        let turned = Pose {
+            orientation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            ..Pose::default()
+        };
+        let forward = turned.forward();
+        assert!(forward.x < -0.99 && forward.z.abs() < 1e-6 && forward.y.abs() < 1e-6);
+    }
+
+    #[test]
+    fn engine_defaults_cover_a_sane_gearbox() {
+        let engine = EngineSpec::default();
+        assert_eq!(engine.gear_ratios.len(), 6);
+        // 齿比必须逐级递减（每个更高的档位都是减速更少的超比档）。
+        for pair in engine.gear_ratios.windows(2) {
+            assert!(pair[0] > pair[1], "{:?} must descend", engine.gear_ratios);
+        }
+        assert!(engine.final_drive > 0.0);
+        assert!(engine.idle_rpm < engine.redline_rpm);
+    }
+}

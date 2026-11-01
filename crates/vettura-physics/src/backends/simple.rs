@@ -27,6 +27,8 @@ pub struct SimpleBackend {
 }
 
 impl SimpleBackend {
+    /// 按给定规格创建 backend；内部状态从 [`VehicleState::default`] 起，
+    /// 首次 [`VehicleBackend::step`] 前应调用 [`VehicleBackend::reset`]。
     pub fn new(spec: VehicleSpec) -> Self {
         Self {
             spec,
@@ -34,6 +36,10 @@ impl SimpleBackend {
         }
     }
 
+    /// 当前档位的总齿比（档位齿比 × 主减速比）。
+    ///
+    /// 档位越界时 clamp：`gear <= 1` 取一档，超过档位数取最后一个，
+    /// 列表为空时按 1.0 处理——不会返回 0 造成除零。
     fn gear_ratio(&self) -> f32 {
         let index = (self.state.gear.max(1) as usize - 1).min(self.spec.engine.gear_ratios.len());
         let ratio = self
@@ -167,6 +173,7 @@ impl VehicleBackend for SimpleBackend {
 }
 
 impl SimpleBackend {
+    /// 直接改内部状态（布置测试场景、搬运门控用）。
     pub fn state_mut(&mut self) -> &mut VehicleState {
         &mut self.state
     }
@@ -204,5 +211,168 @@ mod tests {
         backend.reset(Pose::default());
         assert_eq!(backend.state().linear_velocity, Vec3::ZERO);
         assert_eq!(backend.state().wheels[0].load_n, 1200.0 * GRAVITY * 0.25);
+    }
+
+    /// 怠速边界：静止时轮速为 0，发动机转速必须被夹到怠速而不是 0。
+    #[test]
+    fn engine_rpm_rests_at_idle_when_stationary() {
+        let mut backend = SimpleBackend::new(VehicleSpec::default());
+        backend.reset(Pose::default());
+
+        backend.step(1.0 / 60.0, &Controls::default());
+
+        assert_eq!(backend.state().engine_rpm, backend.spec().engine.idle_rpm);
+    }
+
+    /// 不同档位 → 不同齿比；越界档位 clamp 而不是 panic 或变负。
+    #[test]
+    fn gear_ratio_tracks_selected_gear_and_clamps() {
+        let mut backend = SimpleBackend::new(VehicleSpec::default());
+        backend.reset(Pose::default());
+        let spec = backend.spec().clone();
+        let final_drive = spec.engine.final_drive;
+        let dt = 1.0 / 60.0;
+
+        // 一档：ratios[0] * final_drive。
+        backend.state_mut().gear = 1;
+        assert_eq!(
+            backend.gear_ratio(),
+            spec.engine.gear_ratios[0] * final_drive
+        );
+
+        // 顶档：最后一个齿比。
+        let top = spec.engine.gear_ratios.len() as i32;
+        backend.state_mut().gear = top;
+        assert_eq!(
+            backend.gear_ratio(),
+            spec.engine.gear_ratios[top as usize - 1] * final_drive
+        );
+
+        // 0 / 负数 / 远超档位数：都 clamp 到合法区间，齿比仍是正的最终传动比。
+        for gear in [0, -3, i32::MAX, top + 100] {
+            backend.state_mut().gear = gear;
+            assert!(backend.gear_ratio() > 0.0, "gear {gear}");
+        }
+
+        // 转速必须落在 [idle, redline] 内，哪怕给很大的轮速。
+        backend.state_mut().gear = 1;
+        backend.state_mut().linear_velocity = Vec3::NEG_Z * 200.0;
+        backend.step(dt, &Controls::default());
+        let rpm = backend.state().engine_rpm;
+        assert!(
+            (spec.engine.idle_rpm..=spec.engine.redline_rpm).contains(&rpm),
+            "rpm {rpm} out of range"
+        );
+    }
+
+    /// 刹车必须让前进速度下降。
+    #[test]
+    fn brake_decelerates_a_rolling_car() {
+        let mut backend = SimpleBackend::new(VehicleSpec::default());
+        backend.reset(Pose::default());
+        backend.state_mut().linear_velocity = Vec3::NEG_Z * 10.0;
+
+        let controls = Controls {
+            brake: 1.0,
+            ..Controls::default()
+        };
+        for _ in 0..60 {
+            backend.step(1.0 / 60.0, &controls);
+        }
+
+        assert!(
+            backend.state().linear_velocity.length() < 10.0,
+            "brake should slow the car, speed = {}",
+            backend.state().linear_velocity.length()
+        );
+    }
+
+    /// 低于 MIN_DIRECTION_SPEED 时阻力方向无意义：松油门滑行车速度不被
+    /// 阻力项反向推快，也不抖动方向。
+    #[test]
+    fn coasting_below_direction_threshold_preserves_speed() {
+        let mut backend = SimpleBackend::new(VehicleSpec::default());
+        backend.reset(Pose::default());
+        let creep = MIN_DIRECTION_SPEED * 0.5;
+        backend.state_mut().linear_velocity = Vec3::NEG_Z * creep;
+
+        let controls = Controls::default(); // 全松
+        backend.step(1.0 / 60.0, &controls);
+
+        assert!(
+            (backend.state().speed_mps - creep).abs() < 1e-6,
+            "creep speed should be untouched, got {}",
+            backend.state().speed_mps
+        );
+    }
+
+    /// 转向偏航只在滚动时产生：静止打方向车身不会原地乱转。
+    #[test]
+    fn steering_yaws_only_when_rolling() {
+        let mut backend = SimpleBackend::new(VehicleSpec::default());
+        let controls = Controls {
+            steering: 1.0,
+            ..Controls::default()
+        };
+
+        // 静止：yaw_rate 守卫为 0。
+        backend.reset(Pose::default());
+        backend.step(1.0 / 60.0, &controls);
+        assert_eq!(backend.state().angular_velocity, Vec3::ZERO);
+
+        // 滚动后：出现绕 Y 的偏航角速度。
+        backend.state_mut().linear_velocity = Vec3::NEG_Z * 10.0;
+        backend.step(1.0 / 60.0, &controls);
+        assert!(
+            backend.state().angular_velocity.y.abs() > 0.0,
+            "rolling steering should produce yaw"
+        );
+    }
+
+    /// 换挡控制移动档位并 clamp 在 [1, len]。
+    #[test]
+    fn shift_controls_move_gear_within_range() {
+        let mut backend = SimpleBackend::new(VehicleSpec::default());
+        backend.reset(Pose::default());
+        let top = backend.spec().engine.gear_ratios.len() as i32;
+        let dt = 1.0 / 60.0;
+
+        let up = Controls {
+            shift_up: true,
+            ..Controls::default()
+        };
+        let down = Controls {
+            shift_down: true,
+            ..Controls::default()
+        };
+
+        backend.step(dt, &down);
+        assert_eq!(backend.state().gear, 1, "already in first gear");
+
+        backend.step(dt, &up);
+        assert_eq!(backend.state().gear, 2);
+
+        for _ in 0..100 {
+            backend.step(dt, &up);
+        }
+        assert_eq!(backend.state().gear, top, "must clamp at the top gear");
+
+        for _ in 0..100 {
+            backend.step(dt, &down);
+        }
+        assert_eq!(backend.state().gear, 1, "must clamp at first gear");
+    }
+
+    /// 重置后每个轮子都应带上静态载荷并标记接触。
+    #[test]
+    fn reset_seeds_wheel_loads() {
+        let mut backend = SimpleBackend::new(VehicleSpec::default());
+        backend.reset(Pose::default());
+
+        let expected = backend.spec().mass_kg * GRAVITY * 0.25;
+        for (index, wheel) in backend.state().wheels.iter().enumerate() {
+            assert!((wheel.load_n - expected).abs() < 1e-3, "wheel {index}");
+            assert!(wheel.contact);
+        }
     }
 }

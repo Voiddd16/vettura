@@ -25,3 +25,55 @@ impl Controls {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamps_normalized_axes_into_range() {
+        let controls = Controls {
+            throttle: 5.0,
+            brake: -2.0,
+            clutch: f32::INFINITY,
+            steering: -3.0,
+            ..Controls::default()
+        }
+        .clamped();
+
+        assert_eq!(controls.throttle, 1.0);
+        assert_eq!(controls.brake, 0.0);
+        assert_eq!(controls.clutch, 1.0);
+        assert_eq!(controls.steering, -1.0);
+    }
+
+    #[test]
+    fn keeps_in_range_values_and_toggles_untouched() {
+        let controls = Controls {
+            throttle: 0.75,
+            steering: 0.5,
+            handbrake: true,
+            shift_up: true,
+            ..Controls::default()
+        }
+        .clamped();
+
+        assert_eq!(controls.throttle, 0.75);
+        assert_eq!(controls.steering, 0.5);
+        // 换挡/手刹是布尔量，不属于归一化轴，clamped() 不能动它们。
+        assert!(controls.handbrake);
+        assert!(controls.shift_up);
+        assert!(!controls.shift_down);
+    }
+
+    #[test]
+    fn clamped_is_idempotent() {
+        let once = Controls {
+            throttle: 9.0,
+            steering: -0.25,
+            ..Controls::default()
+        }
+        .clamped();
+        assert_eq!(once.clamped(), once);
+    }
+}

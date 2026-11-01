@@ -44,3 +44,38 @@ pub fn rad_to_deg(value: Radians) -> f32 {
 pub fn normalize_unit(value: f32) -> f32 {
     value.clamp(0.0, 1.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speed_conversions_round_trip() {
+        const KNOWN: [(MetersPerSecond, f32); 3] = [(0.0, 0.0), (10.0, 36.0), (27.777_778, 100.0)];
+
+        for (mps, kmh) in KNOWN {
+            assert!((mps_to_kmh(mps) - kmh).abs() < 1e-4);
+            assert!((kmh_to_mps(kmh) - mps).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn angle_conversions_round_trip() {
+        assert_eq!(deg_to_rad(0.0), 0.0);
+        assert!((deg_to_rad(180.0) - std::f32::consts::PI).abs() < 1e-6);
+        assert!((rad_to_deg(std::f32::consts::FRAC_PI_2) - 90.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn normalize_unit_clamps_to_zero_one() {
+        for value in [-1.0, -0.001, 0.0, 0.25, 0.999, 1.0, 2.0] {
+            let clamped = normalize_unit(value);
+            assert!((0.0..=1.0).contains(&clamped), "{value} -> {clamped}");
+            if (0.0..=1.0).contains(&value) {
+                assert_eq!(clamped, value);
+            }
+        }
+        // NaN 会原样带出——调用方负责过滤非有限输入。
+        assert!(normalize_unit(f32::NAN).is_nan());
+    }
+}
