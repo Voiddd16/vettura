@@ -1,0 +1,12 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+export_presets.cfg
+
+# 本地测试资源（车模、第三方工具）体积过大，不纳入版本库
+# 参见 README.md 的「本地测试资源」章节
+/test/
+
+# macOS / 编辑器杂项
+.DS_Store
+*.tmp
