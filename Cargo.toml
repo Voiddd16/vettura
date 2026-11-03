@@ -7,6 +7,7 @@ members = [
     "crates/vettura-assets",
     "crates/vettura-physics",
     "crates/vettura-godot",
+    "crates/vettura-world",
     "tools/kn5-inspect",
     "tools/acd-inspect",
 ]
@@ -18,6 +19,7 @@ default-members = [
     "crates/vettura-acdata",
     "crates/vettura-assets",
     "crates/vettura-physics",
+    "crates/vettura-world",
     "tools/kn5-inspect",
     "tools/acd-inspect",
 ]
@@ -38,6 +40,7 @@ vettura-kn5 = { path = "crates/vettura-kn5" }
 vettura-acdata = { path = "crates/vettura-acdata" }
 vettura-assets = { path = "crates/vettura-assets" }
 vettura-physics = { path = "crates/vettura-physics" }
+vettura-world = { path = "crates/vettura-world" }
 
 # Shared third-party dependencies
 anyhow = "1"
