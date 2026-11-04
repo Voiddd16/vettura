@@ -700,6 +700,7 @@ dependencies = [
  "oxijolt",
  "thiserror",
  "tracing",
+ "vettura-acdata",
  "vettura-kn5",
  "vettura-physics",
 ]
