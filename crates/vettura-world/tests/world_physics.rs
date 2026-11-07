@@ -2617,3 +2617,124 @@ fn ac_rolling_resistance_slows_a_coasting_car() {
         "tyre rolling resistance did not slow the car: {bare} vs {rubber}"
     );
 }
+
+#[test]
+fn the_roll_centre_reduces_body_roll_under_cornering() {
+    // Two identical cars; the only difference is the roll-centre height. A
+    // higher roll centre transfers the lateral force closer to the centre of
+    // mass, so the body rolls less in the same corner.
+    let run = |height_m: f32| -> f32 {
+        let mut spec = VehicleSpec::default();
+        for wheel in &mut spec.wheels {
+            wheel.suspension.roll_center_height_m = height_m;
+        }
+        let mut world = World::new(SurfaceMap::new()).unwrap();
+        let car = world.add_vehicle(spec, Pose::default()).unwrap();
+        settle(&mut world, car);
+        world
+            .set_controls(
+                car,
+                Controls {
+                    throttle: 1.0,
+                    ..Controls::default()
+                },
+            )
+            .unwrap();
+        step(&mut world, 240 * 3);
+        for _ in 0..180 {
+            world
+                .set_controls(
+                    car,
+                    Controls {
+                        throttle: 0.4,
+                        steering: 0.6,
+                        ..Controls::default()
+                    },
+                )
+                .unwrap();
+            step(&mut world, 1);
+        }
+        let snapshot = world.snapshot(car).unwrap();
+        (snapshot.orientation * Vec3::X).y.abs()
+    };
+
+    let ground = run(0.0);
+    let high = run(0.12);
+    assert!(
+        high < ground * 0.9,
+        "the roll centre did not reduce body roll: {ground} vs {high}"
+    );
+}
+
+#[test]
+fn ac_steer_lock_and_ratio_set_the_wheel_lock() {
+    // AC's `STEER_LOCK` is the lock at the steering wheel; the wheel angle is
+    // the division by the ratio. 230° through a 15:1 ratio is ~15.3°.
+    let spec = vettura_physics::VehicleSpec {
+        max_steer_angle_deg: 230.0 / 15.0,
+        ..vettura_physics::VehicleSpec::default()
+    };
+    let mut world = World::new(SurfaceMap::new()).unwrap();
+    let car = world.add_vehicle(spec, Pose::default()).unwrap();
+    settle(&mut world, car);
+    world
+        .set_controls(
+            car,
+            Controls {
+                throttle: 1.0,
+                ..Controls::default()
+            },
+        )
+        .unwrap();
+    step(&mut world, 240 * 4);
+    // The car with a much smaller lock has to be driven with more steering to
+    // follow the same radius, so it turns tighter per unit of input.
+    let radius = |lock_deg: f32| -> f32 {
+        let spec = vettura_physics::VehicleSpec {
+            max_steer_angle_deg: lock_deg,
+            ..vettura_physics::VehicleSpec::default()
+        };
+        let mut world = World::new(SurfaceMap::new()).unwrap();
+        let car = world.add_vehicle(spec, Pose::default()).unwrap();
+        settle(&mut world, car);
+        world
+            .set_controls(
+                car,
+                Controls {
+                    throttle: 1.0,
+                    ..Controls::default()
+                },
+            )
+            .unwrap();
+        step(&mut world, 240 * 3);
+        let start = world.snapshot(car).unwrap();
+        let start_pos = start.position;
+        let start_forward = start.orientation * Vec3::NEG_Z;
+        for _ in 0..180 {
+            world
+                .set_controls(
+                    car,
+                    Controls {
+                        throttle: 0.4,
+                        steering: 1.0,
+                        ..Controls::default()
+                    },
+                )
+                .unwrap();
+            step(&mut world, 1);
+        }
+        let snapshot = world.snapshot(car).unwrap();
+        let travelled = (snapshot.position - start_pos).length().max(1.0e-3);
+        let turned = start_forward
+            .angle_between(snapshot.orientation * Vec3::NEG_Z)
+            .max(1.0e-4);
+        travelled / turned
+    };
+
+    let tight = radius(230.0 / 15.0);
+    let wide = radius(45.0);
+    assert!(
+        tight < wide,
+        "steer lock did not change the turning radius: {tight} vs {wide}"
+    );
+}

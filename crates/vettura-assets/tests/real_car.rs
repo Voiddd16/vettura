@@ -154,6 +154,14 @@ fn real_f1_car_maps_engine_curve_and_inline_comments() {
     assert!(spec.tyres.rolling_resistance_slip > 0.0);
     assert!(spec.tyres.pneumatic_trail_m > 0.0);
 
+    // Steering: `STEER_LOCK=230` through `STEER_RATIO=15` is ~15.3 deg at the
+    // wheel, not 30 deg of the old default.
+    assert!((spec.max_steer_angle_deg - 230.0 / 15.0).abs() < 1e-3);
+
+    // The axle's roll centre, above the road and below the centre of mass.
+    assert!(spec.wheels[0].suspension.roll_center_height_m > 0.0);
+    assert!(spec.wheels[0].suspension.roll_center_height_m < spec.cg_height_m);
+
     // Drivetrain completeness: reverse ratio, upshift fuel cut-off, handbrake.
     assert!(
         (spec.gearbox.reverse_ratio - 4.0).abs() < 1e-6,

@@ -109,6 +109,9 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
                 // AC authors static camber per axle; the gain and thrust stay
                 // at the model defaults because AC does not publish them.
                 static_camber_deg: axle.static_camber.unwrap_or(0.0).clamp(-15.0, 15.0),
+                // A mod that publishes the roll centre uses it; the default
+                // stays at the typical double-wishbone value.
+                roll_center_height_m: axle.roll_center.unwrap_or(0.05).clamp(-0.1, 0.3),
                 fast_bump_damper_ns_per_m: axle.fast_bump.unwrap_or(0.0).clamp(0.0, 500_000.0),
                 fast_bump_threshold_mps: axle.fast_bump_threshold.unwrap_or(0.0).clamp(0.0, 5.0),
                 fast_rebound_damper_ns_per_m: axle
@@ -136,6 +139,19 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
     // (mods are free to ship nonsense, and many do).
     spec.inertia = inertia_from_car(&car, &spec);
     spec.active_suspension = active_suspension(&suspensions, spec.mass_kg);
+    // Steering: `STEER_LOCK` is the lock at the *steering wheel* in degrees and
+    // `STEER_RATIO` is the ratio between them, so the wheel angle is the
+    // division of the two. Without either the spec keeps its default.
+    if let (Some(lock_deg), Some(ratio)) = (
+        car.get_f32("CONTROLS", "STEER_LOCK"),
+        car.get_f32("CONTROLS", "STEER_RATIO"),
+    ) && lock_deg.is_finite()
+        && lock_deg > 0.0
+        && ratio.is_finite()
+        && ratio > 0.0
+    {
+        spec.max_steer_angle_deg = (lock_deg / ratio).clamp(3.0, 60.0);
+    }
 
     let torque_curve = read_torque_curve(data);
     let curve_peak = torque_curve
@@ -869,6 +885,7 @@ struct AxleData {
     progressive_rate: Option<f32>,
     bump_stop_rate: Option<f32>,
     static_camber: Option<f32>,
+    roll_center: Option<f32>,
     fast_bump: Option<f32>,
     fast_bump_threshold: Option<f32>,
     fast_rebound: Option<f32>,
@@ -896,6 +913,10 @@ impl AxleData {
             progressive_rate: suspensions.get_f32(axle, "PROGRESSIVE_SPRING_RATE"),
             bump_stop_rate: suspensions.get_f32(axle, "BUMP_STOP_RATE"),
             static_camber: suspensions.get_f32(axle, "STATIC_CAMBER"),
+            // Optional; only some mods author the roll centre explicitly.
+            roll_center: suspensions
+                .get_f32(axle, "ROLL_CENTER")
+                .or_else(|| suspensions.get_f32("ARB", &format!("{axle}_ROLL_CENTER"))),
             // Two-rate dampers: the bleeder rate and the speed it kicks in.
             fast_bump: suspensions.get_f32(axle, "DAMP_FAST_BUMP"),
             fast_bump_threshold: suspensions.get_f32(axle, "DAMP_FAST_BUMPTHRESHOLD"),

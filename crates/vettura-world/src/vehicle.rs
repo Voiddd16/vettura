@@ -110,6 +110,8 @@ pub struct VehicleTuning {
     /// Multiplier on the engine peak torque.
     pub engine_scale: f32,
     /// Maximum front-wheel steer angle, degrees.
+    /// Steering lock *override*, degrees at the wheel. `0` uses the car's own
+    /// [`VehicleSpec::max_steer_angle_deg`], which is what AC data provides.
     pub max_steer_angle_deg: f32,
     /// Multiplier on aerodynamic drag.
     pub drag_scale: f32,
@@ -130,7 +132,12 @@ impl VehicleTuning {
         self.grip_scale = finite_or(self.grip_scale, 1.0).clamp(0.0, 8.0);
         self.brake_scale = finite_or(self.brake_scale, 1.0).clamp(0.0, 4.0);
         self.engine_scale = finite_or(self.engine_scale, 1.0).clamp(0.0, 8.0);
-        self.max_steer_angle_deg = finite_or(self.max_steer_angle_deg, 30.0).clamp(0.0, 60.0);
+        // A zero override means "the spec decides", so it stays zero.
+        self.max_steer_angle_deg = if self.max_steer_angle_deg.is_finite() {
+            self.max_steer_angle_deg.clamp(0.0, 60.0)
+        } else {
+            0.0
+        };
         self.drag_scale = finite_or(self.drag_scale, 1.0).clamp(0.0, 8.0);
         self.downforce_coefficient = finite_or(self.downforce_coefficient, 0.0).clamp(0.0, 10.0);
         self.collision_friction = finite_or(self.collision_friction, 0.6).clamp(0.0, 10.0);
@@ -145,7 +152,7 @@ impl Default for VehicleTuning {
             grip_scale: 1.0,
             brake_scale: 1.0,
             engine_scale: 1.0,
-            max_steer_angle_deg: 30.0,
+            max_steer_angle_deg: 0.0,
             drag_scale: 1.0,
             downforce_coefficient: 0.0,
             collision_friction: 0.6,
@@ -1410,6 +1417,40 @@ impl VehicleRuntime {
                     body.add_torque(p2j(wheel_up * aligning))?;
                 }
             }
+            // Roll centre: Jolt applies the tyre's lateral force at the contact
+            // patch, which is the longest lever arm about the centre of mass
+            // and therefore the most body roll a car can have. A real car
+            // transfers that force at the roll centre, so the roll moment is
+            // smaller by `roll_center_height × Fy`; take the difference off
+            // here as a torque about the forward axis. Without an authored
+            // roll centre this is zero and nothing changes.
+            for axle in 0..2usize {
+                let height = self.spec.wheels[axle * 2]
+                    .suspension
+                    .roll_center_height_m
+                    .max(0.0);
+                if height <= 1.0e-4 {
+                    continue;
+                }
+                let mut lateral = 0.0f32;
+                for index in [axle * 2, axle * 2 + 1] {
+                    let wheel = &self.snapshot.wheels[index];
+                    if !wheel.contact {
+                        continue;
+                    }
+                    // The wheel's lateral axis projected onto the car's own
+                    // right axis: for small steer angles that is cos(steer).
+                    let right = orientation * Vec3::X;
+                    let axis = (orientation * Quat::from_rotation_y(-wheel.steer_angle) * Vec3::X)
+                        .dot(right);
+                    lateral += wheel.lateral_force_n * axis;
+                }
+                if lateral.abs() > 1.0e-3 {
+                    let forward = orientation * Vec3::NEG_Z;
+                    let torque = forward * (height * lateral);
+                    body.add_torque(p2j(torque))?;
+                }
+            }
             for (axle, wheels) in [
                 [Wheel::FrontLeft, Wheel::FrontRight],
                 [Wheel::RearLeft, Wheel::RearRight],
@@ -2420,8 +2461,15 @@ fn vehicle_settings(
             .width(width)
             .inertia((0.5 * 12.0 * radius * radius).max(0.05))
             .angular_damping(0.05)
+            // The car's own lock wins unless the tuning overrides it, so an AC
+            // car steers by the steering ratio it was authored with.
             .max_steer_angle(if wheel_spec.steerable {
-                tuning.max_steer_angle_deg.clamp(5.0, 60.0).to_radians()
+                let lock = if tuning.max_steer_angle_deg > 0.0 {
+                    tuning.max_steer_angle_deg
+                } else {
+                    spec.max_steer_angle_deg
+                };
+                lock.clamp(5.0, 60.0).to_radians()
             } else {
                 0.0
             })

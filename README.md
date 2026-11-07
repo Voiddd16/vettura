@@ -39,6 +39,7 @@
 | 轮胎垂直刚度：`RATE`/`PRESSURE_SPRING_GAIN` 与悬挂串联（热胎更硬）+ 三层胎温 + `PERFORMANCE_CURVE` 温度-抓地表 | 可用 |
 | 冬季工况：零下环境温度/胎压/路面抓地/温度外推，全部允许负温度（无 0 °C 夹断） | 可用 |
 | 回正力矩（`pneumatic_trail`）+ 气动尾流 dirty air + AC 滚动阻力（`ROLLING_RESISTANCE_*`）+ 倒挡/断油/手刹扭矩 | 可用 |
+| 转向锁（`STEER_LOCK/STEER_RATIO`，修掉 2× 偏差）+ 侧倾中心修正（roll centre → 侧倾力矩） | 可用 |
 | 碰撞碎片：世界持有刚体碎片（盒/球/圆柱），二次碰撞写入 `ImpactEvent` | 可用 |
 | ABS/牵引力控制：按实测轮滑移闭环调节刹车与油门（`Controls.abs` / `Controls.tc`） | 可用 |
 | 悬架运动学：动态外倾角 + 外倾推力（指向倾斜侧，静态左右抵消）+ 外倾抓地窗口 | 可用 |

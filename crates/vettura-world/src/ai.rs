@@ -694,11 +694,14 @@ impl AiDriver {
         let right = forward.cross(Vec3::Y);
         let local_x = to_target.dot(right);
         let local_z = to_target.dot(forward);
-        let max_steer = tuning
-            .max_steer_angle_deg
-            .clamp(5.0, 60.0)
-            .to_radians()
-            .max(0.01);
+        // The car's authored lock, overridable through the tuning exactly as
+        // the physics does it.
+        let lock = if tuning.max_steer_angle_deg > 0.0 {
+            tuning.max_steer_angle_deg
+        } else {
+            spec.max_steer_angle_deg
+        };
+        let max_steer = lock.clamp(5.0, 60.0).to_radians().max(0.01);
 
         // Pure pursuit when the target is in front. When the car is pointing
         // away from the line, fall back to a heading correction so it can

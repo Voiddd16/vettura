@@ -131,6 +131,10 @@ pub struct VehicleSpec {
     /// from the collider box", which is what happens when a mod does not
     /// publish a usable `car.ini [BASIC] INERTIA`.
     pub inertia: Vec3,
+    /// Biggest steer angle the front wheels can take, degrees at the wheel.
+    /// AC's `[CONTROLS] STEER_LOCK / STEER_RATIO`, which is the only honest
+    /// source: the steering wheel's lock is not the wheel's lock.
+    pub max_steer_angle_deg: f32,
 }
 
 impl Default for VehicleSpec {
@@ -164,6 +168,7 @@ impl Default for VehicleSpec {
             ers: ErsSpec::default(),
             active_suspension: ActiveSuspensionSpec::default(),
             heave_springs: [HeaveSpringSpec::default(); 2],
+            max_steer_angle_deg: 30.0,
             // Defaults to the derived tensor, exactly what the body would get
             // without this field, so behaviour is unchanged.
             inertia: Vec3::ZERO,
@@ -290,6 +295,14 @@ pub struct SuspensionSpec {
     /// camber. It points toward the side the tyre leans, so a negative wheel
     /// helps the corner instead of fighting it.
     pub camber_thrust_coeff: f32,
+    /// Height of this axle's roll centre above the road, metres.
+    ///
+    /// Jolt applies the tyre's lateral force at the contact patch, which gives
+    /// the maximum possible roll moment about the centre of mass. A real car
+    /// transfers that force at the roll centre instead, so the moment is
+    /// smaller by `roll_center_height × Fy`. `0` keeps Jolt's (maximum) lever
+    /// arm, which is the case for hand-authored specs.
+    pub roll_center_height_m: f32,
 }
 
 impl Default for SuspensionSpec {
@@ -312,6 +325,11 @@ impl Default for SuspensionSpec {
             static_camber_deg: 0.0,
             camber_gain_rad_per_m: -0.5,
             camber_thrust_coeff: 0.3,
+            // A typical double-wishbone race axle: a few centimetres above the
+            // road, well below the centre of mass. AC's own hard points are
+            // authored in a frame that cannot be cross-referenced with
+            // TRACK, so a mod that knows the real number uses ROLL_CENTER.
+            roll_center_height_m: 0.05,
         }
     }
 }
@@ -2702,6 +2720,29 @@ mod tests {
         // No authored data: no extra rolling resistance at all.
         let bare = TyreSpec::default();
         assert_eq!(bare.rolling_resistance_n(30.0, 0.1, 17.0), 0.0);
+    }
+
+    #[test]
+    fn the_roll_centre_and_steer_lock_are_data_driven() {
+        let spec = VehicleSpec::default();
+        // The spec carries its own lock; the world uses it unless the tuning
+        // overrides it.
+        assert_eq!(spec.max_steer_angle_deg, 30.0);
+        // A real AC car: 230 degrees at the wheel through a 15:1 ratio.
+        let lock = (230.0f32 / 15.0).clamp(3.0, 60.0);
+        assert!((lock - 15.333_333).abs() < 1e-4);
+
+        // The roll centre is above the road and well below the centre of mass,
+        // which is what makes the correction a reduction in roll moment.
+        let suspension = SuspensionSpec::default();
+        assert!(suspension.roll_center_height_m > 0.0);
+        assert!(suspension.roll_center_height_m < spec.cg_height_m);
+        // A mod can author it, within sanity.
+        let authored = SuspensionSpec {
+            roll_center_height_m: 0.08,
+            ..SuspensionSpec::default()
+        };
+        assert_eq!(authored.roll_center_height_m, 0.08);
     }
 
     #[test]
