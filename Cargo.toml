@@ -45,9 +45,9 @@ vettura-physics = { path = "crates/vettura-physics" }
 vettura-world = { path = "crates/vettura-world" }
 vettura-audio = { path = "crates/vettura-audio" }
 
-# FMOD Engine bindings. FMOD itself is not vendored (license); point
-# `FMOD_SYS_FMOD_DIRECTORY` at your FMOD Engine install to enable `vettura-audio/fmod`.
-fmod = { package = "fmod-oxide", version = "0.2.2", default-features = false, features = ["studio"] }
+# FMOD Engine 2.02.22 绑定：libfmod 锁 ~2.222；SDK 二进制不入库，由脚本下载到本地缓存。
+# bank 兼容规则：2.02.22 runtime 只保证加载 2.02.x 编出来的 bank；2.03/2.04 不保证。
+libfmod = "~2.222"
 
 # Shared third-party dependencies
 anyhow = "1"

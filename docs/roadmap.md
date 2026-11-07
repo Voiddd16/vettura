@@ -84,7 +84,8 @@
 - [x] 天气/时间对表面抓地的影响（`SurfaceMap` + `Weather`）
 - [x] 赛道演进（`groove.ini` → `GrooveMap` 位置驱动橡胶堆积 → 每个车轮的抓地倍率）
 - [x] 声音运行时：`sfx/GUIDs.txt` 事件表 + bank 定位 + FMOD Studio runtime 直达（`vettura-audio` / `FmodSystem`；bank 由 FMOD 加载，不做 FSB 解析）
-- [ ] 声浪状态映射：rpm / load / 挡位 / turbo / 路面 / 打滑 → FMOD 事件参数与混音
+- [x] FMOD Engine 2.02.22 + `libfmod ~2.222` 动态链接；SDK 二进制不入库，由主工程 `scripts/fetch_fmod.py` 本地拉取
+- [ ] 声浪状态映射：rpm / load / 挡位 / turbo / 路面 / 打滑 → 已实现参数名适配，尚未接完整车辆遥测
 - [ ] 音频资源策略：bank 预加载、内存上限、总线和音量矩阵
 - [ ] 涂装/皮肤
 

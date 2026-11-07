@@ -121,6 +121,21 @@ impl FmodSystem {
             .map_or(0, |manifest| manifest.events().len() as i64)
     }
 
+    /// 当前 manifest 里可用的事件名。
+    #[func]
+    pub fn event_names(&self) -> PackedStringArray {
+        self.manifest
+            .as_ref()
+            .map(|manifest| {
+                manifest
+                    .event_names()
+                    .into_iter()
+                    .map(GString::from)
+                    .collect::<PackedStringArray>()
+            })
+            .unwrap_or_default()
+    }
+
     /// 第 `index` 个事件名。
     #[func]
     pub fn event_name(&self, index: i64) -> GString {
@@ -139,6 +154,50 @@ impl FmodSystem {
             .and_then(|manifest| manifest.events().get(index.max(0) as usize))
             .map(|event| GString::from(event.guid.as_str()))
             .unwrap_or_default()
+    }
+
+    /// 查询事件的参数名；不同 mod 命名不统一，主项目可用它做适配。
+    #[func]
+    pub fn parameter_names(&self, event: GString) -> PackedStringArray {
+        let Some(engine) = self.engine.as_ref() else {
+            return PackedStringArray::new();
+        };
+        let event = event.to_string();
+        match engine.parameter_names(&event) {
+            Ok(names) => names
+                .into_iter()
+                .map(|name| GString::from(name.as_str()))
+                .collect::<PackedStringArray>(),
+            Err(_) => PackedStringArray::new(),
+        }
+    }
+
+    /// 用常见参数名适配车辆声浪事件；不存在的参数会被跳过。
+    #[func]
+    pub fn set_vehicle_parameters(
+        &mut self,
+        event: GString,
+        rpm: f32,
+        throttle: f32,
+        load: f32,
+        speed: f32,
+        view_blend: f32,
+    ) -> bool {
+        let Some(engine) = self.engine.as_mut() else {
+            return self.fail("FMOD runtime is not ready");
+        };
+        let event = event.to_string();
+        let params = vettura_audio::VehicleParams {
+            rpm,
+            throttle,
+            load,
+            speed,
+            view_blend,
+        };
+        match engine.set_vehicle_parameters(&event, params) {
+            Ok(()) => true,
+            Err(err) => self.fail(err),
+        }
     }
 
     /// 按事件名查 GUID。

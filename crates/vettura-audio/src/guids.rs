@@ -25,15 +25,6 @@ pub struct SoundEvent {
 }
 
 impl SoundEvent {
-    /// 解析 GUID 字符串为 FMOD Runtime 使用的 `fmod::Guid`。
-    ///
-    /// 只在启用 `vettura-audio/fmod` 时可用；其他构建仍然可以解析事件表。
-    #[cfg(feature = "fmod")]
-    pub fn fmod_guid(&self) -> crate::Result<fmod::Guid> {
-        parse_fmod_guid(self.guid.trim_matches('{').trim_matches('}'))
-            .ok_or_else(|| crate::error::AudioError::invalid_guid(&self.guid))
-    }
-
     /// 这个事件是否属于 `car_id`（全局事件始终算属于任何车）。
     pub fn matches_car(&self, car_id: &str) -> bool {
         self.car_id.as_deref() == Some(car_id)
@@ -155,18 +146,6 @@ pub fn guid_parts(text: &str) -> Option<(u32, u16, u16, [u8; 8])> {
     Some((data_1, data_2, data_3, data_4))
 }
 
-/// 把 GUID 字符串转成 FMOD Runtime 使用的 `fmod::Guid`。
-#[cfg(feature = "fmod")]
-fn parse_fmod_guid(text: &str) -> Option<fmod::Guid> {
-    let (data_1, data_2, data_3, data_4) = guid_parts(text)?;
-    Some(fmod::Guid {
-        data_1,
-        data_2,
-        data_3,
-        data_4,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{SoundEvent, guid_parts, parse_events, parse_events_for};
@@ -219,10 +198,7 @@ mod tests {
         assert_eq!(data_1, 0x79ab_a212);
         assert_eq!(data_2, 0x4247);
         assert_eq!(data_3, 0x42af);
-        assert_eq!(
-            data_4,
-            [0xb1, 0x72, 0xd4, 0x38, 0x82, 0x80, 0x68, 0x0f]
-        );
+        assert_eq!(data_4, [0xb1, 0x72, 0xd4, 0x38, 0x82, 0x80, 0x68, 0x0f]);
 
         assert!(guid_parts("79aba212-4247-42af").is_none());
         assert!(guid_parts("not-a-guid").is_none());

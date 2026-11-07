@@ -40,10 +40,4 @@ impl AudioError {
             text: text.to_owned(),
         }
     }
-
-    /// 只在 `vettura-audio/fmod` feature 下被 `SoundEvent::fmod_guid` 使用。
-    #[cfg_attr(not(feature = "fmod"), allow(dead_code))]
-    pub(crate) fn invalid_guid(guid: &str) -> Self {
-        Self::Guid(guid.to_owned())
-    }
 }

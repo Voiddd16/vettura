@@ -103,15 +103,16 @@ godot --headless --path /path/to/godot/project \
     res://vettura-native/godot/baseline.tscn
 ```
 
-接 FMOD 真机声音时：
+接 FMOD 真机声音时（SDK 由主工程 Python 脚本下载，二进制不入库）：
 
 ```bash
-FMOD_SYS_FMOD_DIRECTORY=/path/to/FMODEngine \
-  cargo build -p vettura-godot --features fmod
+cd /path/to/vettura/scripts && uv run fetch_fmod.py
+cd /path/to/vettura-native && cargo build -p vettura-godot --features fmod
 ```
 
 然后在 GDScript 里用 `FmodSystem.start()` / `load_car()` / `play("engine_ext")`；
-详见 [`docs/build.md`](docs/build.md) 与 [`docs/godot.md`](docs/godot.md)。
+版本绑定与 bank 兼容规则见 [`docs/audio.md`](docs/audio.md)，构建细节见
+[`docs/build.md`](docs/build.md) 与 [`docs/godot.md`](docs/godot.md)。
 
 ## 目录结构
 

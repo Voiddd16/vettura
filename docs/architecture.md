@@ -124,10 +124,14 @@ stub，所以 `cargo build --features chrono` 在任意机器上都能编译。
 - `guids`：解析 AC 车目录 `sfx/GUIDs.txt`，拿到事件名 / 路径 / GUID；
 - `manifest`：定位 `sfx/<car_id>.bank`，产出 `SoundManifest`；
 - `runtime`：`AudioEngine` 直接把 bank 字节交给 FMOD Studio runtime
-  （`load_bank_memory` → `get_event_by_id` → `create_instance/start` → `update`）。
+  （`Studio::create` → `load_bank_memory` → `get_event` → `create_instance/start` → `update`），
+  并用候选参数名适配不同 mod。
 
 **不放入**：bank / FSB 解析、音频解码、混音策略。FMOD 负责这些；crate 只负责
 “把 AC 的 GUID 表和 bank 路径送到 FMOD”。
+
+版本/兼容规则见 [`docs/audio.md`](audio.md)：锁定 FMOD Engine **2.02.22**、
+`libfmod ~2.222`，动态链接，SDK 不入库；2.02.22 runtime 只保证加载 2.02.x bank。
 
 `fmod` feature 默认关闭。关闭时 `AudioEngine` / `FmodSystem` 保留完整 API，但
 `start()` 返回 `NotLinked`，因此没有 FMOD SDK 的机器仍能编译、测试、运行视觉与
