@@ -701,6 +701,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "vettura-acdata",
+ "vettura-core",
  "vettura-kn5",
  "vettura-physics",
 ]

@@ -43,14 +43,17 @@
 
 ## Phase 3：AC 物理数据完整映射
 
-- [ ] `power.lut` 完整扭矩曲线
-- [ ] 涡轮/混动/能量回收
-- [ ] 变速箱换挡时间、离合、自动补油
-- [ ] 差速器（power/coast/preload）
-- [ ] 轮胎温度/磨损/压力
-- [ ] 悬架几何硬点、防倾杆、 bump stop
-- [ ] 气动多翼面 + 高度/DRS 曲线
-- [ ] 制动/ABS/TC
+- [x] `power.lut` 完整扭矩曲线 + 车体惯性张量（`car.ini INERTIA`，带合理性校验）
+- [x] 涡轮/混动/能量回收
+- [x] 变速箱换挡时间、离合（`[GEARBOX]`/`[CLUTCH]`/`[AUTOCLUTCH]` → Jolt 切换/离合时间、离合器强度、转动惯量）
+- [ ] 自动补油（降挡油门跟随）
+- [x] 差速器（power/coast/preload）
+- [x] 轮胎温度/磨损/压力 + 载荷敏感（`FZ0`/`LS_EXP*`）+ 松弛长度（`RELAXATION_LENGTH`）
+- [x] 轮胎垂直刚度（`RATE`/`PRESSURE_SPRING_GAIN`，与悬挂串联）+ 三层胎温 + `PERFORMANCE_CURVE`
+- [x] 轮胎滑移曲线：Magic Formula 公式移植自 Project Chrono `ChPac89Tire`，按 `FRICTION_LIMIT_ANGLE`/`FALLOFF_LEVEL` 拟合
+- [x] 悬架几何硬点、防倾杆、 bump stop（硬点仍由 Jolt `DoubleWishboneReduced` 近似；防倾杆/bump stop/渐进弹簧/限位/动态外倾与外倾抓地窗口/两级阻尼与非对称压缩回弹已落地）
+- [x] 气动多翼面 + 高度/DRS 曲线（含 `LUT_AOA_CL`/`LUT_GH_CL` 逐翼攻角×离地表 = 地效与失速）
+- [x] 制动/ABS/TC（刹车热衰减 + 转子核心热浸 `CORE_TRANSFER_*` + ABS/TC 闭环控制，见 docs/physics.md）
 
 验收：同一辆车在相同输入下，关键状态（速度、转速、挡位）与 AC 接近。
 
@@ -69,15 +72,45 @@
 
 ## Phase 5：赛道与内容
 
-- [ ] 赛道 KN5 / `surfaces.ini` / `fast_lane.ai`
-- [ ] 碰撞体（`collider.kn5`）
-- [ ] 起点/维修区/计时
-- [ ] AI 车辆
-- [ ] 天气/时间
+- [x] 赛道 `models*.ini` / `surfaces.ini` 解析（含多布局目录）
+- [x] 碰撞体（所有模型中 `1` 开头的物理节点 → Jolt static mesh，分块 + 表面索引）
+- [x] `fast_lane.ai` / `ideal_line.ai` v7 解析 + 起点位姿
+- [x] 安全发车格（AI 线吸附 + 碰撞体坡度/净空检查）
+- [x] 维修区（`pit_lane.ai` 复用 fast_lane 驱动/发车）
+- [x] 计时（`sections.ini` 分段 + `LapTimer` 圈速/最佳圈/无效圈判定）
+- [x] AI 车辆控制（沿 `fast_lane.ai` 纯跟踪 + 速度提示 + 周边车感知/超越与跟车）
+- [x] 天气/时间对表面抓地的影响（`SurfaceMap` + `Weather`）
+- [x] 赛道演进（`groove.ini` → `GrooveMap` 位置驱动橡胶堆积 → 每个车轮的抓地倍率）
 - [ ] 声音（`sfx/`）
 - [ ] 涂装/皮肤
 
-## Phase 6：工具与工程化
+## Phase 6：车辆物理进阶（核心驾驶感）
+
+- [x] **气动套件**：`aero.ini` 汇总 `Cl·A` → 前后轴独立下压力、离地高度衰减、`v²/(v²+ref²)` 平滑
+- [x] **差速器/锁止**：`drivetrain.ini [DIFFERENTIAL]` POWER/COAST/PRELOAD → Jolt 限滑比映射
+- [x] **刹车热衰减/温度**：`brakes.ini` PERF_CURVE → 每碟升温/风冷、踏板效率随温度变化
+- [x] **燃油载荷/重心迁移**：`car.ini [FUEL]/[FUEL_EXT]/[FUELTANK]` → 油箱位置惯性力 + `World::set_fuel_fraction`
+- [x] **变速箱/离合器**：`drivetrain.ini [GEARBOX]/[CLUTCH]/[AUTOCLUTCH]` → 换挡/离合时间、离合器强度、齿轮惯量
+- [x] **DRS/可调空气动力学**：`DrsSpec` + `Controls.drs` → 阻力按倍数下降（赛道激活区规则待补）
+
+## Phase 7：高级车辆物理（耐力赛/现代方程式/专项）
+
+- [x] **气动侧向力/横摆稳定性**：`YAW_CL_GAIN`/`ZONE_*_CL` → 侧滑侧向力，作用点在质心后产生回正力矩
+- [x] **轮胎联合滑移（摩擦圆）**：椭圆预算 `√(1−u²)`，制动+转向互抢抓地，份额地板 0.6
+- [x] **轮胎载荷敏感/松弛长度**：`FZ0`/`LS_EXP*` 载荷→摩擦系数、`RELAXATION_LENGTH` 侧向力随行驶距离建立
+- [x] **气动 LUT**：逐翼 `LUT_AOA_CL` × `LUT_GH_CL`（攻角曲线 + 离地曲线）= 地效与失速，逐翼施力
+- [x] **路面起伏**：`SIN_HEIGHT`/`SIN_LENGTH` → 确定性 bump 函数 + 坡度抓地折减
+- [x] **轮胎热/压/磨损**：胎温窗口（冷/热都掉抓地）、理想胎压、滑动生热、磨损累积 → `GripState` 逐轮倍率
+- [x] **ERS/混动**：电池 + 电机部署/回收，受电量与每圈额度限制，回收只在制动时
+- [x] **发动机热/功率保护**：燃油能量入冷却液、水温/油温窗口、冷启动掉动力、过热保底
+- [x] **主动悬挂/高度控制**：半主动/全主动执行器、目标车高/倾角、随速降低车高
+- [x] **车体惯性张量**：`car.ini INERTIA` 带物理合理性校验映射进 Jolt 刚体
+- [ ] **路面颠簸/3D 扫描路面**：PSD 颠簸谱、单独颠簸激励通道
+- [x] **湿胎排水/水膜动力学**：轮胎动态水膜（驻留时间模型）+ 与路面水深叠加 + 水膜冷却胎热
+- [x] **轮胎平点/抱死振动**：锁死轮真实功耗 → 平点损伤、每转一次的垂向冲击、抓地折减与恢复
+- [x] **碰撞碎片**：世界持有刚体碎片（车身件/轮胎/锥桶/碎石），与赛道/墙体/其它碎片/车辆二次碰撞（清理与安全车属比赛规则，不在物理层）
+
+## Phase 8：工具与工程化
 
 - [ ] `xtask` 构建/复制扩展产物
 - [ ] CI：fmt + clippy + test（无 Godot）

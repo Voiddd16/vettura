@@ -21,6 +21,26 @@
 | 物理后端接口 + 固定步长调度 | 可用 |
 | SimpleBackend（占位动力学） | 可用，仅用于联调 |
 | Chrono::Vehicle FFI | 可用：vehicle 平地工况（`--features chrono`，需先拉 Chrono 源码） |
+| `vettura-world`：Jolt 固定步长世界、表面/天气、车-车/车-墙碰撞 | 可用 |
+| AC 赛道：`models*.ini` / `surfaces.ini` / 物理节点扫描 / `fast_lane.ai` / `pit_lane.ai` / 安全发车格 / AI 纯跟踪 + 车流避让 / 分段计时 | 可用 |
+| 车辆物理进阶：气动下压力（前后轴）/ 差速器限滑 / 刹车热衰减 / 燃油载荷 / 变速箱离合器 / DRS | 可用 |
+| 赛道演进：`groove.ini` → 位置驱动橡胶堆积，赛线随行驶提升抓地 | 可用 |
+| 轮胎热/胎压/磨损：滑动生热 + 工作窗口 + 理想胎压 + grain/blister | 可用 |
+| 轮胎平点/抱死振动：抱死功耗 → 平点损伤 + 每转一次垂向冲击 + 抓地折减与恢复 | 可用 |
+| ERS/混动：电池部署/回收、每圈额度、制动能量回收 | 可用 |
+| 发动机热/功率保护：水温/油温窗口、冷启动与过热掉动力 | 可用 |
+| 水膜/aquaplaning：轮胎动态水膜（驻留时间模型）、与路面水深叠加、水膜冷却胎热 | 可用 |
+| 气动侧向力/横摆稳定性 + 轮胎联合滑移（摩擦圆）+ 路面起伏（`SIN_HEIGHT`/`SIN_LENGTH`） | 可用 |
+| 悬架非线性：渐进弹簧 / bump & rebound stop / heave 第三弹簧 / 主动 & 半主动执行器 | 可用 |
+| 发动机：完整 `power.lut` 扭矩曲线 / 涡轮增压滞后与泄压阀 / 收油制动（`COAST_REF`） / INI 行内注释 | 可用 |
+| 气动 LUT：逐翼 `LUT_AOA_CL` × `LUT_GH_CL`（攻角曲线 + 离地曲线 = 地效/失速）+ `car.ini INERTIA` 惯性张量 | 可用 |
+| 刹车：转子核心热浸（`CORE_TRANSFER_*`，松油门后刹车片继续被煎）+ 产热只按实际刹车输入 | 可用 |
+| 轮胎：载荷敏感（`FZ0`/`LS_EXP*`）+ 松弛长度（`RELAXATION_LENGTH`）+ Magic Formula 滑移曲线（移植自 Chrono） | 可用 |
+| 轮胎垂直刚度：`RATE`/`PRESSURE_SPRING_GAIN` 与悬挂串联（热胎更硬）+ 三层胎温 + `PERFORMANCE_CURVE` 温度-抓地表 | 可用 |
+| 碰撞碎片：世界持有刚体碎片（盒/球/圆柱），二次碰撞写入 `ImpactEvent` | 可用 |
+| ABS/牵引力控制：按实测轮滑移闭环调节刹车与油门（`Controls.abs` / `Controls.tc`） | 可用 |
+| 悬架运动学：动态外倾角 + 外倾推力（指向倾斜侧，静态左右抵消）+ 外倾抓地窗口 | 可用 |
+| 悬架阻尼：两级阻尼（bleeder 阈值）+ 压缩/回弹非对称（`DAMP_FAST_*`） | 可用 |
 | KN5 → Godot 场景（节点树 / ArrayMesh / 贴图 / 材质） | 可用 |
 | Godot 扩展类（Kn5File / AcCar / VehicleBody） | 骨架可用 |
 
@@ -32,6 +52,13 @@ cd vettura-native
 cargo fmt
 cargo check --workspace
 cargo test --workspace
+```
+
+赛道模块的真实资产测试默认忽略（Daytona 的 25 MB collider 会构建 Jolt
+static mesh）。本地有 `../vettura/test/daytona_2017/` 时可运行：
+
+```bash
+cargo test -p vettura-world --test track_module -- --ignored
 ```
 
 `vettura-godot`（crates/vettura-godot）的单元测试只覆盖不依赖引擎的纯转换，
@@ -80,6 +107,7 @@ vettura-native/
 │   ├── vettura-assets/        # 车目录解析 + AC 数据 → 物理 spec
 │   ├── vettura-physics/       # 物理后端接口、状态、固定步长调度、SimpleBackend
 │   │   └── src/backends/      #   simple / chrono（后者由 `chrono` feature 门控）
+│   ├── vettura-world/         # Jolt 世界、SurfaceMap/天气、赛道 collider、AI line
 │   └── vettura-godot/         # Godot 4 GDExtension (cdylib + rlib)
 │       └── src/kn5/           # KN5 → Godot 桥接（convert/texture/material/mesh/scene）
 ├── third_party/               # 远端拉取的第三方源码（vendored）
@@ -107,16 +135,17 @@ vettura-godot (Godot)
    │        │            vettura-acdata
    │        └──> vettura-physics
    ├── vettura-core
-   └── vettura-physics
+   ├── vettura-physics
+   └── vettura-world ──> vettura-physics / vettura-kn5 / vettura-acdata
 
 third_party/chrono ──(build.rs, 仅 `--features chrono`)──> vettura-physics
 ```
 
 规则：
 
-- `vettura-kn5`、`vettura-acdata`、`vettura-physics` **不依赖 Godot**，可单独测试；
-- AC 格式知识只放在 `vettura-kn5` / `vettura-acdata` / `vettura-assets`；
-- `vettura-physics` 不知道 Assetto Corsa 的存在；
+- `vettura-kn5`、`vettura-acdata`、`vettura-physics`、`vettura-world` **不依赖 Godot**，可单独测试；
+- AC 格式知识只放在 `vettura-kn5` / `vettura-acdata` / `vettura-assets` / `vettura-world`；
+- `vettura-physics` 不知道 Assetto Corsa 的存在；赛道语义在 `vettura-world` 边界转换；
 - Godot 层只做类型转换和生命周期管理；其中 `kn5/convert.rs` 刻意写成纯 Rust，
   让坐标/命名/材质参数映射可以在没有引擎的环境下单元测试。
 

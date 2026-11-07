@@ -99,6 +99,24 @@ Chrono::Vehicle 的适配器，住在 `vettura-physics` 内的
 由 `build.rs` 在 feature 打开时构建。`build.rs` 找不到 Chrono 时自动退化成
 stub，所以 `cargo build --features chrono` 在任意机器上都能编译。
 
+### `vettura-world`
+
+基于 Jolt 的世界层：
+
+- `World`：固定步长、多车、静态体、接触/冲击事件；
+- `SurfaceMap`：矩形/圆形 patch、水坑、赛道三角形索引、默认表面；
+- `TrackModule`：读取 AC 赛道目录的 `models*.ini`、`surfaces.ini`，扫描所有
+  模型中 `1` 开头的物理节点，转换成物理帧三角网并安装到 `World`；
+- `AiSpline`：解析 `fast_lane.ai` / `ideal_line.ai`（v7）的采样点与速度/宽度
+  元数据，提供起点位姿。
+
+赛道资产的多布局目录（如 `<track>/roadcourse/ai/fast_lane.ai`）和根目录
+（`<track>/ai/fast_lane.ai`）都支持。大三角网会按 800 m 分块后交给 Jolt，
+但对外仍是一个逻辑 `TrackObjectId`。
+
+**不放入**：渲染网格/材质（留在 `vettura-godot` 的 KN5 管线）、车辆动力学
+（`vettura-physics` / Jolt vehicle constraint）。
+
 ### `vettura-godot`
 
 Godot GDExtension：
@@ -126,6 +144,25 @@ CarFolder::open(car_dir)
         └── car.kn5 → Kn5::from_path → Node tree + meshes + textures
 ```
 
+### 加载一条 AC 赛道
+
+```
+TrackModule::load_layout(track_dir, "roadcourse")
+  ├── models_roadcourse.ini → TrackModelEntry[]（collision.kn5、daytonamesh.kn5…）
+  ├── roadcourse/data/surfaces.ini → SurfaceDef[] → SurfaceMap 自定义表面
+  ├── 所有模型 → 只保留节点名以 1 开头的物理三角网
+  │     ├── AC → 物理帧（ac_to_godot / 180° yaw conjugation）
+  │     ├── 节点名 1ROAD/1GRASS/1WALL → SurfaceId
+  │     └── MeshSurfaceIndex（10 m 网格宽相位）
+  ├── AiSpline::from_path(roadcourse/ai/fast_lane.ai)
+  ├── AiDriver（投影 + 前视点纯跟踪 → DriveInput）
+  ├── pit_lane.ai → 同一 AiSpline/AiDriver 复用
+  ├── data/sections.ini → TrackSection[] → LapTimer（圈速/分段/无效圈）
+  ├── data/groove.ini → GrooveSettings → GrooveMap（车轮沉积橡胶 → 抓地倍率）
+  ├── TrackModule::spawn_poses（AI 线吸附 + 坡度/净空检查）
+  └── World::add_static_mesh（800 m 分块 → Jolt static bodies）
+```
+
 ### 物理一帧
 
 ```
@@ -137,6 +174,9 @@ Godot _physics_process(delta)
                     backend.step(fixed_dt, controls)
         └── 读取 VehicleState → Node3D position/quaternion
 ```
+
+`vettura-world::World` 自己拥有一个 `PhysicsWorld`，按固定步长推进所有车辆和
+静态赛道；Godot 只镜像位姿与查询快照，不参与 Jolt 的 tick。
 
 ## 关键约定
 
