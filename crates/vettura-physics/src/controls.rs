@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::spec::ErsMode;
+
 /// Driver inputs. All axes are normalized.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Controls {
@@ -14,6 +16,17 @@ pub struct Controls {
     pub handbrake: bool,
     pub shift_up: bool,
     pub shift_down: bool,
+    /// Drag-reduction system request. Only effective when the car's
+    /// [`DrsSpec`](crate::DrsSpec) has one.
+    pub drs: bool,
+    /// Anti-lock braking system request. Only effective when the car has one,
+    /// which the world models from measured wheel slip.
+    pub abs: bool,
+    /// Traction control request. Only effective when the car has one, likewise
+    /// derived from measured wheel slip.
+    pub tc: bool,
+    /// Hybrid energy mode. Only effective when the car has an [`ErsSpec`](crate::ErsSpec).
+    pub ers: ErsMode,
 }
 
 impl Controls {
@@ -64,6 +77,20 @@ mod tests {
         assert!(controls.handbrake);
         assert!(controls.shift_up);
         assert!(!controls.shift_down);
+    }
+
+    #[test]
+    fn keeps_the_driver_aid_toggles_untouched() {
+        let controls = Controls {
+            abs: true,
+            tc: true,
+            ..Controls::default()
+        }
+        .clamped();
+        assert!(controls.abs, "ABS switch is not a normalized axis");
+        assert!(controls.tc, "TC switch is not a normalized axis");
+        assert!(!Controls::default().abs);
+        assert!(!Controls::default().tc);
     }
 
     #[test]

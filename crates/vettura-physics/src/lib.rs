@@ -14,6 +14,7 @@ pub mod controls;
 pub mod simulation;
 pub mod spec;
 pub mod state;
+pub mod tyre_model;
 
 pub use backend::VehicleBackend;
 #[cfg(feature = "chrono")]
@@ -21,7 +22,11 @@ pub use backends::{ChronoBackend, ChronoError};
 pub use controls::Controls;
 pub use simulation::Simulation;
 pub use spec::{
-    DrivetrainLayout, DrivetrainSpec, EngineSpec, Pose, SuspensionSpec, TyreSpec, VehicleSpec,
-    Wheel, WheelSpec,
+    AERO_REFERENCE_SPEED_MPS, AIR_DENSITY_KG_M3, ActiveSuspensionMode, ActiveSuspensionSpec,
+    AeroSpec, BrakeSpec, DiffSpec, DrivetrainLayout, DrivetrainSpec, DrsSpec, EngineSpec,
+    EngineThermalSpec, ErsMode, ErsSpec, FrictionTable, FuelSpec, GearboxSpec, HeaveSpringSpec,
+    Pose, SuspensionSpec, TorquePoint, TurboSpec, TyreSpec, TyreThermalSpec, TyreWearSpec,
+    VehicleSpec, Wheel, WheelSpec, WingSpec, series_spring_rate,
 };
 pub use state::{VehicleState, WheelState};
+pub use tyre_model::SlipCurve;
