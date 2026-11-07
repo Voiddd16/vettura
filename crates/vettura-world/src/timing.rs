@@ -243,15 +243,12 @@ impl LapTimer {
             if boundary > total + 1.0e-6 {
                 break;
             }
-            if boundary <= self.total_m + 1.0e-9 {
-                // Already behind us after a rewind; move on without timing.
-                self.next_boundary += 1;
-                if self.next_boundary >= self.boundaries.len() {
-                    self.next_boundary = 0;
-                }
-                continue;
-            }
 
+            // The start/finish line closes the lap, so a car sitting exactly on
+            // it (the AI line is closed: `along` at the start point can come
+            // back as `lap_length`) must consume the line instead of being
+            // skipped as "already behind"; skipping it loops through the
+            // sectors forever.
             if self.is_start_line(self.next_boundary) {
                 self.lap_offset_m = boundary;
                 self.next_boundary = 0;
@@ -278,14 +275,24 @@ impl LapTimer {
                 self.sector_times_s.clear();
                 self.lap_valid = true;
                 self.furthest_m = boundary;
-            } else {
-                if self.running {
-                    self.sector_times_s.push(time_s - self.last_boundary_time_s);
-                }
-                update.sector_completed = Some(self.next_boundary);
-                self.next_boundary += 1;
-                self.last_boundary_time_s = time_s;
+                continue;
             }
+
+            if boundary <= self.total_m + 1.0e-9 {
+                // Already behind us after a rewind; move on without timing.
+                self.next_boundary += 1;
+                if self.next_boundary >= self.boundaries.len() {
+                    self.next_boundary = 0;
+                }
+                continue;
+            }
+
+            if self.running {
+                self.sector_times_s.push(time_s - self.last_boundary_time_s);
+            }
+            update.sector_completed = Some(self.next_boundary);
+            self.next_boundary += 1;
+            self.last_boundary_time_s = time_s;
         }
 
         self.wrapped_m = Some(along);

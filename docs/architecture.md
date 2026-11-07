@@ -121,12 +121,15 @@ stub，所以 `cargo build --features chrono` 在任意机器上都能编译。
 
 Godot GDExtension：
 
-- `Kn5File`（Resource）：加载 KN5，暴露统计信息；
-- `AcCar`（Resource）：打开车目录，暴露质量/轴距/显示名；
-- `VehicleBody`（Node3D）：固定步长驱动 `Simulation`，同步位姿到节点。
+- `Kn5File`（Resource）：加载 KN5，查询统计、按需构建 `ArrayMesh` / 材质；
+- `AcCar`（Resource）：打开车目录，映射 `VehicleSpec`，实例化主模型；
+- `VehicleBody`（Node3D）：独立模式接 `Simulation`，世界模式由 `WorldBody` 驱动；
+- `WorldBody`（Node3D）：拥有 `TrackModule` + `World`，负责赛道安装、多车调度、
+  固定步长推进、圈速计时，以及把 `VehicleSnapshot` 同步回场景树。这是主项目调用
+  Rust 侧赛车模拟的入口。
 
-**下一步**：把 `Kn5` 转成 `ArrayMesh` + `ImageTexture`，并实现 Godot
-`ResourceFormatLoader`，让 `.kn5` 出现在资源浏览器中。
+**下一步**：`ResourceFormatLoader`；模型缓存与 surface 合并；AI 车 / pit lane 的
+节点封装；相机、HUD、输入映射等游戏层。
 
 ## 数据流
 
@@ -166,17 +169,19 @@ TrackModule::load_layout(track_dir, "roadcourse")
 ### 物理一帧
 
 ```
-Godot _physics_process(delta)
-  └── VehicleBody
-        └── Simulation::step(delta, Controls)
-              ├── accumulator += delta
-              └── while accumulator >= fixed_dt:
-                    backend.step(fixed_dt, controls)
-        └── 读取 VehicleState → Node3D position/quaternion
+Godot _physics_process(delta)              # WorldBody（节点树顺序：父先于子）
+  └── 从每个 VehicleBody 收 Controls
+        └── World::set_controls(handle, controls)
+        └── World::step(delta)             # 固定 1/240 s，最多 max_substeps
+  └── World::snapshot(handle) → VehicleBody.sync_snapshot
+        ├── Node3D position / quaternion
+        ├── WHEEL_* dummy: rest * steer(Y) * spin(X)
+        └── HUD 标量（speed/gear/rpm/contacts）
+  └── LapTimer::update(car_position, elapsed_s)
 ```
 
-`vettura-world::World` 自己拥有一个 `PhysicsWorld`，按固定步长推进所有车辆和
-静态赛道；Godot 只镜像位姿与查询快照，不参与 Jolt 的 tick。
+独立模式（`VehicleBody.setup_from_car` / `setup_default`）仍走
+`Simulation::step(delta, Controls)`，不经过 `WorldBody`。
 
 ## 关键约定
 

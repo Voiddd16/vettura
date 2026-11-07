@@ -220,6 +220,34 @@ fn daytona_roadcourse_loads_into_a_world() {
 }
 
 #[test]
+#[ignore = "loads the real Daytona AI line and times two updates at the start line"]
+fn daytona_lap_timer_survives_starting_on_the_line() {
+    let root = daytona_root();
+    if !root.join("models_roadcourse.ini").is_file() {
+        eprintln!("skipping: no Daytona assets at {}", root.display());
+        return;
+    }
+
+    let track = TrackModule::load_layout(&root, "roadcourse").expect("load track");
+    let start = track.start_pose().expect("spawn pose").expect("start pose");
+    let mut timer = track
+        .lap_timer()
+        .expect("create lap timer")
+        .expect("lap timer");
+
+    // The AI line is closed, so the start point can project to the *end* of the
+    // lap. The boundary walk has to consume the start/finish line in that case;
+    // otherwise it used to spin forever.
+    timer.update(start.position, 0.0);
+    timer.update(start.position, 1.0 / 60.0);
+
+    assert!(
+        timer.sector_count() > 0,
+        "a track with sections.ini must have sectors"
+    );
+}
+
+#[test]
 #[ignore = "loads the real Daytona track, collision mesh and AI line"]
 fn daytona_spawn_poses_are_clear_and_settle() {
     let root = daytona_root();

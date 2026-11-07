@@ -39,6 +39,33 @@ Godot 项目根目录是 `/Users/zhangziyi/Desktop/vettura`，因此
 `res://vettura-native/...` 能正确解析。Godot 4.3 起 macOS 平台按架构细分
 feature tag（`macos` / `macos.arm64` / `macos.x86_64`），所以几种写法都列了出来。
 
+## 主项目接入（必做）
+
+`.gdextension` 里所有路径都是 `res://vettura-native/...`。因此 Godot 工程根目录下
+必须能看到一个名为 `vettura-native` 的目录，否则 Godot 会静默报
+“GDExtension dynamic library not found”。仓库里提供了一个脚本：
+
+```bash
+./scripts/link_into_godot.sh          # 默认指向 ../vettura
+./scripts/link_into_godot.sh /path/to/godot/project
+```
+
+它做一件事：在 Godot 工程根目录创建 `vettura-native -> <本仓库>` 的符号链接。之后：
+
+```bash
+cargo build -p vettura-godot
+godot --headless --path /path/to/godot/project \
+    res://vettura-native/godot/baseline.tscn
+```
+
+`baseline.tscn` 是主项目接入冒烟：加载 Daytona `roadcourse`，从
+`cim_2008_ferrari` 生成真实规格车辆，全油门 20 秒，输出
+`[baseline] ... PASS` 并以退出码 `0` 结束。失败会 `push_error` + `quit(1)`。
+
+> Godot 首次打开带有 `res://vettura-native` 的工程时，若 `.godot/extension_list.cfg`
+> 里没有这一条，请在编辑器里重新导入一次工程让它生成；文件内容应至少包含：
+> `res://vettura-native/godot/vettura_native.gdextension`。
+
 ## 编辑器代码提示与文档
 
 `vettura-native` 已经为 `godot` crate 启用了 `register-docs`：
@@ -148,18 +175,47 @@ if car.open("res://cars/my_car"):
 extends Node3D
 
 func _ready():
-    $VehicleBody.setup_default()
+    var car := AcCar.new()
+    car.open("res://test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari")
+    $VehicleBody.setup_from_car(car)
 
 func _physics_process(_delta):
-    $VehicleBody.set_inputs(
+    $VehicleBody.set_controls(
         Input.get_action_strength("throttle"),
         Input.get_action_strength("brake"),
-        Input.get_axis("steer_right", "steer_left")
+        Input.get_axis("steer_right", "steer_left"),
+        Input.is_action_pressed("handbrake"),
+        Input.is_action_pressed("drs"),
+        Input.is_action_pressed("abs"),
+        Input.is_action_pressed("tc")
     )
+    print($VehicleBody.speed_kmh(), $VehicleBody.gear())
 ```
 
-`VehicleBody` 目前使用 `SimpleBackend`。切换 Chrono 时只需替换
-`Simulation::new(Box::new(...))`。
+- `setup_default()` 仍是 `SimpleBackend`，只用于验证固定步长链路；
+- `setup_from_car(car)` / `setup_from_car_folder(path)` 用 Jolt 真实车辆（平地）；
+- `set_controls(throttle, brake, steering, handbrake, drs, abs, tc)`；换挡默认自动；
+- 读取：`speed_mps` / `speed_kmh` / `forward_speed_mps` / `gear` / `engine_rpm` /
+  `wheel_contact(index)` / `wheel_spin(index)` / `wheel_load(index)`；
+- `bind_wheels(root)` 按 `WHEEL_LF/RF/LR/RR` 绑 dummy，车轮转向与滚动由快照驱动。
+
+### `WorldBody`（Node3D）
+
+```gdscript
+var world := WorldBody.new()
+add_child(world)
+world.load_track("res://test/daytona_2017", "roadcourse")
+var car: VehicleBody = world.spawn_vehicle_from_path(
+    "res://test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
+)
+```
+
+`WorldBody` 拥有 Jolt `World` 和 `TrackModule`，在自己的 `_physics_process` 里统一
+步进，然后把 `VehicleSnapshot` 推回每个 `VehicleBody`；子节点因此**不要**再自带
+`Simulation`。赛道视觉默认用碰撞体三角网生成一张低模 `MeshInstance3D`，可用
+`world.set_track_mesh_visible(false)` 关掉。圈速：`lap_time_s()` / `last_lap_s()` /
+`best_lap_s()` / `laps()` / `sector_count()` / `current_sector()` /
+`sector_times_s()` / `reset_lap_timer()`。
 
 ## KN5 → 场景的实现要点
 
@@ -198,101 +254,26 @@ func _physics_process(_delta):
 - 贴图内存策略（现在退化路径会解压成未压缩 RGBA8）；
 - AC 专有 shader（树、草、玻璃、发光贴花）与 `layer` 语义。
 
-## 注意事项
-
-- `register-docs` 需要 Godot ≥ 4.3，当前工程是 4.7，满足要求；
-- 文档字符串会嵌入所有 profile（包括 `--release`）；
-- 如果不想在发布包里附带说明文本，可以在发布构建中关闭 `register-docs`；
-- 只有注册到 Godot 的 `#[func]` / `#[signal]` / `#[var]` 会显示；普通 Rust
-  私有函数不会出现在 Godot 补全中。
-
-## 当前类
-
-### `Kn5File`（Resource）
-
-```gdscript
-var kn5 := Kn5File.new()
-if kn5.load("res://vettura-native/../test/.../car.kn5"):
-    print(kn5.node_count())
-    print(kn5.mesh_count())
-    print(kn5.triangle_count())
-    print(kn5.texture_count())
-    print(kn5.material_count())
-```
-
-目前只解析和统计，不生成 `ArrayMesh`。这是刻意的：先把数据模型稳定下来。
-
-### `AcCar`（Resource）
-
-```gdscript
-var car := AcCar.new()
-if car.open("res://path/to/cim_2008_ferrari"):
-    print(car.display_name())
-    print(car.total_mass())
-    print(car.wheelbase())
-    print(car.data_file_count())
-```
-
-### `VehicleBody`（Node3D）
-
-```gdscript
-extends Node3D
-
-func _ready():
-    $VehicleBody.setup_default()
-
-func _physics_process(_delta):
-    $VehicleBody.set_inputs(
-        Input.get_action_strength("throttle"),
-        Input.get_action_strength("brake"),
-        Input.get_axis("steer_right", "steer_left")
-    )
-```
-
-`VehicleBody` 目前使用 `SimpleBackend`。切换 Chrono 时只需替换
-`Simulation::new(Box::new(...))`。
-
-## 下一步：KN5 → 场景
-
-建议按以下顺序实现：
-
-1. **网格转换**
-   - `NodeKind::Mesh` → `ArrayMesh`；
-   - 顶点布局：position/normal/uv，索引 `u16`；
-   - 每个节点生成一个 `MeshInstance3D` 或合并为多 surface mesh；
-   - 应用 dummy 的局部/世界变换。
-
-2. **贴图**
-   - KN5 内嵌 DDS 字节 → `Image::load_dds_from_buffer`；
-   - 创建 `ImageTexture`；
-   - 按材质 `txDiffuse` / `txNormal` / `txDetail` 绑定。
-
-3. **材质**
-   - 把 `ksPerPixelMultiMap` 等 shader 映射到 Godot `StandardMaterial3D`；
-   - 先支持 diffuse/normal/specular，特殊 shader（树、草、玻璃、发光）后续处理。
-
-4. **资源加载器**
-   - 实现 `ResourceFormatLoader`，让 `.kn5` 直接拖进场景；
-   - 缓存已解析模型，避免重复读取 100MB 文件。
-
-5. **模型节点**
-   - 生成 `Node3D` 层级，保留 dummy 名称（`WHEEL_LF`、`SUSP_LF` 等）；
-   - 物理层通过名称查找车轮/悬挂挂点。
-
 ## 冒烟测试
 
-`godot/kn5_probe.tscn` + `kn5_probe.gd` 会用 `test/` 下的真实 F1 2008 mod 把三台车
-实例化进场景，并打印节点/网格/材质/挂点统计：
+有两个层次：
 
-```bash
-cd ..
-/Applications/Godot.app/Contents/MacOS/Godot --headless --path . \
-    res://vettura-native/godot/kn5_probe.tscn
-```
+1. **模型管线**：`godot/kn5_probe.tscn` + `kn5_probe.gd` 用 `test/` 下的真实
+   F1 2008 mod 把三台车实例化进场景，打印节点/网格/材质/挂点统计：
 
-期望输出（示例）：`mesh instances = 125 surfaces = 125`、
-`materials = 125 with albedo = 125 with normal = 121`、`WHEEL_LF -> (-0.70, 0.30, -1.53)`。
-退出码 0 表示全部通过。
+   ```bash
+   godot --headless --path /path/to/godot/project \
+       res://vettura-native/godot/kn5_probe.tscn
+   ```
+
+   期望输出（示例）：`mesh instances = 125 surfaces = 125`、
+   `materials = 125 with albedo = 125 with normal = 121`、
+   `WHEEL_LF -> (-0.70, 0.30, -1.53)`。
+
+2. **主项目接入**：`godot/baseline.tscn` 加载真实赛道 + 真实车，全油门 20 秒，
+   打印 `[baseline] ... PASS` 并以退出码 `0` 结束。见到 `[baseline] PASS`
+   就说明 `res://vettura-native` 路径、`.gdextension`、`WorldBody` / `VehicleBody`、
+   `AcCar → VehicleSpec`、Jolt step、轮子绑定这条链路都是通的。
 
 ## 注意事项
 
@@ -309,7 +290,7 @@ cd ..
 ## 调试
 
 - Godot 控制台会打印 `godot_error!`；
-- `cargo build -p vettura-native` 失败时先确认 `godot` crate 的 `api-4-7`
+- `cargo build -p vettura-godot` 失败时先确认 `godot` crate 的 `api-4-7`
   feature；
 - 扩展未加载时检查 `.gdextension` 路径和 dylib 是否存在；之前这里踩过一次坑：
    crate 目录从 `vettura-native` 改名后 `.gdextension` 仍指向

@@ -115,7 +115,9 @@ target/debug/libvettura_native.dylib
 macos.debug = "res://vettura-native/target/debug/libvettura_native.dylib"
 ```
 
-因此编译完成后，直接用 Godot 打开上一级目录的 `project.godot` 即可加载扩展。
+因此编译完成后，Godot 工程根目录下必须有 `vettura-native` 这个链接名（默认约定
+工程在 `../vettura`，用 `./scripts/link_into_godot.sh` 建立）。路径搞定时打开该
+`project.godot` 即可加载扩展。
 
 ### 4.2 发布版
 
@@ -149,8 +151,8 @@ macos.release = "res://vettura-native/target/release/libvettura_native.dylib"
 ### 4.4 验证扩展能否加载
 
 ```bash
-# 在 vettura-native/ 下执行；--path .. 指向 Godot 工程根目录
-godot --headless --path .. --editor --quit
+# 在 vettura-native/ 下执行；--path 指向 Godot 工程根目录
+godot --headless --path /path/to/godot/project --editor --quit
 ```
 
 如果扩展加载失败，优先检查：

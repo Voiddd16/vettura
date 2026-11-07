@@ -38,7 +38,7 @@ impl AcCar {
     /// 成功后返回 `true`；失败会打印错误并返回 `false`。
     #[func]
     pub fn open(&mut self, path: GString) -> bool {
-        match CarFolder::open(path.to_string()) {
+        match CarFolder::open(crate::paths::native_path(&path)) {
             Ok(car) => {
                 self.path = path;
                 self.car = Some(car);

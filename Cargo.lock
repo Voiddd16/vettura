@@ -672,6 +672,7 @@ dependencies = [
  "vettura-core",
  "vettura-kn5",
  "vettura-physics",
+ "vettura-world",
 ]
 
 [[package]]

@@ -40,7 +40,7 @@ impl Kn5File {
     /// `true`；失败会打印错误并返回 `false`，此时旧模型会被清空。
     #[func]
     pub fn load(&mut self, path: GString) -> bool {
-        match Kn5::from_path(path.to_string()) {
+        match Kn5::from_path(crate::paths::native_path(&path)) {
             Ok(model) => {
                 self.path = path;
                 self.model = Some(model);

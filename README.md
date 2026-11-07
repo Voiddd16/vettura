@@ -46,7 +46,7 @@
 | 悬架运动学：动态外倾角 + 外倾推力（指向倾斜侧，静态左右抵消）+ 外倾抓地窗口 | 可用 |
 | 悬架阻尼：两级阻尼（bleeder 阈值）+ 压缩/回弹非对称（`DAMP_FAST_*`） | 可用 |
 | KN5 → Godot 场景（节点树 / ArrayMesh / 贴图 / 材质） | 可用 |
-| Godot 扩展类（Kn5File / AcCar / VehicleBody） | 骨架可用 |
+| Godot 扩展类（Kn5File / AcCar / VehicleBody / WorldBody） | 可用：模型 + 单机 Jolt + 赛道世界，见 `godot/baseline.tscn` |
 
 ## 快速开始
 
@@ -89,14 +89,17 @@ cargo test -p vettura-godot   # kn5::convert 的纯转换单测
 
 `godot/vettura_native.gdextension` 已把库路径指向
 `res://vettura-native/target/debug/libvettura_native.dylib`（macOS）。
-Godot 项目根目录就是本目录的上一级，所以打开现有 `project.godot` 即可识别扩展。
+所以 **Godot 工程根目录下必须能看到 `vettura-native` 目录**：默认约定工程在本仓库
+上一级的 `vettura/`，用 `./scripts/link_into_godot.sh` 建立符号链接即可；其它位置
+把路径作为第一个参数传进去。
 
 用真实 mod 车做端到端冒烟测试（无头 Godot）：
 
 ```bash
-cd ..
-/Applications/Godot.app/Contents/MacOS/Godot --headless --path . \
-  res://vettura-native/godot/kn5_probe.tscn
+./scripts/link_into_godot.sh      # 或 ./scripts/link_into_godot.sh /path/to/godot/project
+cargo build -p vettura-godot
+godot --headless --path /path/to/godot/project \
+    res://vettura-native/godot/baseline.tscn
 ```
 
 ## 目录结构
@@ -121,7 +124,10 @@ vettura-native/
 │   └── acd-inspect/           # 解密/解包 data.acd
 ├── godot/
 │   ├── vettura_native.gdextension
-│   └── kn5_probe.tscn/.gd     # 无头端到端冒烟测试
+│   ├── kn5_probe.tscn/.gd     # 无头模型冒烟测试
+│   └── baseline.tscn/.gd      # 主项目接入冒烟（真实赛道 + 真实车）
+├── scripts/
+│   └── link_into_godot.sh     # 让 res://vettura-native 在 Godot 工程里可解析
 └── docs/
     ├── architecture.md
     ├── kn5-format.md

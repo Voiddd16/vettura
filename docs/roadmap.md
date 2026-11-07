@@ -32,14 +32,16 @@
 
 ## Phase 2：把车开起来（占位物理）
 
-- [ ] `VehicleBody` 接入 `AcCar` 的 `VehicleSpec`
-- [ ] 车轮节点按 dummy 名称自动绑定
-- [ ] 键盘/手柄输入映射
-- [ ] 简单地面 raycast + 车身姿态
+- [x] `VehicleBody` 接入 `AcCar` 的 `VehicleSpec`
+- [x] 车轮节点按 dummy 名称自动绑定
+- [x] 输入 API 完整暴露（油门/刹车/转向/手刹/DRS/ABS/TC，`set_controls`）
+- [x] 赛道地面/车身姿态由 `WorldBody` 的 Jolt 碰撞体与轮上 `VehicleSnapshot` 驱动
+- [ ] 键盘/手柄输入映射（Godot Input Map）
 - [ ] 相机跟随/车内视角
 - [ ] 基础 HUD（速度、挡位、转速）
 
-验收：能沿平面直行、转向、刹车，车轮转动和转向可见。
+验收：能沿平面直行、转向、刹车，车轮转动和转向可见；`godot/baseline.tscn`
+进一步验收“真实赛道 + 真实车能跑”，输出 `[baseline] PASS`。
 
 ## Phase 3：AC 物理数据完整映射
 

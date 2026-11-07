@@ -11,7 +11,11 @@
 //!   texture 贴图解码缓存 / material / mesh / scene），见 `kn5/mod.rs`；
 //! - [`kn5_file`](self::kn5_file)：`.kn5` 文件资源（`Kn5File`），供编辑器与
 //!   脚本查询统计、按需构建独立 `ArrayMesh` / 材质；
-//! - [`vehicle_body`](self::vehicle_body)：车身刚体节点，与物理层对接。
+//! - [`paths`](self::paths)：把 Godot 的 `res://` 路径解析成 `std::fs` 能用的
+//!   文件系统路径，避免上层脚本自己调 `globalize_path`；
+//! - [`vehicle_body`](self::vehicle_body)：车身刚体节点，与物理层对接；
+//! - [`world`](self::world)：Jolt 世界节点（`WorldBody`），负责赛道加载、多车
+//!   调度、圈速计时与车-道-AI 同步，是主项目进入赛车模拟的入口。
 
 // `#[derive(GodotClass)]` generates `base: base` style initializers that this
 // lint flags at the field declaration site.
@@ -22,7 +26,9 @@ use godot::prelude::*;
 mod ac_car;
 mod kn5;
 mod kn5_file;
+mod paths;
 mod vehicle_body;
+mod world;
 
 struct VetturaNative;
 

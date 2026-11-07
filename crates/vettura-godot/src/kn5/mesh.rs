@@ -231,7 +231,7 @@ fn surface_from_arrays(arrays: Array<Variant>) -> Gd<ArrayMesh> {
 }
 
 /// 只填 `Variant::nil()` 的 surface 数组；Godot 要求 13 个槽位都写。
-fn empty_surface_arrays() -> Array<Variant> {
+pub(crate) fn empty_surface_arrays() -> Array<Variant> {
     let mut arrays = Array::new();
     for _ in 0..ARRAY_TYPE_COUNT {
         arrays.push(&Variant::nil());
@@ -239,7 +239,8 @@ fn empty_surface_arrays() -> Array<Variant> {
     arrays
 }
 
-fn set<T: godot::meta::ToGodot>(arrays: &mut Array<Variant>, slot: ArrayType, value: T) {
+/// 写入一个 surface 槽位（`Mesh::ArrayType` 的槽位顺序）。
+pub(crate) fn set<T: godot::meta::ToGodot>(arrays: &mut Array<Variant>, slot: ArrayType, value: T) {
     arrays.set(slot.ord() as usize, &value.to_variant());
 }
 
