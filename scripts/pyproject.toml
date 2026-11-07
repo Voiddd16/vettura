@@ -1,0 +1,10 @@
+[project]
+name = "vettura-scripts"
+version = "0.1.0"
+description = "Project helper scripts for Vettura (FMOD runtime, packaging, tooling)"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.uv]
+# 工具脚本仓库：只跑脚本，不做包发布。
+package = false
