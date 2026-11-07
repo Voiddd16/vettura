@@ -72,6 +72,70 @@ impl AcCar {
             .is_some_and(|car| car.data().get(&name.to_string()).is_some())
     }
 
+    /// 发现车模声音：读 `sfx/GUIDs.txt` + 定位 `<car_id>.bank`。
+    ///
+    /// 内部每次调用都重新解析文本；音频运行时不会每帧调它，所以这里按需解析
+    /// 而不是在 `open()` 里强制所有车都做一次 IO。
+    pub fn sound_manifest(&self) -> Option<vettura_audio::SoundManifest> {
+        let car = self.car.as_ref()?;
+        vettura_audio::SoundManifest::discover(car.root())
+            .ok()
+            .flatten()
+    }
+
+    /// 是否有可加载的 `.bank`。
+    #[func]
+    pub fn has_sound(&self) -> bool {
+        self.sound_manifest().is_some()
+    }
+
+    /// 车模 bank 路径；没有声音时为空字符串。
+    #[func]
+    pub fn soundbank_path(&self) -> GString {
+        self.sound_manifest()
+            .map(|manifest| GString::from(manifest.bank_path().to_string_lossy().as_ref()))
+            .unwrap_or_default()
+    }
+
+    /// FMOD 事件名列表（来自 `sfx/GUIDs.txt`）。
+    #[func]
+    pub fn sound_event_names(&self) -> PackedStringArray {
+        self.sound_manifest()
+            .map(|manifest| {
+                manifest
+                    .event_names()
+                    .into_iter()
+                    .map(GString::from)
+                    .collect::<PackedStringArray>()
+            })
+            .unwrap_or_default()
+    }
+
+    /// FMOD 事件数量。
+    #[func]
+    pub fn sound_event_count(&self) -> i64 {
+        self.sound_manifest()
+            .map_or(0, |manifest| manifest.events().len() as i64)
+    }
+
+    /// 第 `index` 个事件名。
+    #[func]
+    pub fn sound_event_name(&self, index: i64) -> GString {
+        self.sound_manifest()
+            .and_then(|manifest| manifest.events().get(index.max(0) as usize).cloned())
+            .map(|event| GString::from(event.name.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// 第 `index` 个事件 GUID。
+    #[func]
+    pub fn sound_event_guid(&self, index: i64) -> GString {
+        self.sound_manifest()
+            .and_then(|manifest| manifest.events().get(index.max(0) as usize).cloned())
+            .map(|event| GString::from(event.guid.as_str()))
+            .unwrap_or_default()
+    }
+
     /// 车辆总质量，单位千克（kg）。未打开时返回 `0.0`。
     #[func]
     pub fn total_mass(&self) -> f64 {

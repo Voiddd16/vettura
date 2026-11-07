@@ -117,16 +117,34 @@ stub，所以 `cargo build --features chrono` 在任意机器上都能编译。
 **不放入**：渲染网格/材质（留在 `vettura-godot` 的 KN5 管线）、车辆动力学
 （`vettura-physics` / Jolt vehicle constraint）。
 
+### `vettura-audio`
+
+车模声音发现 + FMOD runtime 直达：
+
+- `guids`：解析 AC 车目录 `sfx/GUIDs.txt`，拿到事件名 / 路径 / GUID；
+- `manifest`：定位 `sfx/<car_id>.bank`，产出 `SoundManifest`；
+- `runtime`：`AudioEngine` 直接把 bank 字节交给 FMOD Studio runtime
+  （`load_bank_memory` → `get_event_by_id` → `create_instance/start` → `update`）。
+
+**不放入**：bank / FSB 解析、音频解码、混音策略。FMOD 负责这些；crate 只负责
+“把 AC 的 GUID 表和 bank 路径送到 FMOD”。
+
+`fmod` feature 默认关闭。关闭时 `AudioEngine` / `FmodSystem` 保留完整 API，但
+`start()` 返回 `NotLinked`，因此没有 FMOD SDK 的机器仍能编译、测试、运行视觉与
+物理链路；需要真机声音时才启用。
+
 ### `vettura-godot`
 
 Godot GDExtension：
 
 - `Kn5File`（Resource）：加载 KN5，查询统计、按需构建 `ArrayMesh` / 材质；
-- `AcCar`（Resource）：打开车目录，映射 `VehicleSpec`，实例化主模型；
+- `AcCar`（Resource）：打开车目录，映射 `VehicleSpec`，实例化主模型，并暴露
+  `soundbank_path()` / `sound_event_names()` 等音频发现结果；
 - `VehicleBody`（Node3D）：独立模式接 `Simulation`，世界模式由 `WorldBody` 驱动；
 - `WorldBody`（Node3D）：拥有 `TrackModule` + `World`，负责赛道安装、多车调度、
   固定步长推进、圈速计时，以及把 `VehicleSnapshot` 同步回场景树。这是主项目调用
-  Rust 侧赛车模拟的入口。
+  Rust 侧赛车模拟的入口；
+- `FmodSystem`（Node3D）：每帧调用 FMOD `update`，并提供播放 / 参数 / 3D 听者接口。
 
 **下一步**：`ResourceFormatLoader`；模型缓存与 surface 合并；AI 车 / pit lane 的
 节点封装；相机、HUD、输入映射等游戏层。

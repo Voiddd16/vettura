@@ -18,7 +18,12 @@ crate-type = ["cdylib", "rlib"]
 glam.workspace = true
 godot.workspace = true
 vettura-assets.workspace = true
+vettura-audio.workspace = true
 vettura-core.workspace = true
 vettura-kn5.workspace = true
 vettura-physics.workspace = true
 vettura-world.workspace = true
+
+[features]
+# Link FMOD Engine into the GDExtension. Requires `FMOD_SYS_FMOD_DIRECTORY`.
+fmod = ["vettura-audio/fmod"]

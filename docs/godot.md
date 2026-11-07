@@ -169,6 +169,32 @@ if car.open("res://cars/my_car"):
 `instantiate()` 会先解析主模型 `.kn5`（规则见 `docs/ac-data.md`）再走
 `Kn5File` 的同一条实例化路径。
 
+### `FmodSystem`（Node3D）
+
+```gdscript
+var audio := FmodSystem.new()
+add_child(audio)
+if not audio.start(64):
+    push_warning("FMOD not linked: ", audio.last_error())
+else:
+    var car := AcCar.new()
+    car.open("res://cars/my_car")
+    audio.load_car(car)
+    audio.play("engine_ext")       # 循环声：引擎、轮胎、风
+    audio.play_once("gear_grind")  # 一次性声：碰撞、换挡、回火
+    audio.set_parameter("engine_ext", "rpm", 6000.0)
+```
+
+- `start(max_channels)` 启动 FMOD runtime，并把坐标系设为 Godot 的右手系；
+- `load_car(car)` / `load_car_path(path)` 只把 `.bank` 字节交给 FMOD，**不解析 bank**；
+- `event_count()` / `event_name(i)` / `event_guid_by_name(name)` 来自
+  `sfx/GUIDs.txt`；
+- `set_event_transform()` / `set_listener()` 用 Vettura 物理帧
+  （`+X` 右、`+Y` 上、`-Z` 前）；`process()` 每帧自动调用 FMOD `update`。
+
+未启用 `fmod` feature 时这些接口仍存在，但 `start()` 返回 `false` 并在
+`last_error()` 里说明原因，见 [build.md](build.md) 的 FMOD 小节。
+
 ### `VehicleBody`（Node3D）
 
 ```gdscript

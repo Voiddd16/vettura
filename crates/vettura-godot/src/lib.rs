@@ -24,6 +24,7 @@
 use godot::prelude::*;
 
 mod ac_car;
+mod fmod_system;
 mod kn5;
 mod kn5_file;
 mod paths;

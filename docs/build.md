@@ -411,6 +411,19 @@ DYLD_LIBRARY_PATH="$BUILD/lib" /tmp/vettura-probe /tmp/vettura-probe-json
 
 ## 9. 按场景组合命令
 
+FMOD 默认**不链接**。只有要真正播放 AC 车模声音时才启用：
+
+```bash
+# 1. 下载 FMOD Engine（FMOD Studio 同一个安装包即可），记下安装目录
+#    https://www.fmod.com/download
+# 2. 让 fmod-oxide 找到它；路径指向包含 api/core/inc 与 api/core/lib 的目录
+FMOD_SYS_FMOD_DIRECTORY=/path/to/FMODEngine \
+  cargo build -p vettura-godot --features fmod
+```
+
+启用后 Godot 侧出现 `FmodSystem` 节点；不启用时 `FmodSystem.start()` 返回
+`false`，`last_error()` 会说明“runtime not linked”，其余功能不受影响。
+
 ### 日常开发（最快反馈）
 
 ```bash
@@ -447,6 +460,9 @@ cargo fmt --all -- --check
 cargo clippy --workspace --exclude vettura-godot --all-targets -- -D warnings
 cargo test --workspace --exclude vettura-godot
 cargo build -p vettura-godot
+# 可选：FMOD 真机声音联调
+FMOD_SYS_FMOD_DIRECTORY=/path/to/FMODEngine \
+  cargo build -p vettura-godot --features fmod
 ```
 
 ## 10. 常见问题

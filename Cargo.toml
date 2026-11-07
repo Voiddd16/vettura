@@ -8,6 +8,7 @@ members = [
     "crates/vettura-physics",
     "crates/vettura-godot",
     "crates/vettura-world",
+    "crates/vettura-audio",
     "tools/kn5-inspect",
     "tools/acd-inspect",
 ]
@@ -20,6 +21,7 @@ default-members = [
     "crates/vettura-assets",
     "crates/vettura-physics",
     "crates/vettura-world",
+    "crates/vettura-audio",
     "tools/kn5-inspect",
     "tools/acd-inspect",
 ]
@@ -41,6 +43,11 @@ vettura-acdata = { path = "crates/vettura-acdata" }
 vettura-assets = { path = "crates/vettura-assets" }
 vettura-physics = { path = "crates/vettura-physics" }
 vettura-world = { path = "crates/vettura-world" }
+vettura-audio = { path = "crates/vettura-audio" }
+
+# FMOD Engine bindings. FMOD itself is not vendored (license); point
+# `FMOD_SYS_FMOD_DIRECTORY` at your FMOD Engine install to enable `vettura-audio/fmod`.
+fmod = { package = "fmod-oxide", version = "0.2.2", default-features = false, features = ["studio"] }
 
 # Shared third-party dependencies
 anyhow = "1"

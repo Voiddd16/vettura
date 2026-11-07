@@ -1,0 +1,22 @@
+[package]
+name = "vettura-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "Assetto Corsa car audio discovery and direct FMOD Studio runtime integration"
+
+[dependencies]
+thiserror.workspace = true
+
+# `fmod` is only needed when the `fmod` feature is on. Without it the crate still
+# parses `sfx/GUIDs.txt` and resolves bank paths, but `AudioEngine::start` reports
+# that the runtime is not linked.
+fmod = { workspace = true, optional = true }
+
+[features]
+default = []
+# Link against the FMOD Engine shipped by the user. See `third_party/fmod/README.md`.
+fmod = ["dep:fmod"]

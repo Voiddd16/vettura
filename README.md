@@ -47,6 +47,7 @@
 | 悬架阻尼：两级阻尼（bleeder 阈值）+ 压缩/回弹非对称（`DAMP_FAST_*`） | 可用 |
 | KN5 → Godot 场景（节点树 / ArrayMesh / 贴图 / 材质） | 可用 |
 | Godot 扩展类（Kn5File / AcCar / VehicleBody / WorldBody） | 可用：模型 + 单机 Jolt + 赛道世界，见 `godot/baseline.tscn` |
+| AC 车模声音发现 + FMOD runtime（`vettura-audio` / `FmodSystem`） | 可用：读 `sfx/GUIDs.txt` → 直接调 FMOD 播放 `.bank`；`--features fmod` |
 
 ## 快速开始
 
@@ -102,6 +103,16 @@ godot --headless --path /path/to/godot/project \
     res://vettura-native/godot/baseline.tscn
 ```
 
+接 FMOD 真机声音时：
+
+```bash
+FMOD_SYS_FMOD_DIRECTORY=/path/to/FMODEngine \
+  cargo build -p vettura-godot --features fmod
+```
+
+然后在 GDScript 里用 `FmodSystem.start()` / `load_car()` / `play("engine_ext")`；
+详见 [`docs/build.md`](docs/build.md) 与 [`docs/godot.md`](docs/godot.md)。
+
 ## 目录结构
 
 ```
@@ -115,6 +126,7 @@ vettura-native/
 │   ├── vettura-physics/       # 物理后端接口、状态、固定步长调度、SimpleBackend
 │   │   └── src/backends/      #   simple / chrono（后者由 `chrono` feature 门控）
 │   ├── vettura-world/         # Jolt 世界、SurfaceMap/天气、赛道 collider、AI line
+│   ├── vettura-audio/         # AC sfx/GUIDs.txt + FMOD runtime 直达（`fmod` feature）
 │   └── vettura-godot/         # Godot 4 GDExtension (cdylib + rlib)
 │       └── src/kn5/           # KN5 → Godot 桥接（convert/texture/material/mesh/scene）
 ├── third_party/               # 远端拉取的第三方源码（vendored）
