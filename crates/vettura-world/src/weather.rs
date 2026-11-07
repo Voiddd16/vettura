@@ -45,7 +45,10 @@ impl Weather {
         Self {
             wetness: 0.0,
             rain_intensity: 0.0,
-            air_temperature_c: 22.0,
+            // 32 °C for both air and track: the default world is warm, which
+            // matches `BrakeSpec::ambient_c` so a car that never gets its own
+            // weather still starts where the brake/tyre model expects.
+            air_temperature_c: 32.0,
             track_temperature_c: 32.0,
             wind: Vec3::ZERO,
             grip_scale: 1.0,
@@ -82,6 +85,20 @@ impl Weather {
         self.air_temperature_c = if air_c.is_finite() { air_c } else { 22.0 };
         self.track_temperature_c = if track_c.is_finite() { track_c } else { 32.0 };
         self
+    }
+
+    /// Temperature a component sitting in the open should relax toward, °C.
+    ///
+    /// Brakes and the engine exchange with the *air*, while the tyres exchange
+    /// with the *road*, which can be far colder on a winter morning. Both can
+    /// be below zero; nothing here clamps at the freezing point, because a
+    /// frozen tyre is a physical state and not an error.
+    pub fn ambient_c(&self, on_the_road: bool) -> f32 {
+        if on_the_road {
+            self.track_temperature_c
+        } else {
+            self.air_temperature_c
+        }
     }
 
     pub fn with_wind(mut self, wind: Vec3) -> Self {
@@ -198,7 +215,16 @@ impl Weather {
 /// track temperature; cold and overheated surfaces lose grip.
 fn track_temperature_grip(track_c: f32) -> f32 {
     let normalized = (track_c - 35.0) / 45.0;
-    (0.78 + 0.22 * (-normalized * normalized).exp()).clamp(0.55, 1.05)
+    let window = 0.78 + 0.22 * (-normalized * normalized).exp();
+    // Below freezing the rubber goes glassy and keeps losing grip, down to a
+    // winter floor at -30 °C. Zero degrees is not a wall: a cold tyre simply
+    // grips badly, exactly like a very hot one.
+    let cold = if track_c < 0.0 {
+        (1.0 + track_c / 30.0).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    (window * cold).clamp(0.35, 1.05)
 }
 
 /// Aquaplaning: grip falls with speed and water depth. A 1 cm puddle at
@@ -277,5 +303,34 @@ mod tests {
         let flooded = Weather::wet(1.0).rolling_resistance(&asphalt, 0.01);
         assert!(wet > dry);
         assert!(flooded > wet);
+    }
+
+    #[test]
+    fn cold_track_temperatures_lose_grip_without_a_wall_at_zero() {
+        let warm = track_temperature_grip(30.0);
+        let freezing = track_temperature_grip(0.0);
+        let cold = track_temperature_grip(-15.0);
+        let arctic = track_temperature_grip(-30.0);
+        assert!(warm > freezing, "{warm} vs {freezing}");
+        assert!(freezing > cold, "{freezing} vs {cold}");
+        assert!(cold > arctic, "{cold} vs {arctic}");
+        // A floor, not zero: winter tyres still grip something.
+        assert!(arctic > 0.0);
+    }
+
+    #[test]
+    fn ambient_c_picks_air_for_open_parts_and_road_for_tyres() {
+        let winter = Weather::dry().with_temperatures(-12.0, -20.0).clamped();
+        assert!((winter.ambient_c(false) - (-12.0)).abs() < 1e-6);
+        assert!((winter.ambient_c(true) - (-20.0)).abs() < 1e-6);
+        // Nonsense falls back to the default world, not to zero.
+        let broken = Weather {
+            air_temperature_c: f32::NAN,
+            track_temperature_c: f32::NAN,
+            ..Weather::dry()
+        }
+        .clamped();
+        assert!(broken.air_temperature_c > 0.0);
+        assert!(broken.track_temperature_c > 0.0);
     }
 }

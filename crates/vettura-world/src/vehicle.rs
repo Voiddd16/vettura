@@ -988,14 +988,7 @@ impl VehicleRuntime {
             orientation,
             ..VehicleSnapshot::default()
         };
-        self.brake_temperatures_c = [self.spec.brakes.ambient_c.max(0.0); 4];
-        self.brake_core_temperatures_c = self.brake_temperatures_c;
-        // The snapshot above resets the tyre fields to their defaults (0 °C);
-        // bring the rubber back to ambient so a reset car does not start frozen.
-        let ambient = self.spec.brakes.ambient_c.max(0.0);
-        self.tyre_temperatures_c = [ambient; 4];
-        self.tyre_surface_temperatures_c = [ambient; 4];
-        self.tyre_core_temperatures_c = [ambient; 4];
+        self.initialize_thermals(&self.weather_stub.clone());
         self.previous_suspension_lengths = [0.0; 4];
         self.suspension_force_n = [0.0; 4];
         self.active_suspension_force_n = [0.0; 4];
@@ -1194,6 +1187,35 @@ impl VehicleRuntime {
     /// Store the weather snapshot used by the per-wheel thermal model.
     pub(crate) fn set_weather_state(&mut self, weather: &Weather) {
         self.weather_stub = *weather;
+    }
+
+    /// Temperature the engine, brakes and ERS exchange with, °C.
+    fn air_temperature_c(&self) -> f32 {
+        self.weather_stub.ambient_c(false)
+    }
+
+    /// Temperature the tyres exchange with, °C. This is the *road*, which can
+    /// be far colder than the air; both may be below zero.
+    fn road_temperature_c(&self) -> f32 {
+        self.weather_stub.ambient_c(true)
+    }
+
+    /// Snap every temperature to the world's ambient, °C.
+    ///
+    /// Called when a car is added or reset, so a car spawned on a cold track
+    /// starts cold, and one spawned on a hot one starts hot. `ambient_c` in the
+    /// brake spec is only the fallback for a world that never publishes one.
+    pub(crate) fn initialize_thermals(&mut self, weather: &Weather) {
+        let air = weather.ambient_c(false);
+        let road = weather.ambient_c(true);
+        self.brake_temperatures_c = [air; 4];
+        self.brake_core_temperatures_c = [air; 4];
+        self.tyre_temperatures_c = [road; 4];
+        self.tyre_surface_temperatures_c = [road; 4];
+        self.tyre_core_temperatures_c = [road; 4];
+        self.ers_temperature_c = air;
+        self.coolant_c = air;
+        self.oil_c = air;
     }
 
     /// Apply the nonlinear suspension forces for the upcoming step.
@@ -1620,6 +1642,7 @@ impl VehicleRuntime {
                 self.brake_core_temperatures_c[index],
                 energy_j,
                 speed_mps,
+                self.air_temperature_c(),
                 step,
             );
             self.brake_temperatures_c[index] = surface;
@@ -1684,7 +1707,9 @@ impl VehicleRuntime {
                 } else {
                     0.0
                 };
-                let ambient = self.spec.brakes.ambient_c.max(0.0);
+                // The tyre exchanges with the road, which on a winter morning
+                // is well below zero: nothing here clamps at freezing.
+                let ambient = self.road_temperature_c();
                 // Always integrate, even with no sliding: the layers have to
                 // exchange and cool while the tyre is doing nothing, otherwise
                 // a hot surface would stay hot forever after the sliding stops.
@@ -2514,7 +2539,8 @@ struct TyreTemperatures {
 
 /// Advance the three tyre temperatures by `heat_j` over `step` seconds at
 /// `speed_mps` towards `ambient_c`.
-/// One step of the tyre thermal model.
+/// Advance the three tyre temperatures by `heat_j` over `step` seconds at
+/// `speed_mps` towards `ambient_c`.
 fn advance_tyre_temperatures(
     spec: &TyreThermalSpec,
     state: TyreTemperatures,
@@ -2576,13 +2602,16 @@ fn advance_tyre_temperatures(
 /// Returns `(surface, core)` temperatures. The surface is the friction face the
 /// pads see, which is what the efficiency curve is indexed by; the core is the
 /// bulk of the rotor, which soaks heat in slowly and hands it back quickly, so
-/// the pads keep cooking after the pedal is released.
+/// the pads keep cooking after the pedal is released. `ambient_c` is the air
+/// the disc exchanges with and may be below zero.
+#[allow(clippy::too_many_arguments)]
 fn advance_brake_temperatures(
     spec: &BrakeSpec,
     surface_in: f32,
     core_in: f32,
     energy_j: f32,
     speed_mps: f32,
+    ambient_c: f32,
     step: f32,
 ) -> (f32, f32) {
     let rise = if spec.thermal_mass_j_per_k > 1.0 {
@@ -2593,7 +2622,7 @@ fn advance_brake_temperatures(
     // Cooling: ambient exchange plus the air flowing over the disc.
     let speed_factor = (speed_mps / 60.0).clamp(0.05, 4.0);
     let cooling = (spec.cooling_per_s * speed_factor * step).clamp(0.0, 0.95);
-    let difference = surface_in - spec.ambient_c;
+    let difference = surface_in - ambient_c;
     let drop = difference * cooling;
     let mut surface = surface_in + rise - drop;
 
@@ -2612,17 +2641,22 @@ fn advance_brake_temperatures(
         let flow = conductance * (surface - core).clamp(-1.0e4, 1.0e4);
         surface -= flow * step / surface_capacity;
         core += flow * step / core_capacity;
-        let air_flow =
-            core_capacity * spec.core_transfer_air_per_s.max(0.0) * (core - spec.ambient_c);
+        let air_flow = core_capacity * spec.core_transfer_air_per_s.max(0.0) * (core - ambient_c);
         core -= air_flow * step / core_capacity;
     }
 
     (
-        surface.clamp(spec.ambient_c, 1_400.0),
-        core.clamp(spec.ambient_c, 1_400.0),
+        surface.clamp(ambient_c, 1_400.0),
+        core.clamp(ambient_c, 1_400.0),
     )
 }
 
+///
+/// Returns `(surface, core)` temperatures. The surface is the friction face the
+/// pads see, which is what the efficiency curve is indexed by; the core is the
+/// bulk of the rotor, which soaks heat in slowly and hands it back quickly, so
+/// the pads keep cooking after the pedal is released.
+#[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2779,7 +2813,6 @@ mod tests {
         let spec = BrakeSpec::default();
         // 100 kJ into one disc heats the surface by itself, but with a rotor
         // core most of that energy ends up in the bulk: the pads stay cooler
-        // while braking.
         let single = advance_brake_temperatures(
             &BrakeSpec {
                 core_capacity_j_per_k: 0.0,
@@ -2789,9 +2822,11 @@ mod tests {
             32.0,
             100_000.0,
             60.0,
+            32.0,
             1.0 / 240.0,
         );
-        let two_mass = advance_brake_temperatures(&spec, 32.0, 32.0, 100_000.0, 60.0, 1.0 / 240.0);
+        let two_mass =
+            advance_brake_temperatures(&spec, 32.0, 32.0, 100_000.0, 60.0, 32.0, 1.0 / 240.0);
         let (single_surface, _) = single;
         let (surface, core) = two_mass;
         assert!(surface < single_surface, "{surface} vs {single_surface}");
@@ -2808,7 +2843,7 @@ mod tests {
         let mut core = core;
         for _ in 0..240 * 10 {
             let (next_surface, next_core) =
-                advance_brake_temperatures(&spec, surface, core, 0.0, 60.0, 1.0 / 240.0);
+                advance_brake_temperatures(&spec, surface, core, 0.0, 60.0, 32.0, 1.0 / 240.0);
             surface = next_surface;
             core = next_core;
         }
@@ -2827,7 +2862,7 @@ mod tests {
         let mut flat = surface;
         for _ in 0..240 * 10 {
             let (next, _) =
-                advance_brake_temperatures(&without_core, flat, flat, 0.0, 60.0, 1.0 / 240.0);
+                advance_brake_temperatures(&without_core, flat, flat, 0.0, 60.0, 32.0, 1.0 / 240.0);
             flat = next;
         }
         assert!(

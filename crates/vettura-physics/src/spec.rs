@@ -1261,14 +1261,16 @@ impl TyreSpec {
     pub fn pressure_at(&self, temperature_c: f32) -> f32 {
         let thermal = &self.thermal;
         let temperature = if temperature_c.is_finite() {
-            temperature_c.max(0.0)
+            temperature_c
         } else {
             thermal.optimal_c
         };
         let gain = ((self.ideal_pressure_psi - self.cold_pressure_psi)
             / (thermal.optimal_c + thermal.window_c))
             .max(0.02);
-        (self.cold_pressure_psi + gain * temperature).clamp(1.0, 120.0)
+        // Negative rubber temperatures are legal and simply mean a flatter
+        // tyre than the cold pressure; only the absolute floor stays positive.
+        (self.cold_pressure_psi + gain * temperature).clamp(0.5, 120.0)
     }
 
     /// Slip energy needed to wear a tyre out, joules.
@@ -1385,15 +1387,31 @@ impl TyreThermalSpec {
     /// window is used.
     pub fn temperature_multiplier(&self, temperature_c: f32) -> f32 {
         let temperature = if temperature_c.is_finite() {
-            temperature_c.clamp(0.0, 2_000.0)
+            temperature_c.clamp(-1_000.0, 2_000.0)
         } else {
             self.optimal_c
         };
         if self.performance_curve.len() >= 2 {
+            if temperature < self.performance_curve[0].0 {
+                // Below the coldest authored point the curve keeps its first
+                // slope instead of clamping: a tyre at -20 °C has to be worse
+                // than one at 0 °C, not equal to it.
+                return self.extrapolate_cold(temperature);
+            }
             return sample_curve(&self.performance_curve, temperature).clamp(0.0, 1.2);
         }
         let temp_error = ((temperature - self.optimal_c) / self.window_c).clamp(-1.5, 1.5);
         (1.0 - 0.30 * temp_error * temp_error).clamp(0.0, 1.0)
+    }
+
+    /// Grip multiplier below the coldest point of the authored curve.
+    fn extrapolate_cold(&self, temperature_c: f32) -> f32 {
+        let curve = &self.performance_curve;
+        let first = curve[0];
+        let second = curve[1];
+        let span = (second.0 - first.0).abs().max(1.0e-3);
+        let slope = (second.1 - first.1) / span;
+        (first.1 + slope * (temperature_c - first.0)).clamp(0.0, 1.2)
     }
 }
 
@@ -2540,6 +2558,41 @@ mod tests {
         assert!((tyre.vertical_rate_n_per_m(27.0) - 401_020.0).abs() < 1.0);
         // No authored rate: no vertical stiffness from the tyre at all.
         assert_eq!(TyreSpec::default().vertical_rate_n_per_m(29.0), 0.0);
+    }
+
+    #[test]
+    fn sub_zero_temperatures_are_a_physical_state_not_an_error() {
+        // The rubber works below zero: a colder tyre simply holds less air and
+        // grips worse, and neither of those is clamped at the freezing point.
+        let tyre = TyreSpec {
+            cold_pressure_psi: 17.0,
+            ..TyreSpec::default()
+        };
+        assert!(tyre.pressure_at(-20.0) < tyre.pressure_at(0.0));
+        assert!(tyre.pressure_at(0.0) < tyre.pressure_at(90.0));
+        assert!(tyre.pressure_at(-20.0) > 0.0);
+
+        // With an authored curve the grip keeps falling below the coldest
+        // point instead of flattening at it.
+        let thermal = TyreThermalSpec {
+            performance_curve: vec![(0.0, 0.9), (50.0, 1.0), (100.0, 0.8), (300.0, 0.5)],
+            ..TyreThermalSpec::default()
+        };
+        let at_zero = thermal.temperature_multiplier(0.0);
+        let below = thermal.temperature_multiplier(-20.0);
+        assert!(below < at_zero, "{below} vs {at_zero}");
+        // Far below, the extrapolation floors out instead of going negative.
+        assert!(thermal.temperature_multiplier(-1_000.0) >= 0.0);
+        assert_eq!(thermal.temperature_multiplier(-1_000.0), 0.0);
+        // Above the coldest point the table itself is the answer: 50 °C is the
+        // peak, 75 °C is on the way down.
+        assert!((thermal.temperature_multiplier(50.0) - 1.0).abs() < 1e-6);
+        assert!((thermal.temperature_multiplier(75.0) - 0.9).abs() < 1e-6);
+
+        // The analytic window also works in the cold.
+        let window = TyreThermalSpec::default();
+        assert!(window.temperature_multiplier(-20.0) < window.temperature_multiplier(0.0));
+        assert!(window.temperature_multiplier(-20.0) > 0.0);
     }
 
     #[test]

@@ -262,6 +262,10 @@ impl World {
             self.surface_map.table_arc(),
         )?;
         runtime.set_weather(&self.weather);
+        runtime.set_weather_state(&self.weather);
+        // The car starts at the world's ambient: a car added to a winter
+        // session begins with cold tyres, cold brakes and a cold engine.
+        runtime.initialize_thermals(&self.weather);
         let dt = self.fixed_dt;
         if let Err(error) = runtime.update_snapshot(&self.physics, dt, &self.surface_map) {
             let _ = runtime.remove(&mut self.physics);
@@ -728,8 +732,9 @@ impl World {
     pub fn set_weather(&mut self, weather: Weather) {
         self.weather = weather.clamped();
         self.weather_target = None;
-        for vehicle in &self.vehicles {
+        for vehicle in &mut self.vehicles {
             vehicle.set_weather(&self.weather);
+            vehicle.set_weather_state(&self.weather);
         }
     }
 

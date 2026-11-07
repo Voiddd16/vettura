@@ -2396,3 +2396,62 @@ fn a_layered_tyre_brings_the_patch_up_before_the_bulk() {
         }
     }
 }
+
+#[test]
+fn a_winter_world_starts_the_car_below_zero() {
+    // Nothing clamps at the freezing point: a car added to a -15 °C session
+    // begins with cold rubber, cold brakes and a cold engine, and the grip the
+    // road offers is the winter number.
+    let mut world = World::new(SurfaceMap::new()).unwrap();
+    let cold = Weather::dry()
+        .with_temperatures(-12.0, -15.0)
+        .with_wetness(0.0);
+    world.set_weather(cold);
+    let car = world.add_vehicle(car(), Pose::default()).unwrap();
+    let start = world.snapshot(car).unwrap();
+    let cold_tyres = start.tyre_temperatures_c;
+    let cold_coolant = start.coolant_c;
+    for temperature in cold_tyres {
+        assert!(
+            temperature < 0.0,
+            "the tyres did not start below zero: {temperature}"
+        );
+    }
+    for temperature in world.brake_core_temperatures_c(car).unwrap() {
+        assert!(
+            temperature < 0.0,
+            "the brakes did not start below zero: {temperature}"
+        );
+    }
+
+    // Driving heats everything back up: the thermal model works from a
+    // sub-zero start, it does not sit on the clamp.
+    world
+        .set_controls(
+            car,
+            Controls {
+                throttle: 1.0,
+                ..Controls::default()
+            },
+        )
+        .unwrap();
+    step(&mut world, 240 * 6);
+    let hot = world.snapshot(car).unwrap();
+    let coolant_warm = world.engine_temperatures_c(car).unwrap().0 > cold_coolant;
+    let rubber_warm = hot
+        .tyre_temperatures_c
+        .iter()
+        .zip(cold_tyres)
+        .all(|(now, then)| *now > then);
+    assert!(coolant_warm, "a cold engine cannot warm up");
+    assert!(rubber_warm, "cold tyres cannot warm up");
+}
+
+#[test]
+fn a_cold_tyre_holds_less_air_than_a_warm_one() {
+    let spec = car();
+    let cold = spec.tyres.pressure_at(-15.0);
+    let warm = spec.tyres.pressure_at(spec.tyres.thermal.optimal_c);
+    assert!(cold < warm, "{cold} vs {warm}");
+    assert!(cold > 0.0, "pressure stayed positive below zero: {cold}");
+}
