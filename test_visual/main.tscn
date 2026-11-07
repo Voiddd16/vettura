@@ -1,0 +1,82 @@
+[gd_scene load_steps=2 format=3 uid="uid://bvetturavisualtest"]
+
+[ext_resource type="Script" path="res://test_visual/main.gd" id="1_main"]
+
+[node name="VisualTest" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 3.4)
+current = true
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.8660254, -0.25, 0.4330127, 0, 0.8660254, 0.5, -0.5, -0.4330127, 0.75, 3, 6, 4)
+light_energy = 1.1
+shadow_enabled = true
+
+[node name="CarPivot" type="Node3D" parent="."]
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="TouchOverlay" type="Control" parent="CanvasLayer"]
+mouse_filter = 2
+
+[node name="BrakeArea" type="ColorRect" parent="CanvasLayer/TouchOverlay"]
+anchor_right = 0.5
+anchor_bottom = 1.0
+color = Color(1, 0.2, 0.2, 0.12)
+
+[node name="BrakeButton" type="Button" parent="CanvasLayer/TouchOverlay/BrakeArea"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+flat = true
+text = "刹车
+（左半屏触摸）"
+alignment = 1
+
+[node name="ThrottleArea" type="ColorRect" parent="CanvasLayer/TouchOverlay"]
+anchor_left = 0.5
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0.2, 1, 0.2, 0.12)
+
+[node name="ThrottleButton" type="Button" parent="CanvasLayer/TouchOverlay/ThrottleArea"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+flat = true
+text = "油门
+（右半屏触摸）"
+alignment = 1
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="InfoLabel" type="Label" parent="HUD"]
+offset_left = 24.0
+offset_top = 24.0
+offset_right = 560.0
+offset_bottom = 220.0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 22
+text = "车辆：加载中…"
+
+[node name="ModeButton" type="Button" parent="HUD"]
+anchor_left = 1.0
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 0.0
+offset_left = -320.0
+offset_top = 24.0
+offset_right = -24.0
+offset_bottom = 96.0
+theme_override_font_sizes/font_size = 24
+text = "视角：车后"
+
+[connection signal="pressed" from="HUD/ModeButton" to="." method="_on_camera_button_pressed"]
+
+[connection signal="button_down" from="CanvasLayer/TouchOverlay/BrakeArea/BrakeButton" to="." method="_on_brake_pressed"]
+
+[connection signal="button_up" from="CanvasLayer/TouchOverlay/BrakeArea/BrakeButton" to="." method="_on_brake_released"]
+
+[connection signal="button_down" from="CanvasLayer/TouchOverlay/ThrottleArea/ThrottleButton" to="." method="_on_throttle_pressed"]
+
+[connection signal="button_up" from="CanvasLayer/TouchOverlay/ThrottleArea/ThrottleButton" to="." method="_on_throttle_released"]

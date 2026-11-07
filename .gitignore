@@ -7,6 +7,9 @@ export_presets.cfg
 # 参见 README.md 的「本地测试资源」章节
 /test/
 
+# vettura-native 仓库在本地的软链接入口（见 vettura-native/scripts/link_into_godot.sh）
+/vettura-native/
+
 # macOS / 编辑器杂项
 .DS_Store
 *.tmp

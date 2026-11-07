@@ -14,19 +14,35 @@ Vettura 是一款以 **Godot 4** 为运行时的赛车游戏主工程，目标�
 
 ```
 vettura/
-├── project.godot              # Godot 工程配置（应用名、渲染、物理）
+├── project.godot              # Godot 工程配置（应用名、渲染、物理、主场景）
+├── test_visual/               # 测试性开发页面：默认车模浮空预览 + 触摸 + 多视角
 ├── addons/
 │   └── godot_mcp/             # Godot MCP 编辑器插件，供 AI/CLI 操作场景与脚本
 └── test/                      # 本地测试资源（不纳入版本库，见下文）
 ```
 
 `.godot/` 为编辑器导入缓存，`test/` 为本地大体积资源，二者均被 `.gitignore` 排除。
+`vettura-native` 通过软链接暴露为 `res://vettura-native/`；如果它不在本目录下，
+先在 `vettura-native` 仓库里执行 `./scripts/link_into_godot.sh`。
 
 ## 运行
 
 1. 用 Godot 4.7 打开本目录下的 `project.godot`。
 2. 首次打开时编辑器会重新生成 `.godot/` 导入缓存。
-3. 按 `F5` 运行主场景。
+3. 按 `F5` 运行主场景：`res://test_visual/main.tscn`。
+4. 也可以用无头模式验证交互链路：
+
+```bash
+godot --headless --path . res://test_visual/smoke.tscn
+# 期望最后一行 [visual-smoke] PASS，退出码 0
+```
+
+`test_visual/main.tscn` 这一版做的是：
+
+- 默认 F1 2008 Ferrari 车模浮空预览（不接赛道物理）；
+- 左半屏触摸 = 刹车，右半屏触摸 = 油门；
+- 右上角按钮循环切换视角：车后 / 驾驶位 / 绕车 / 前机盖；
+- HUD 显示当前油门/刹车与车轮角速度。
 
 ## godot_mcp 插件
 
