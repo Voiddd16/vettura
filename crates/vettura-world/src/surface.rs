@@ -5,14 +5,17 @@
 //! grass, gravel, sand, snow and standing water without needing one collider per
 //! surface or per-triangle materials.
 //!
-//! The map is intentionally simple: rectangles and circles, evaluated
-//! back-to-front (last patch wins). It is enough for a first playable track and
-//! for tests; a mesh-based track loader can later fill the same map or replace
-//! [`SurfaceMap::sample`] with a triangle lookup.
+//! The map starts with simple rectangles and circles, evaluated back-to-front
+//! (last patch wins), and can additionally hold a [`MeshSurfaceIndex`] built
+//! from a track's collision triangles. Patches stay useful as authored
+//! overrides (pit lane, wet patches, test fixtures); the mesh supplies the
+//! per-triangle surface everywhere else.
 
 use std::sync::Arc;
 
 use glam::Vec3;
+
+use crate::track::MeshSurfaceIndex;
 
 fn finite_clamp(value: f32, min: f32, max: f32, fallback: f32) -> f32 {
     if value.is_finite() {
@@ -55,6 +58,8 @@ impl SurfaceKind {
     /// Baseline properties. Grip values are dimensionless friction
     /// coefficients relative to a dry racing slick on asphalt.
     pub const fn properties(self) -> SurfaceProperties {
+        // The last two numbers are AC's `SIN_HEIGHT` / `SIN_LENGTH` defaults:
+        // racing surfaces are laid flat and the run-off areas are not.
         let (dry_grip, wet_grip, rolling_resistance, roughness) = match self {
             SurfaceKind::Asphalt => (1.00, 0.72, 0.012, 0.10),
             SurfaceKind::Concrete => (0.95, 0.68, 0.014, 0.15),
@@ -67,12 +72,27 @@ impl SurfaceKind {
             SurfaceKind::Ice => (0.08, 0.06, 0.005, 0.00),
             SurfaceKind::Water => (0.25, 0.18, 0.220, 0.30),
         };
+        let (bump_height_m, bump_length_m) = match self {
+            // A smooth racing surface, exactly as AC lays it.
+            SurfaceKind::Asphalt => (0.0, 10.0),
+            SurfaceKind::Concrete => (0.002, 4.0),
+            SurfaceKind::Curb => (0.012, 1.2),
+            SurfaceKind::Grass => (0.03, 0.5),
+            SurfaceKind::Gravel => (0.02, 0.35),
+            SurfaceKind::Sand => (0.015, 0.6),
+            SurfaceKind::Dirt => (0.025, 0.45),
+            SurfaceKind::Snow => (0.035, 0.4),
+            SurfaceKind::Ice => (0.003, 3.0),
+            SurfaceKind::Water => (0.008, 1.0),
+        };
         SurfaceProperties {
             kind: self,
             dry_grip,
             wet_grip,
             rolling_resistance,
             roughness,
+            bump_height_m,
+            bump_length_m,
         }
     }
 }
@@ -90,6 +110,10 @@ pub struct SurfaceProperties {
     /// Visual/audio roughness hint. The first version uses it only in reporting;
     /// a future suspension model can feed it into vertical excitation.
     pub roughness: f32,
+    /// Height of the road undulation, metres. From AC's `SIN_HEIGHT`.
+    pub bump_height_m: f32,
+    /// Wavelength of that undulation, metres. From AC's `SIN_LENGTH`.
+    pub bump_length_m: f32,
 }
 
 impl SurfaceProperties {
@@ -103,7 +127,56 @@ impl SurfaceProperties {
         self.wet_grip = finite_clamp(self.wet_grip, 0.0, 2.5, 0.0);
         self.rolling_resistance = finite_clamp(self.rolling_resistance, 0.0, 1.0, 0.0);
         self.roughness = finite_clamp(self.roughness, 0.0, 2.0, 0.0);
+        self.bump_height_m = finite_clamp(self.bump_height_m, 0.0, 0.2, 0.0);
+        self.bump_length_m = finite_clamp(self.bump_length_m, 0.25, 50.0, 10.0);
         self
+    }
+
+    /// Height of the road undulation at a point travelled along `heading`.
+    ///
+    /// This is a deterministic function of position, so it is the same for
+    /// every car and on every replay, and it does not need stored state. The
+    /// world uses it to excite the suspension and to cost a little grip.
+    pub fn bump_m(&self, position: Vec3, heading: Vec3) -> f32 {
+        if self.bump_height_m <= 0.0 {
+            return 0.0;
+        }
+        let heading = if heading.is_finite() {
+            Vec3::new(heading.x, 0.0, heading.z)
+        } else {
+            Vec3::NEG_Z
+        };
+        if heading.length_squared() < 1.0e-8 {
+            return 0.0;
+        }
+        let along = Vec3::new(position.x, 0.0, position.z).dot(heading.normalize());
+        if !along.is_finite() {
+            return 0.0;
+        }
+        let phase = std::f32::consts::TAU * along / self.bump_length_m.max(0.25);
+        self.bump_height_m * phase.sin()
+    }
+
+    /// Vertical slope of the undulation at a point, metres per metre.
+    pub fn bump_slope(&self, position: Vec3, heading: Vec3) -> f32 {
+        if self.bump_height_m <= 0.0 {
+            return 0.0;
+        }
+        let heading = if heading.is_finite() {
+            Vec3::new(heading.x, 0.0, heading.z)
+        } else {
+            Vec3::NEG_Z
+        };
+        if heading.length_squared() < 1.0e-8 {
+            return 0.0;
+        }
+        let along = Vec3::new(position.x, 0.0, position.z).dot(heading.normalize());
+        if !along.is_finite() {
+            return 0.0;
+        }
+        let wavelength = self.bump_length_m.max(0.25);
+        let phase = std::f32::consts::TAU * along / wavelength;
+        self.bump_height_m * std::f32::consts::TAU / wavelength * phase.cos()
     }
 }
 
@@ -266,6 +339,7 @@ pub struct SurfaceMap {
     table: Arc<SurfaceTable>,
     patches: Vec<SurfacePatch>,
     puddles: Vec<PuddlePatch>,
+    mesh_index: Option<Arc<MeshSurfaceIndex>>,
     default_surface: SurfaceId,
 }
 
@@ -278,6 +352,7 @@ impl SurfaceMap {
             table: Arc::new(table),
             patches: Vec::new(),
             puddles: Vec::new(),
+            mesh_index: None,
             default_surface,
         }
     }
@@ -383,7 +458,28 @@ impl SurfaceMap {
         self
     }
 
-    /// Sample the map at a world-space point (only `x` and `z` are used).
+    /// Install a mesh-based surface lookup (usually the track's collision
+    /// triangles). `None` or an empty index restores the patch-only behaviour.
+    ///
+    /// Explicit patches still take precedence over the mesh; the mesh takes
+    /// precedence over [`default_surface`](Self::default_surface).
+    pub fn set_mesh_index(&mut self, index: MeshSurfaceIndex) {
+        self.mesh_index = (!index.is_empty()).then(|| Arc::new(index));
+    }
+
+    pub fn clear_mesh_index(&mut self) {
+        self.mesh_index = None;
+    }
+
+    pub fn mesh_index(&self) -> Option<&MeshSurfaceIndex> {
+        self.mesh_index.as_deref()
+    }
+
+    /// Sample the map at a world-space point.
+    ///
+    /// Surface patches are evaluated back-to-front (last patch wins). If no
+    /// patch covers the point, the mesh index (track triangles) is consulted,
+    /// and the default surface fills anything outside the track.
     pub fn sample(&self, position: Vec3) -> SurfaceSample {
         let (x, z) = (position.x, position.z);
         let surface = self
@@ -391,7 +487,13 @@ impl SurfaceMap {
             .iter()
             .rev()
             .find(|patch| patch.shape.contains(x, z))
-            .map_or(self.default_surface, |patch| patch.surface);
+            .map(|patch| patch.surface)
+            .or_else(|| {
+                self.mesh_index
+                    .as_ref()
+                    .and_then(|index| index.sample(position))
+            })
+            .unwrap_or(self.default_surface);
 
         let water_depth_m = self
             .puddles
@@ -466,6 +568,36 @@ mod tests {
     }
 
     #[test]
+    fn road_undulation_is_a_deterministic_function_of_position() {
+        // Gravel from AC's defaults: 3 cm over half a metre.
+        let gravel = SurfaceKind::Gravel.properties();
+        assert_eq!(gravel.bump_height_m, 0.02);
+        assert_eq!(gravel.bump_length_m, 0.35);
+        // Asphalt is laid flat, so it never undulates.
+        assert_eq!(
+            SurfaceKind::Asphalt
+                .properties()
+                .bump_m(Vec3::ZERO, Vec3::NEG_Z),
+            0.0
+        );
+
+        // A quarter wavelength in is the peak, half is flat again.
+        let heading = Vec3::NEG_Z;
+        let peak = gravel.bump_m(Vec3::new(0.0, 0.0, -gravel.bump_length_m * 0.25), heading);
+        let flat = gravel.bump_m(Vec3::new(0.0, 0.0, -gravel.bump_length_m * 0.5), heading);
+        assert!((peak - gravel.bump_height_m).abs() < 1e-6, "{peak}");
+        assert!(flat.abs() < 1e-6, "{flat}");
+        // The slope peaks where the height crosses zero.
+        let slope_at_peak =
+            gravel.bump_slope(Vec3::new(0.0, 0.0, -gravel.bump_length_m * 0.25), heading);
+        assert!(slope_at_peak.abs() < 1e-4, "{slope_at_peak}");
+        let slope_at_crossing = gravel.bump_slope(Vec3::new(0.0, 0.0, 0.0), heading);
+        assert!(slope_at_crossing.abs() > 0.3, "{slope_at_crossing}");
+        // Sideways travel leaves the phase alone.
+        assert!((gravel.bump_m(Vec3::new(5.0, 0.0, 0.0), heading)).abs() < 1e-6);
+    }
+
+    #[test]
     fn custom_surface_can_be_added() {
         let mut map = SurfaceMap::new();
         let id = map.add_surface(SurfaceProperties {
@@ -474,6 +606,8 @@ mod tests {
             wet_grip: 1.0,
             rolling_resistance: 0.02,
             roughness: 0.1,
+            bump_height_m: 0.02,
+            bump_length_m: 0.6,
         });
         map.patch(SurfaceShape::circle(0.0, 0.0, 1.0), id);
         assert_eq!(map.surface_at(Vec3::ZERO), id);

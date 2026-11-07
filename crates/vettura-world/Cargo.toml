@@ -12,8 +12,9 @@ description = "Jolt-based world physics for Vettura: surfaces, weather, car-car 
 glam.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+vettura-core.workspace = true
 vettura-physics.workspace = true
-vettura-kn5 = { path = "../../crates/vettura-kn5" }
+vettura-kn5.workspace = true
 vettura-acdata.workspace = true
 
 # Jolt 5.6 through the safe `oxijolt` wrapper. The prebuilt archive is used on

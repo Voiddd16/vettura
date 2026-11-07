@@ -132,13 +132,58 @@ impl Weather {
 
     /// Combined tyre-grip factor for one surface, speed and standing-water depth.
     pub fn grip(&self, surface: &SurfaceProperties, speed_mps: f32, water_depth_m: f32) -> f32 {
+        self.grip_for_wheel(surface, speed_mps, water_depth_m, 0.0)
+    }
+
+    /// Grip for one wheel, including the water film it is carrying.
+    ///
+    /// The standing water under the tyre is only half the story: a tyre with a
+    /// film on it has to displace that too, and the film is what actually
+    /// lifts the contact patch off the road. `water_film_mm` is the thickness
+    /// the wheel picked up from previous contact.
+    pub fn grip_for_wheel(
+        &self,
+        surface: &SurfaceProperties,
+        speed_mps: f32,
+        water_depth_m: f32,
+        water_film_mm: f32,
+    ) -> f32 {
         let wetness = self.wetness.clamp(0.0, 1.0);
         let base = surface.dry_grip + (surface.wet_grip - surface.dry_grip) * wetness;
 
         let temperature = track_temperature_grip(self.track_temperature_c);
-        let aquaplaning = aquaplaning_factor(speed_mps, water_depth_m);
+        // The film is the water the tyre itself is holding, which is the part
+        // that can seal the contact patch and lift it.
+        let effective_water_m = (water_depth_m.max(0.0) + water_film_mm.max(0.0) * 0.001).max(0.0);
+        let aquaplaning = aquaplaning_factor(speed_mps, effective_water_m);
 
         (base * temperature * self.grip_scale * aquaplaning).clamp(0.01, 2.5)
+    }
+
+    /// Dynamic water film thickness a tyre reaches in the steady state, mm.
+    ///
+    /// The tread only sees water for the short time it is in the contact
+    /// patch, and that dwell time shrinks with speed, so a faster tyre picks up
+    /// less; load and a cold, soft tyre both hold on to more. The steady state
+    /// is the balance of the two, which is what a rolling tyre settles at.
+    pub fn water_film_mm(
+        &self,
+        speed_mps: f32,
+        water_depth_m: f32,
+        load_n: f32,
+        tyre_c: f32,
+    ) -> f32 {
+        let water_mm = (water_depth_m.max(0.0) * 1000.0).clamp(0.0, 200.0);
+        if water_mm <= 0.0 {
+            return 0.0;
+        }
+        let speed = speed_mps.abs().max(0.5);
+        let load = (load_n / 4_000.0).clamp(0.0, 4.0);
+        // Dwell time in the contact patch falls with speed.
+        let dwell = 1.0 / speed.sqrt().clamp(0.5, 12.0);
+        // A loaded, cold tyre grips the film; a hot one throws it off.
+        let hold = (0.3 + 0.7 * load).clamp(0.2, 1.5) * (1.0 + 0.004 * (60.0 - tyre_c).max(0.0));
+        (water_mm * dwell * hold).clamp(0.0, water_mm)
     }
 
     /// Rolling-resistance coefficient after rain and standing water.
