@@ -8,6 +8,7 @@
 //! collider materials.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use glam::{Quat, Vec3};
 use oxijolt::{
@@ -16,7 +17,9 @@ use oxijolt::{
 };
 use vettura_physics::{Controls, Pose, VehicleSpec, VehicleState};
 
-use crate::frame::{j2p, j2p_r, p2j, p2j_q, p2j_r};
+use crate::debris::{DebrisHandle, DebrisShape, DebrisSnapshot, DebrisSpec};
+use crate::frame::{j2p, j2p_q, j2p_r, p2j, p2j_q, p2j_r};
+use crate::groove::GrooveMap;
 use crate::surface::{SurfaceId, SurfaceMap, SurfaceProperties};
 use crate::vehicle::{DriveInput, VehicleHandle, VehicleRuntime, VehicleSnapshot, VehicleTuning};
 use crate::weather::Weather;
@@ -40,8 +43,19 @@ pub enum WorldError {
     InvalidInput(String),
     #[error("unknown vehicle handle")]
     UnknownVehicle,
+    #[error("unknown debris handle")]
+    UnknownDebris,
     #[error("surfaces cannot be added after a vehicle exists; build the SurfaceMap first")]
     SurfacesLocked,
+    #[error("track i/o error at {path}: {source}")]
+    TrackIo {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("invalid track data: {0}")]
+    TrackFormat(String),
+    #[error("KN5 error: {0}")]
+    Kn5(#[from] vettura_kn5::Error),
 }
 
 /// Result alias for this crate.
@@ -61,6 +75,8 @@ impl TrackObjectId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContactEntity {
     Vehicle(VehicleHandle),
+    /// A piece of rigid-body debris owned by the world.
+    Debris(DebrisHandle),
     TrackObject(TrackObjectId),
     /// The static ground body.
     Ground,
@@ -73,6 +89,14 @@ impl ContactEntity {
     pub fn vehicle(self) -> Option<VehicleHandle> {
         match self {
             Self::Vehicle(handle) => Some(handle),
+            _ => None,
+        }
+    }
+
+    /// The debris handle, when this side of the contact is a debris body.
+    pub fn debris(self) -> Option<DebrisHandle> {
+        match self {
+            Self::Debris(handle) => Some(handle),
             _ => None,
         }
     }
@@ -111,6 +135,12 @@ pub struct VehicleView<'a> {
     pub snapshot: &'a VehicleSnapshot,
 }
 
+/// One debris body owned by the world.
+struct DebrisRuntime {
+    handle: DebrisHandle,
+    body: BodyId,
+}
+
 /// A deterministic, fixed-step multi-vehicle world.
 pub struct World {
     physics: PhysicsWorld,
@@ -119,15 +149,21 @@ pub struct World {
     weather_target: Option<Weather>,
     weather_rate: f32,
     vehicles: Vec<VehicleRuntime>,
+    debris: Vec<DebrisRuntime>,
     body_to_vehicle: HashMap<BodyId, VehicleHandle>,
+    body_to_debris: HashMap<BodyId, DebrisHandle>,
     track_objects: HashMap<BodyId, TrackObjectId>,
     next_vehicle: u64,
+    next_debris: u64,
     next_track_object: u64,
-    ground_body: BodyId,
+    ground_body: Option<BodyId>,
     fixed_dt: f32,
     max_substeps: u32,
     accumulator: f32,
     impacts: Vec<ImpactEvent>,
+    /// Rubber laid down by the cars on this world's track, when a track with
+    /// `groove.ini` was installed.
+    groove: Option<GrooveMap>,
 }
 
 impl World {
@@ -138,21 +174,38 @@ impl World {
     /// body's own friction is 1.0 so Jolt's tyre-curve combination does not
     /// attenuate the callback.
     pub fn new(surface_map: SurfaceMap) -> WorldResult<Self> {
+        Self::build(surface_map, true)
+    }
+
+    /// Create a world without the fallback ground plane.
+    ///
+    /// Use this when a track collider covers the drivable area and a second
+    /// flat surface at `y = 0` would overlap the track (tunnels, bridges,
+    /// banked sections below the origin). Miss the track and the car falls.
+    pub fn without_ground(surface_map: SurfaceMap) -> WorldResult<Self> {
+        Self::build(surface_map, false)
+    }
+
+    fn build(surface_map: SurfaceMap, with_ground: bool) -> WorldResult<Self> {
         // Single-threaded jobs: deterministic and avoids waking worker threads
         // from Godot's physics callback. `oxijolt` is built with
         // `cross-platform-deterministic`, which pins Jolt's FP settings.
         let jolt_settings = JoltWorldSettings::default().single_threaded();
         let mut physics = PhysicsWorld::new(jolt_settings)?;
 
-        // Jolt caps a single shape's half extent at 2000 m; 1 km is enough for a
-        // test track and leaves room for the collider's convex radius.
-        let ground_shape = Shape::new_box(JoltVec3::new(1_000.0, 0.5, 1_000.0))?;
-        let ground_settings = BodySettings::new_static()
-            .position(RVec3::new(0.0, -0.5, 0.0))
-            .friction(1.0)
-            .restitution(0.0)
-            .user_data(TAG_GROUND);
-        let ground_body = physics.create_body(&ground_shape, &ground_settings)?;
+        let ground_body = if with_ground {
+            // Jolt caps a single shape's half extent at 2000 m; 1 km is enough
+            // for a test track and leaves room for the collider's convex radius.
+            let ground_shape = Shape::new_box(JoltVec3::new(1_000.0, 0.5, 1_000.0))?;
+            let ground_settings = BodySettings::new_static()
+                .position(RVec3::new(0.0, -0.5, 0.0))
+                .friction(1.0)
+                .restitution(0.0)
+                .user_data(TAG_GROUND);
+            Some(physics.create_body(&ground_shape, &ground_settings)?)
+        } else {
+            None
+        };
 
         physics.set_event_settings(
             EventSettings::default()
@@ -167,15 +220,19 @@ impl World {
             weather_target: None,
             weather_rate: 1.0,
             vehicles: Vec::new(),
+            debris: Vec::new(),
             body_to_vehicle: HashMap::new(),
+            body_to_debris: HashMap::new(),
             track_objects: HashMap::new(),
             next_vehicle: 0,
+            next_debris: 0,
             next_track_object: 0,
             ground_body,
             fixed_dt: 1.0 / 240.0,
             max_substeps: 8,
             accumulator: 0.0,
             impacts: Vec::new(),
+            groove: None,
         })
     }
 
@@ -226,6 +283,102 @@ impl World {
         let runtime = self.vehicles.remove(index);
         self.body_to_vehicle.remove(&runtime.body);
         runtime.remove(&mut self.physics)
+    }
+
+    /// Add one rigid body of debris (bodywork, a loose wheel, a cone, ...).
+    ///
+    /// The body is dynamic and collides with the track, walls, other debris and
+    /// every vehicle. The world only simulates it; deciding when debris should
+    /// be cleaned up or when it warrants a safety car is race logic and stays
+    /// outside this layer.
+    pub fn spawn_debris(&mut self, spec: DebrisSpec) -> WorldResult<DebrisHandle> {
+        if !spec.position.is_finite() {
+            return Err(WorldError::InvalidInput(
+                "debris position must be finite".to_owned(),
+            ));
+        }
+        let spec = spec.clamped();
+        let orientation =
+            if spec.orientation.is_finite() && spec.orientation.length_squared() > 1.0e-8 {
+                spec.orientation.normalize()
+            } else {
+                Quat::IDENTITY
+            };
+        let shape = match spec.shape {
+            // A half extent is a length, not a direction: keep the magnitudes
+            // and let the frame conversion through Jolt's axis swap alone.
+            DebrisShape::Box { half_extents } => {
+                let half = half_extents.abs();
+                Shape::new_box(JoltVec3::new(half.x, half.y, half.z))?
+            }
+            DebrisShape::Sphere { radius } => Shape::new_sphere(radius)?,
+            DebrisShape::Cylinder {
+                radius,
+                half_height,
+            } => Shape::new_cylinder(half_height, radius)?,
+        };
+        let settings = BodySettings::new_dynamic()
+            .position(p2j_r(spec.position))
+            .rotation(p2j_q(orientation))
+            .mass(spec.mass_kg)
+            .friction(spec.friction)
+            .restitution(spec.restitution)
+            .linear_velocity(p2j(spec.linear_velocity))
+            .angular_velocity(p2j(spec.angular_velocity))
+            .linear_damping(spec.linear_damping)
+            .angular_damping(spec.angular_damping);
+        let body = self.physics.create_body(&shape, &settings)?;
+        let handle = DebrisHandle(self.next_debris);
+        self.next_debris += 1;
+        self.body_to_debris.insert(body, handle);
+        self.debris.push(DebrisRuntime { handle, body });
+        Ok(handle)
+    }
+
+    /// Remove one piece of debris and its Jolt body.
+    pub fn remove_debris(&mut self, handle: DebrisHandle) -> WorldResult<()> {
+        let index = self
+            .debris
+            .iter()
+            .position(|debris| debris.handle == handle)
+            .ok_or(WorldError::UnknownDebris)?;
+        let runtime = self.debris.remove(index);
+        self.body_to_debris.remove(&runtime.body);
+        self.physics.remove_body(runtime.body)?;
+        Ok(())
+    }
+
+    /// Remove every piece of debris.
+    pub fn clear_debris(&mut self) -> WorldResult<()> {
+        for runtime in self.debris.drain(..) {
+            self.body_to_debris.remove(&runtime.body);
+            self.physics.remove_body(runtime.body)?;
+        }
+        Ok(())
+    }
+
+    /// Number of pieces of debris currently simulated.
+    pub fn debris_count(&self) -> usize {
+        self.debris.len()
+    }
+
+    /// Handles of every piece of debris, in spawn order.
+    pub fn debris_handles(&self) -> impl Iterator<Item = DebrisHandle> + '_ {
+        self.debris.iter().map(|debris| debris.handle)
+    }
+
+    /// Pose and velocities of one piece of debris.
+    pub fn debris_snapshot(&self, handle: DebrisHandle) -> Option<DebrisSnapshot> {
+        let runtime = self.debris.iter().find(|debris| debris.handle == handle)?;
+        let body = self.physics.body(runtime.body).ok()?;
+        Some(DebrisSnapshot {
+            position: j2p_r(body.position()),
+            orientation: j2p_q(body.rotation()),
+            linear_velocity: j2p(body.linear_velocity()),
+            angular_velocity: j2p(body.angular_velocity()),
+            mass_kg: body.mass().unwrap_or(0.0),
+            sleeping: body.is_sleeping(),
+        })
     }
 
     /// Append a custom surface. Must be done before any vehicle is created,
@@ -314,6 +467,158 @@ impl World {
         self.add_static_box(center, half_extents, yaw_radians, 0.7, 0.05)
     }
 
+    /// Replace the surface map. Only valid before the first vehicle is added:
+    /// vehicles keep an immutable snapshot of the surface table.
+    pub fn set_surface_map(&mut self, surface_map: SurfaceMap) -> WorldResult<()> {
+        if !self.vehicles.is_empty() {
+            return Err(WorldError::SurfacesLocked);
+        }
+        self.surface_map = surface_map;
+        Ok(())
+    }
+
+    /// Add a static triangle mesh (track collider, kerbs, terrain, ...).
+    ///
+    /// Large meshes are split into deterministic chunks so every Jolt shape
+    /// stays inside its 2000 m local extent; all chunks share one
+    /// [`TrackObjectId`], so impact events still identify the track as a whole.
+    /// The triangles are expected in the physics frame.
+    pub fn add_static_mesh(
+        &mut self,
+        vertices: &[Vec3],
+        triangles: &[[u32; 3]],
+        friction: f32,
+        restitution: f32,
+    ) -> WorldResult<TrackObjectId> {
+        if vertices.is_empty() || triangles.is_empty() {
+            return Err(WorldError::InvalidInput(
+                "a static mesh needs vertices and triangles".to_owned(),
+            ));
+        }
+        if vertices.iter().any(|vertex| !vertex.is_finite()) {
+            return Err(WorldError::InvalidInput(
+                "static mesh vertices must be finite".to_owned(),
+            ));
+        }
+        if triangles
+            .iter()
+            .flatten()
+            .any(|&index| index as usize >= vertices.len())
+        {
+            return Err(WorldError::InvalidInput(
+                "static mesh triangle index is out of range".to_owned(),
+            ));
+        }
+
+        let friction = if friction.is_finite() {
+            friction.clamp(0.0, 10.0)
+        } else {
+            0.9
+        };
+        let restitution = if restitution.is_finite() {
+            restitution.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        // Chunk by triangle centroid. 800 m tiles keep local coordinates well
+        // inside Jolt's 2000 m shape extent even for very large tracks.
+        const CHUNK_SIZE: f32 = 800.0;
+        let mut chunks: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+        for (index, triangle) in triangles.iter().enumerate() {
+            let centroid = (vertices[triangle[0] as usize]
+                + vertices[triangle[1] as usize]
+                + vertices[triangle[2] as usize])
+                / 3.0;
+            let key = (
+                (centroid.x / CHUNK_SIZE).floor() as i32,
+                (centroid.z / CHUNK_SIZE).floor() as i32,
+            );
+            chunks.entry(key).or_default().push(index);
+        }
+
+        let id = TrackObjectId(self.next_track_object);
+        let mut created: Vec<BodyId> = Vec::with_capacity(chunks.len());
+
+        // HashMap iteration order is randomized per process. Sort the chunk
+        // keys so body creation order (and therefore the deterministic replay)
+        // does not depend on the hasher seed.
+        let mut chunk_keys: Vec<(i32, i32)> = chunks.keys().copied().collect();
+        chunk_keys.sort_unstable();
+        for key in chunk_keys {
+            let chunk_triangles = &chunks[&key];
+            let mut min = Vec3::splat(f32::INFINITY);
+            let mut max = Vec3::splat(f32::NEG_INFINITY);
+            for &triangle_index in chunk_triangles {
+                for &vertex_index in &triangles[triangle_index] {
+                    let vertex = vertices[vertex_index as usize];
+                    min = min.min(vertex);
+                    max = max.max(vertex);
+                }
+            }
+            let center = (min + max) * 0.5;
+            let center = Vec3::new(
+                if center.x.is_finite() { center.x } else { 0.0 },
+                if center.y.is_finite() { center.y } else { 0.0 },
+                if center.z.is_finite() { center.z } else { 0.0 },
+            );
+
+            let mut remap: HashMap<u32, u32> = HashMap::new();
+            let mut local_vertices: Vec<JoltVec3> = Vec::new();
+            let mut local_triangles: Vec<[u32; 3]> = Vec::with_capacity(chunk_triangles.len());
+            for &triangle_index in chunk_triangles {
+                let mut local = [0u32; 3];
+                for (slot, &global) in local.iter_mut().zip(&triangles[triangle_index]) {
+                    *slot = *remap.entry(global).or_insert_with(|| {
+                        let index = local_vertices.len() as u32;
+                        local_vertices.push(p2j(vertices[global as usize] - center));
+                        index
+                    });
+                }
+                if local[0] != local[1] && local[1] != local[2] && local[2] != local[0] {
+                    local_triangles.push(local);
+                }
+            }
+            if local_triangles.is_empty() {
+                continue;
+            }
+
+            let (shape, dropped) = Shape::new_mesh(&local_vertices, &local_triangles)?;
+            if !dropped.is_empty() {
+                tracing::debug!(
+                    dropped = dropped.count(),
+                    area = dropped.area(),
+                    "Jolt dropped degenerate static-mesh triangles"
+                );
+            }
+            let settings = BodySettings::new_static()
+                .position(p2j_r(center))
+                .friction(friction)
+                .restitution(restitution)
+                .user_data(tag_track_object(id));
+            match self.physics.create_body(&shape, &settings) {
+                Ok(body) => created.push(body),
+                Err(error) => {
+                    for body in created {
+                        let _ = self.physics.remove_body(body);
+                    }
+                    return Err(error.into());
+                }
+            }
+        }
+
+        if created.is_empty() {
+            return Err(WorldError::InvalidInput(
+                "static mesh has no collidable triangles".to_owned(),
+            ));
+        }
+        self.next_track_object += 1;
+        for body in created {
+            self.track_objects.insert(body, id);
+        }
+        Ok(id)
+    }
+
     /// Advance by a wall-clock frame delta, accumulating into fixed steps.
     ///
     /// Returns the number of fixed steps actually run. If the accumulator still
@@ -354,13 +659,45 @@ impl World {
         }
 
         self.advance_weather(dt);
-        self.apply_external_forces()?;
+        {
+            let Self {
+                physics, vehicles, ..
+            } = self;
+            for vehicle in vehicles.iter_mut() {
+                vehicle.update_boost(physics, dt)?;
+            }
+        }
+        self.apply_hybrid_forces()?;
+        self.apply_external_forces(dt)?;
         let report = self.physics.step(dt)?;
         if !report.is_complete() {
             tracing::warn!("Jolt step dropped contacts; the world may need a smaller fixed step");
         }
         let events = self.physics.take_events();
         self.update_snapshots(dt)?;
+        // Discs heat from the work just done; fuel burns. Both read the fresh
+        // snapshot, so they run after it.
+        let weather = self.weather;
+        for vehicle in self.vehicles.iter_mut() {
+            let reference = self.physics.body(vehicle.body)?;
+            let speed = j2p(reference.linear_velocity()).length();
+            vehicle.note_acceleration(dt);
+            vehicle.set_weather_state(&weather);
+            vehicle.update_thermals_and_fuel(&self.physics, dt, speed)?;
+        }
+        // Rubber is deposited where the wheels are, and the grip multiplier
+        // for the next step is read back from the same cells.
+        if self.groove.is_some() {
+            let mut groove = self.groove.take().expect("groove present");
+            for vehicle in self.vehicles.iter_mut() {
+                vehicle.apply_groove(Some(&mut groove), dt);
+            }
+            self.groove = Some(groove);
+        } else {
+            for vehicle in self.vehicles.iter_mut() {
+                vehicle.apply_groove(None, dt);
+            }
+        }
         self.record_impacts(&events);
         Ok(())
     }
@@ -427,6 +764,287 @@ impl World {
             .find(|vehicle| vehicle.handle == handle)
             .ok_or(WorldError::UnknownVehicle)?;
         vehicle.apply_input(physics, input)
+    }
+
+    /// Refuel to a fraction of the tank, `0..=1`. Used by pit stops.
+    pub fn set_fuel_fraction(&mut self, handle: VehicleHandle, fraction: f32) -> WorldResult<()> {
+        let vehicle = self
+            .vehicles
+            .iter_mut()
+            .find(|vehicle| vehicle.handle == handle)
+            .ok_or(WorldError::UnknownVehicle)?;
+        vehicle.set_fuel_fraction(fraction);
+        Ok(())
+    }
+
+    /// Remaining fuel of a vehicle as a fraction of its tank, `0..=1`.
+    pub fn fuel_fraction(&self, handle: VehicleHandle) -> Option<f32> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::fuel_fraction)
+    }
+
+    /// Remaining fuel mass of a vehicle, kg.
+    pub fn fuel_kg(&self, handle: VehicleHandle) -> Option<f32> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::fuel_kg)
+    }
+
+    /// Brake disc temperatures of a vehicle, one per wheel, °C.
+    pub fn brake_temperatures_c(&self, handle: VehicleHandle) -> Option<[f32; 4]> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::brake_temperatures_c)
+    }
+
+    /// Install a track-evolution map, usually from `TrackModule::add_to_world`.
+    ///
+    /// Replaces any existing map. Rubber from the old map is lost, so this is
+    /// a session start, not a mid-race change.
+    pub fn set_groove_map(&mut self, groove: GrooveMap) {
+        self.groove = Some(groove);
+    }
+
+    /// Whether this world tracks rubber build-up.
+    pub fn has_groove(&self) -> bool {
+        self.groove.is_some()
+    }
+
+    /// The rubber map, when the track has one.
+    pub fn groove_map(&self) -> Option<&GrooveMap> {
+        self.groove.as_ref()
+    }
+
+    /// Mutable access to the rubber map, for scripts that want to lay a line
+    /// (grid starts, practice programs, session reset).
+    pub fn groove_map_mut(&mut self) -> Option<&mut GrooveMap> {
+        self.groove.as_mut()
+    }
+
+    /// Rubber fraction at a world position, `0..=1`.
+    pub fn groove_progress_at(&self, position: Vec3) -> f32 {
+        self.groove
+            .as_ref()
+            .map_or(0.0, |groove| groove.progress(position))
+    }
+
+    /// Grip multiplier from rubber at a world position.
+    pub fn groove_grip_at(&self, position: Vec3) -> f32 {
+        self.groove
+            .as_ref()
+            .map_or(1.0, |groove| groove.grip_at(position))
+    }
+
+    /// Tyre carcass temperatures of a vehicle, one per wheel, °C.
+    pub fn tyre_temperatures_c(&self, handle: VehicleHandle) -> Option<[f32; 4]> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::tyre_temperatures_c)
+    }
+
+    /// Tyre wear of a vehicle, one per wheel, `0..=1`.
+    pub fn tyre_wear(&self, handle: VehicleHandle) -> Option<[f32; 4]> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::tyre_wear)
+    }
+
+    /// Fit fresh tyres: ambient temperature and zero wear, as after a stop.
+    pub fn reset_tyres(&mut self, handle: VehicleHandle) -> WorldResult<()> {
+        let vehicle = self
+            .vehicles
+            .iter_mut()
+            .find(|vehicle| vehicle.handle == handle)
+            .ok_or(WorldError::UnknownVehicle)?;
+        vehicle.reset_tyres();
+        Ok(())
+    }
+
+    /// Road undulation height at a point travelled along `heading`, metres.
+    ///
+    /// The value comes from the surface under the point (AC's `SIN_HEIGHT` /
+    /// `SIN_LENGTH`), so a racing line over smooth asphalt reads zero while a
+    /// kerb or a gravel run-off area reads centimetres.
+    pub fn road_bump_m(&self, position: Vec3, heading: Vec3) -> f32 {
+        let sample = self.surface_map.sample(position);
+        let Some(properties) = self.surface_map.table().get(sample.surface) else {
+            return 0.0;
+        };
+        properties.bump_m(position, heading)
+    }
+
+    /// Water film carried by each tyre of a vehicle, mm.
+    pub fn water_film_mm(&self, handle: VehicleHandle) -> Option<[f32; 4]> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::water_film_mm)
+    }
+
+    /// Current turbo boost pressure of a vehicle, bar.
+    pub fn turbo_boost_bar(&self, handle: VehicleHandle) -> Option<f32> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::turbo_boost_bar)
+    }
+
+    /// Extra suspension force per wheel from the last step, newtons.
+    ///
+    /// This is the progressive spring, the bump/rebound stops and any active
+    /// actuator; Jolt's own linear spring force is not included.
+    pub fn suspension_force_n(&self, handle: VehicleHandle) -> Option<[f32; 4]> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::suspension_force_n)
+    }
+
+    /// Active actuator force per wheel from the last step, newtons.
+    pub fn active_suspension_force_n(&self, handle: VehicleHandle) -> Option<[f32; 4]> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::active_suspension_force_n)
+    }
+
+    /// Heave-spring force per axle (front, rear) from the last step, newtons.
+    pub fn heave_force_n(&self, handle: VehicleHandle) -> Option<[f32; 2]> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::heave_force_n)
+    }
+
+    /// Flat-spot fraction per wheel, `0..=1`. A locked wheel burns its rubber
+    /// into a flat, which costs that corner grip and shakes the chassis until
+    /// the rubber has worn away again.
+    pub fn flat_spot(&self, handle: VehicleHandle) -> Option<[f32; 4]> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::flat_spot)
+    }
+
+    /// Chassis kick amplitude per wheel from the flat spots, newtons.
+    pub fn flat_spot_force_n(&self, handle: VehicleHandle) -> Option<[f32; 4]> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::flat_spot_force_n)
+    }
+
+    /// Change the active suspension mode at runtime (driver switch or setup).
+    pub fn set_active_suspension_mode(
+        &mut self,
+        handle: VehicleHandle,
+        mode: vettura_physics::ActiveSuspensionMode,
+    ) -> WorldResult<()> {
+        let vehicle = self
+            .vehicles
+            .iter_mut()
+            .find(|vehicle| vehicle.handle == handle)
+            .ok_or(WorldError::UnknownVehicle)?;
+        vehicle.set_active_suspension_mode(mode);
+        Ok(())
+    }
+
+    /// Brake disc core temperatures of a vehicle, one per wheel, °C.
+    pub fn brake_core_temperatures_c(&self, handle: VehicleHandle) -> Option<[f32; 4]> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::brake_core_temperatures_c)
+    }
+
+    /// Tyre friction-surface temperatures of a vehicle, one per wheel, °C.
+    pub fn tyre_surface_temperatures_c(&self, handle: VehicleHandle) -> Option<[f32; 4]> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::tyre_surface_temperatures_c)
+    }
+
+    /// Tyre bulk-core temperatures of a vehicle, one per wheel, °C.
+    pub fn tyre_core_temperatures_c(&self, handle: VehicleHandle) -> Option<[f32; 4]> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::tyre_core_temperatures_c)
+    }
+
+    /// Engine temperatures of a vehicle: coolant and oil, °C.
+    pub fn engine_temperatures_c(&self, handle: VehicleHandle) -> Option<(f32, f32)> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::engine_temperatures_c)
+    }
+
+    /// Hybrid battery charge of a vehicle, joules.
+    pub fn ers_energy_j(&self, handle: VehicleHandle) -> Option<f32> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::ers_energy_j)
+    }
+
+    /// Hybrid battery state of charge of a vehicle, `0..=1`.
+    pub fn ers_soc(&self, handle: VehicleHandle) -> Option<f32> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::ers_soc)
+    }
+
+    /// Hybrid energy deployed by a vehicle on the current lap, joules.
+    pub fn ers_lap_deploy_j(&self, handle: VehicleHandle) -> Option<f32> {
+        self.vehicles
+            .iter()
+            .find(|vehicle| vehicle.handle == handle)
+            .map(VehicleRuntime::ers_lap_deploy_j)
+    }
+
+    /// Reset the per-lap deployment allowance. Call when the lap timer
+    /// completes a lap, the same way a race resets its energy budget.
+    pub fn reset_ers_lap(&mut self, handle: VehicleHandle) -> WorldResult<()> {
+        let vehicle = self
+            .vehicles
+            .iter_mut()
+            .find(|vehicle| vehicle.handle == handle)
+            .ok_or(WorldError::UnknownVehicle)?;
+        vehicle.reset_ers_lap();
+        Ok(())
+    }
+
+    /// Charge the hybrid battery to a fraction of its capacity, `0..=1`.
+    pub fn set_ers_soc(&mut self, handle: VehicleHandle, soc: f32) -> WorldResult<()> {
+        if !soc.is_finite() {
+            return Err(WorldError::InvalidInput(
+                "hybrid state of charge must be finite".to_owned(),
+            ));
+        }
+        let vehicle = self
+            .vehicles
+            .iter_mut()
+            .find(|vehicle| vehicle.handle == handle)
+            .ok_or(WorldError::UnknownVehicle)?;
+        let fraction = soc.clamp(0.0, 1.0);
+        vehicle.set_ers_energy_j(vehicle.spec.ers.capacity_j.max(0.0) * fraction);
+        Ok(())
+    }
+
+    /// Clear the rubber, as if the track had just been resurfaced.
+    pub fn reset_groove(&mut self) {
+        if let Some(groove) = &mut self.groove {
+            groove.reset();
+        }
     }
 
     /// Set the chassis linear and angular velocity in the physics frame.
@@ -501,8 +1119,13 @@ impl World {
         self.vehicles.iter().map(|vehicle| vehicle.handle)
     }
 
+    /// Number of logical track objects. A large static mesh may be split into
+    /// several Jolt bodies internally, but all chunks share one id.
     pub fn track_object_count(&self) -> usize {
-        self.track_objects.len()
+        let mut ids: Vec<TrackObjectId> = self.track_objects.values().copied().collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.len()
     }
 
     /// Impacts accumulated since the last [`drain_impacts`](Self::drain_impacts).
@@ -533,7 +1156,31 @@ impl World {
         }
     }
 
-    fn apply_external_forces(&mut self) -> WorldResult<()> {
+    /// Apply the hybrid machine force to every car for the upcoming step.
+    ///
+    /// Deploy pushes the car forward along its heading; harvest drags on it.
+    /// Both act at the driven axle, so the torque split follows the layout.
+    fn apply_hybrid_forces(&mut self) -> WorldResult<()> {
+        let dt = self.fixed_dt;
+        for vehicle in self.vehicles.iter_mut() {
+            let power_w = vehicle.apply_ers(dt);
+            if power_w.abs() <= 1.0e-3 {
+                continue;
+            }
+            // P = F·v, so the force this power buys at the current speed.
+            let speed = vehicle.snapshot.forward_speed_mps.abs().max(0.5);
+            let force = power_w / speed;
+            if !force.is_finite() {
+                continue;
+            }
+            let forward = vehicle.snapshot.orientation * Vec3::NEG_Z;
+            let mut body = self.physics.body_mut(vehicle.body)?;
+            body.add_force(p2j(forward * force))?;
+        }
+        Ok(())
+    }
+
+    fn apply_external_forces(&mut self, dt: f32) -> WorldResult<()> {
         let weather = self.weather;
         let surface_map = &self.surface_map;
         let Self {
@@ -548,19 +1195,22 @@ impl World {
 
             let relative_air = linear - weather.wind;
             let air_speed = relative_air.length();
+            // Drag comes from the car's own wing tables when it has them, and
+            // from the aggregate frontal area otherwise. DRS opens the rear
+            // wing and cuts drag; the spec decides whether the car has one and
+            // by how much.
+            let wing_area = vehicle.wing_drag_area();
+            let drag_area = if wing_area > 0.0 {
+                wing_area
+            } else {
+                vehicle.spec.drag_coefficient.max(0.0) * vehicle.spec.frontal_area_m2.max(0.0)
+            };
             let drag_factor = 0.5
                 * weather.air_density_kg_m3
-                * vehicle.spec.drag_coefficient.max(0.0)
-                * vehicle.spec.frontal_area_m2.max(0.0)
-                * vehicle.tuning.drag_scale.max(0.0);
+                * drag_area
+                * vehicle.tuning.drag_scale.max(0.0)
+                * vehicle.drag_multiplier();
             let drag_force = -relative_air * drag_factor * air_speed;
-
-            let downforce = 0.5
-                * weather.air_density_kg_m3
-                * vehicle.tuning.downforce_coefficient.max(0.0)
-                * vehicle.spec.frontal_area_m2.max(0.0)
-                * air_speed
-                * air_speed;
 
             let rolling = vehicle.rolling_resistance(&weather, surface_map);
             let horizontal_velocity = Vec3::new(linear.x, 0.0, linear.z);
@@ -578,13 +1228,20 @@ impl World {
                 let point = RVec3::new(position.x, position.y + 0.2, position.z);
                 body.add_force_at_point(p2j(drag_force), point)?;
             }
-            if downforce > 0.0 {
-                body.add_force(p2j(Vec3::NEG_Y * downforce))?;
-            }
             if rolling_force.length_squared() > 0.0 {
                 body.add_force(p2j(rolling_force))?;
             }
         }
+
+        // Aero (per-axle downforce with ride-height fade) and the fuel load
+        // inertia need the snapshot, so they are applied per vehicle.
+        for vehicle in vehicles.iter_mut() {
+            let linear = vehicle.snapshot.linear_velocity;
+            let relative_air = linear - weather.wind;
+            vehicle.apply_aero_forces(physics, &weather, linear, relative_air)?;
+            vehicle.apply_suspension_forces(physics, dt)?;
+        }
+
         Ok(())
     }
 
@@ -685,9 +1342,11 @@ impl World {
     fn entity(&self, body: BodyId) -> ContactEntity {
         if let Some(handle) = self.body_to_vehicle.get(&body) {
             ContactEntity::Vehicle(*handle)
+        } else if let Some(handle) = self.body_to_debris.get(&body) {
+            ContactEntity::Debris(*handle)
         } else if let Some(id) = self.track_objects.get(&body) {
             ContactEntity::TrackObject(*id)
-        } else if body == self.ground_body {
+        } else if self.ground_body == Some(body) {
             ContactEntity::Ground
         } else {
             ContactEntity::Other(body.to_raw())
@@ -731,6 +1390,8 @@ mod tests {
                 wet_grip: 1.0,
                 rolling_resistance: 0.01,
                 roughness: 0.1,
+                bump_height_m: 0.0,
+                bump_length_m: 10.0,
             })
             .unwrap();
         assert_eq!(id, SurfaceId(10));
@@ -753,6 +1414,33 @@ mod tests {
                 .add_static_box(Vec3::ZERO, Vec3::new(0.0, 0.5, 0.2), 0.0, 0.7, 0.1)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn wide_static_mesh_uses_one_logical_track_object() {
+        let vertices = [
+            Vec3::new(-1.0, 0.0, -1.0),
+            Vec3::new(1.0, 0.0, -1.0),
+            Vec3::new(1.0, 0.0, 1.0),
+            Vec3::new(-1.0, 0.0, 1.0),
+            Vec3::new(999.0, 0.0, -1.0),
+            Vec3::new(1001.0, 0.0, -1.0),
+            Vec3::new(1001.0, 0.0, 1.0),
+            Vec3::new(999.0, 0.0, 1.0),
+        ];
+        let triangles = [[0, 2, 1], [0, 3, 2], [4, 6, 5], [4, 7, 6]];
+
+        let mut world = World::without_ground(SurfaceMap::new()).unwrap();
+        let id = world
+            .add_static_mesh(&vertices, &triangles, 1.0, 0.0)
+            .unwrap();
+        assert_eq!(id.raw(), 0);
+        assert!(
+            world.track_objects.len() >= 2,
+            "expected the mesh to be split into chunks"
+        );
+        assert_eq!(world.track_object_count(), 1, "chunks share one logical id");
+        assert!(world.add_static_mesh(&[], &[], 1.0, 0.0).is_err());
     }
 
     #[test]
