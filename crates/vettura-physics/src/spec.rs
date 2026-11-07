@@ -1321,9 +1321,11 @@ impl TyreSpec {
         } else {
             thermal.optimal_c
         };
-        let gain = ((self.ideal_pressure_psi - self.cold_pressure_psi)
-            / (thermal.optimal_c + thermal.window_c))
-            .max(0.02);
+        // The denominator is the temperature rise to the hot-pressure point;
+        // it must stay positive even for a hand-authored curve whose window
+        // sits at or below zero.
+        let denominator = (thermal.optimal_c + thermal.window_c).max(1.0);
+        let gain = ((self.ideal_pressure_psi - self.cold_pressure_psi) / denominator).max(0.02);
         // Negative rubber temperatures are legal and simply mean a flatter
         // tyre than the cold pressure; only the absolute floor stays positive.
         (self.cold_pressure_psi + gain * temperature).clamp(0.5, 120.0)
@@ -1344,7 +1346,7 @@ impl TyreSpec {
         if self.pneumatic_trail_m <= 0.0 || !lateral_force_n.is_finite() {
             return 0.0;
         }
-        (-lateral_force_n * self.pneumatic_trail_m).clamp(-2_000.0, 2_000.0)
+        (lateral_force_n * self.pneumatic_trail_m).clamp(-2_000.0, 2_000.0)
     }
 
     /// Rolling resistance force of one wheel, N.
@@ -1684,8 +1686,8 @@ impl AeroSpec {
 
     /// Downforce multiplier from sitting in another car's wake, `0..=1`.
     ///
-    /// `exposure` is how far behind the car ahead this one is, in car lengths:
-    /// `0` when there is no car ahead and `1` when it is right on the gearbox.
+    /// `exposure` is how deep in the wake this car sits, `0..=1`: `0` when
+    /// there is no car ahead and `1` when it is right on the gearbox.
     /// The loss peaks immediately behind the car and fades over
     /// `dirty_air_distance_m`, which is why following is hard and why the
     /// second car in a train often carries more speed into a corner.
@@ -2706,11 +2708,11 @@ mod tests {
             cold_pressure_psi: 17.0,
             ..TyreSpec::default()
         };
-        // The torque always opposes the lateral force: a tyre running left
-        // twists the wheel back towards travel.
+        // A tyre pushed to the right twists the wheel back towards travel,
+        // which is a positive (left) moment about the car's up axis.
         let force = tyre.aligning_torque_nm(1_000.0);
-        assert!((force + 35.0).abs() < 1e-4, "{force}");
-        assert!((tyre.aligning_torque_nm(-1_000.0) - 35.0).abs() < 1e-4);
+        assert!((force - 35.0).abs() < 1e-4, "{force}");
+        assert!((tyre.aligning_torque_nm(-1_000.0) + 35.0).abs() < 1e-4);
         // No trail, no torque; nonsense stays harmless.
         let no_trail = TyreSpec {
             pneumatic_trail_m: 0.0,

@@ -2575,8 +2575,9 @@ fn a_steered_tyre_pushes_back_on_the_chassis() {
     let with_trail = run(0.04);
     let without = run(0.0);
     assert!(
-        (with_trail - without).abs() > 1.0e-3,
-        "the pneumatic trail made no difference: {with_trail} vs {without}"
+        with_trail < without,
+        "the pneumatic trail added yaw instead of opposing the steer: \
+         {with_trail} vs {without}"
     );
 }
 
@@ -2790,6 +2791,89 @@ fn anti_dive_reduces_braking_pitch() {
         lots < none - 1.0e-3,
         "anti-dive did not reduce the pitch: {none} vs {lots}"
     );
+}
+
+#[test]
+fn anti_squat_reduces_acceleration_pitch() {
+    // Mirrors the anti-dive test: under power the car squats (nose up), and
+    // the rear links should take a share of that moment away. The correction
+    // has to oppose the squat, not add to it.
+    let run = |anti_squat: f32| -> f32 {
+        let mut spec = VehicleSpec::default();
+        for wheel in &mut spec.wheels {
+            wheel.suspension.anti_squat_fraction = anti_squat;
+            wheel.suspension.anti_dive_fraction = 0.0;
+        }
+        let mut world = World::new(SurfaceMap::new()).unwrap();
+        let car = world.add_vehicle(spec, Pose::default()).unwrap();
+        settle(&mut world, car);
+        world
+            .set_controls(
+                car,
+                Controls {
+                    throttle: 1.0,
+                    ..Controls::default()
+                },
+            )
+            .unwrap();
+        let mut peak = 0.0f32;
+        for _ in 0..240 * 2 {
+            step(&mut world, 1);
+            let forward = world.snapshot(car).unwrap().orientation * Vec3::NEG_Z;
+            peak = peak.max(forward.y);
+        }
+        peak
+    };
+
+    let none = run(0.0);
+    let lots = run(0.6);
+    assert!(
+        lots < none,
+        "anti-squat did not reduce acceleration pitch: {none} vs {lots}"
+    );
+}
+
+#[test]
+fn resetting_the_car_returns_it_to_the_world_weather() {
+    // A car reset on a winter track must be cold again: the reset must not
+    // fall back to the brake spec's summer ambient.
+    let mut world = World::new(SurfaceMap::new()).unwrap();
+    let cold = Weather::dry()
+        .with_temperatures(-12.0, -15.0)
+        .with_wetness(0.0);
+    world.set_weather(cold);
+    let car = world.add_vehicle(car(), Pose::default()).unwrap();
+    settle(&mut world, car);
+
+    world.reset_vehicle(car, Pose::default()).unwrap();
+    let snapshot = world.snapshot(car).unwrap();
+    for temperature in snapshot.tyre_temperatures_c {
+        assert!(
+            (temperature + 15.0).abs() < 1.0,
+            "reset tyre temperature is not the road temperature: {temperature}"
+        );
+    }
+    for temperature in world.brake_core_temperatures_c(car).unwrap() {
+        assert!(
+            (temperature + 12.0).abs() < 1.0,
+            "reset brake temperature is not the air temperature: {temperature}"
+        );
+    }
+    let (coolant, oil) = world.engine_temperatures_c(car).unwrap();
+    assert!((coolant + 12.0).abs() < 1.0, "coolant: {coolant}");
+    assert!((oil + 12.0).abs() < 1.0, "oil: {oil}");
+
+    // Fresh tyres follow the road too, and all three layers are reset.
+    world.reset_tyres(car).unwrap();
+    for temperature in world.tyre_temperatures_c(car).unwrap() {
+        assert!((temperature + 15.0).abs() < 1.0, "{temperature}");
+    }
+    for temperature in world.tyre_surface_temperatures_c(car).unwrap() {
+        assert!((temperature + 15.0).abs() < 1.0, "{temperature}");
+    }
+    for temperature in world.tyre_core_temperatures_c(car).unwrap() {
+        assert!((temperature + 15.0).abs() < 1.0, "{temperature}");
+    }
 }
 
 #[test]

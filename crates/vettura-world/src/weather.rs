@@ -21,8 +21,9 @@ pub struct Weather {
     pub rain_intensity: f32,
     /// Air temperature, °C.
     pub air_temperature_c: f32,
-    /// Track-surface temperature, °C. Evolves toward the sun equilibrium while
-    /// the world runs; set it directly for a fixed condition.
+    /// Track-surface temperature, °C. The world evolves this toward the sun
+    /// equilibrium while it runs; use [`Self::with_sun`] with `0 W/m²` when a
+    /// fixed condition is wanted.
     pub track_temperature_c: f32,
     /// Sun intensity, W/m². `0` is shade or a night session, and the road then
     /// sits at the air temperature.

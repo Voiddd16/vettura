@@ -110,7 +110,9 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
                 // at the model defaults because AC does not publish them.
                 static_camber_deg: axle.static_camber.unwrap_or(0.0).clamp(-15.0, 15.0),
                 // A mod that publishes the roll centre uses it; the default
-                // stays at the typical double-wishbone value.
+                // stays at the typical double-wishbone value. The clamp keeps
+                // a bad hard-point derivation from placing the centre above
+                // the centre of mass or below the contact patch.
                 roll_center_height_m: axle.roll_center.unwrap_or(0.05).clamp(-0.1, 0.3),
                 // Anti-dive / anti-squat are the links' geometry. AC does not
                 // publish them, so a mod can override them here; the defaults
@@ -146,7 +148,9 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
     spec.active_suspension = active_suspension(&suspensions, spec.mass_kg);
     // Steering: `STEER_LOCK` is the lock at the *steering wheel* in degrees and
     // `STEER_RATIO` is the ratio between them, so the wheel angle is the
-    // division of the two. Without either the spec keeps its default.
+    // division of the two. Without either the spec keeps its default. The
+    // 3..60° clamp spans from a tight race rack to a road-car lock and keeps a
+    // bad ratio from producing a zero or absurd wheel angle.
     if let (Some(lock_deg), Some(ratio)) = (
         car.get_f32("CONTROLS", "STEER_LOCK"),
         car.get_f32("CONTROLS", "STEER_RATIO"),
@@ -255,9 +259,11 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
             .get_f32("GEARBOX", "AUTO_CUTOFF_TIME")
             .filter(|value| value.is_finite() && *value >= 0.0)
             .unwrap_or(spec.gearbox.auto_cutoff_time),
+        // A mod may ship any number; keep it inside a range Jolt can brake
+        // with instead of letting a typo stall the whole rear axle.
         handbrake_torque_nm: brakes
             .get_f32("DATA", "HANDBRAKE_TORQUE")
-            .filter(|value| value.is_finite() && *value >= 0.0)
+            .filter(|value| value.is_finite() && (0.0..=50_000.0).contains(value))
             .unwrap_or(spec.gearbox.handbrake_torque_nm),
     };
 
@@ -920,8 +926,11 @@ impl AxleData {
             progressive_rate: suspensions.get_f32(axle, "PROGRESSIVE_SPRING_RATE"),
             bump_stop_rate: suspensions.get_f32(axle, "BUMP_STOP_RATE"),
             static_camber: suspensions.get_f32(axle, "STATIC_CAMBER"),
-            // Optional; only some mods author the roll centre explicitly.
-            roll_center: suspensions.get_f32(axle, "ROLL_CENTER"),
+            // Optional; only some mods author the roll centre explicitly, and
+            // AC's own `[ARB]` section is the other place it appears.
+            roll_center: suspensions
+                .get_f32(axle, "ROLL_CENTER")
+                .or_else(|| suspensions.get_f32("ARB", &format!("{axle}_ROLL_CENTER"))),
             anti_dive: suspensions.get_f32(axle, "ANTI_DIVE"),
             anti_squat: suspensions.get_f32(axle, "ANTI_SQUAT"),
             // Two-rate dampers: the bleeder rate and the speed it kicks in.

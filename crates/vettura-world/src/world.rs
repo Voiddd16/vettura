@@ -1165,10 +1165,6 @@ impl World {
         }
     }
 
-    /// Apply the hybrid machine force to every car for the upcoming step.
-    ///
-    /// Deploy pushes the car forward along its heading; harvest drags on it.
-    /// Both act at the driven axle, so the torque split follows the layout.
     /// Heat (or cool) the road surface toward the sun equilibrium.
     ///
     /// The road is a large thermal mass: it takes minutes of sunshine to heat
@@ -1183,6 +1179,12 @@ impl World {
             let next = self.weather.track_temperature_c
                 + (target - self.weather.track_temperature_c) * alpha;
             self.weather.track_temperature_c = next.clamp(-60.0, 120.0);
+            // The grip callbacks cache the weather they were last given, so
+            // publish the evolved road temperature before the next step reads
+            // it. Transitions already do this in `advance_weather`.
+            for vehicle in &self.vehicles {
+                vehicle.set_weather(&self.weather);
+            }
         }
     }
 
@@ -1191,6 +1193,10 @@ impl World {
         self.weather.track_temperature_c
     }
 
+    /// Apply the hybrid machine force to every car for the upcoming step.
+    ///
+    /// Deploy pushes the car forward along its heading; harvest drags on it.
+    /// Both act at the driven axle, so the torque split follows the layout.
     fn apply_hybrid_forces(&mut self) -> WorldResult<()> {
         let dt = self.fixed_dt;
         for vehicle in self.vehicles.iter_mut() {
@@ -1413,6 +1419,12 @@ fn dirty_air_exposures(vehicles: &[VehicleRuntime]) -> Vec<f32> {
             if other_index == index {
                 continue;
             }
+            // Only a car heading roughly the same way leaves a usable wake;
+            // one going the other way is not "ahead" even if it is in front.
+            let other_forward = other.snapshot.orientation * Vec3::NEG_Z;
+            if other_forward.dot(forward) < 0.5 {
+                continue;
+            }
             let to_other = other.snapshot.position - mine;
             let ahead = to_other.dot(forward);
             if ahead <= 0.5 {
@@ -1594,5 +1606,33 @@ mod tests {
             Err(WorldError::UnknownVehicle)
         ));
         assert!(world.snapshot(VehicleHandle(999)).is_none());
+    }
+
+    #[test]
+    fn only_a_car_heading_the_same_way_leaves_a_wake() {
+        let mut spec = VehicleSpec::default();
+        spec.aero.dirty_air_loss = 0.3;
+        spec.aero.dirty_air_distance_m = 20.0;
+        // The follower sits at the origin; the other car is 10 m ahead along
+        // the follower's forward axis (-Z).
+        let exposure_for = |orientation: Quat| {
+            let mut world = World::new(SurfaceMap::new()).unwrap();
+            world.add_vehicle(spec.clone(), Pose::default()).unwrap();
+            world
+                .add_vehicle(
+                    spec.clone(),
+                    Pose {
+                        position: Vec3::new(0.0, 0.0, -10.0),
+                        orientation,
+                    },
+                )
+                .unwrap();
+            dirty_air_exposures(&world.vehicles)[0]
+        };
+        assert!(exposure_for(Quat::IDENTITY) > 0.0);
+        assert_eq!(
+            exposure_for(Quat::from_rotation_y(std::f32::consts::PI)),
+            0.0
+        );
     }
 }

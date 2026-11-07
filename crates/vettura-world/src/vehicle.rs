@@ -665,6 +665,24 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
     if value.is_finite() { value } else { fallback }
 }
 
+/// Effective wheel steer lock in degrees.
+///
+/// A positive tuning value overrides the spec; otherwise the data-driven lock
+/// wins. Both come from caller data, so a non-finite value falls back to the
+/// 30° default instead of reaching Jolt's validation.
+pub(crate) fn steer_lock_deg(spec: &VehicleSpec, tuning: &VehicleTuning) -> f32 {
+    let lock = if tuning.max_steer_angle_deg > 0.0 {
+        tuning.max_steer_angle_deg
+    } else {
+        spec.max_steer_angle_deg
+    };
+    if lock.is_finite() {
+        lock.clamp(5.0, 60.0)
+    } else {
+        30.0
+    }
+}
+
 /// Slip ratio the anti-lock brake controller aims for.
 const ABS_SLIP_TARGET: f32 = 0.14;
 /// Slip ratio the traction controller aims for.
@@ -995,15 +1013,12 @@ impl VehicleRuntime {
             orientation,
             ..VehicleSnapshot::default()
         };
-        self.initialize_thermals(&self.weather_stub.clone());
+        let weather = self.weather_stub;
+        self.initialize_thermals(&weather);
         self.previous_suspension_lengths = [0.0; 4];
         self.suspension_force_n = [0.0; 4];
         self.active_suspension_force_n = [0.0; 4];
         self.heave_force_n = [0.0; 2];
-        let ambient = self.spec.brakes.ambient_c.max(0.0);
-        self.tyre_temperatures_c = [ambient; 4];
-        self.tyre_surface_temperatures_c = [ambient; 4];
-        self.tyre_core_temperatures_c = [ambient; 4];
         self.flat_spot_j = [0.0; 4];
         self.relaxed_longitudinal_slip = [0.0; 4];
         self.relaxed_lateral_slip = [0.0; 4];
@@ -1420,7 +1435,7 @@ impl VehicleRuntime {
             // Anti-dive / anti-squat: Jolt applies the longitudinal tyre force
             // at the contact patch, which gives the largest possible pitch
             // moment. A real axle picks up a share of that force in its links,
-            // so the pitch is smaller by `fraction × Fx × rod height`. The
+            // so the pitch is smaller by `fraction × Fx × cg_height`. The
             // correction is a torque about the car's own lateral axis.
             let cg = self.spec.cg_height_m.max(0.05);
             let front_dive = self.spec.wheels[0]
@@ -1450,9 +1465,10 @@ impl VehicleRuntime {
                 }
                 // Braking (force opposing motion) should pitch less; accelerating
                 // should squat less. Both come out as one torque about the car's
-                // right axis, positive nose-down.
+                // right axis, positive nose-up. The correction therefore has the
+                // opposite sign of the pitch moment the tyre forces create.
                 let right = orientation * Vec3::X;
-                let moment = rear_squat * rear * cg - front_dive * front * cg;
+                let moment = -(rear_squat * rear + front_dive * front) * cg;
                 if moment.abs() > 1.0e-3 {
                     body.add_torque(p2j(right * moment))?;
                 }
@@ -1607,7 +1623,8 @@ impl VehicleRuntime {
                 let clearance = world.y.max(0.0);
                 let aoa = self.wing_aoa_deg(wing);
                 let cl_area = wing.cl_area(aoa, clearance);
-                let downforce = 0.5 * weather.air_density_kg_m3 * cl_area * speed_sq * smoothing;
+                let downforce =
+                    0.5 * weather.air_density_kg_m3 * cl_area * speed_sq * smoothing * dirty_air;
                 if downforce.abs() > 1.0e-3 {
                     body.add_force_at_point(p2j(down * downforce), p2j_r(world))?;
                 }
@@ -1663,11 +1680,11 @@ impl VehicleRuntime {
 
                 let mut body = physics.body_mut(self.body)?;
                 if front > 1.0e-3 {
-                    let force = down * front * front_fade * dirty_air;
+                    let force = down * front * front_fade;
                     body.add_force_at_point(p2j(force), p2j_r(front_axle))?;
                 }
                 if rear > 1.0e-3 {
-                    let force = down * rear * rear_fade * dirty_air;
+                    let force = down * rear * rear_fade;
                     body.add_force_at_point(p2j(force), p2j_r(rear_axle))?;
                 }
             }
@@ -1773,7 +1790,7 @@ impl VehicleRuntime {
             let cooling = (engine.thermal.cooling_per_s
                 + (speed_mps.abs() / 60.0).clamp(0.0, 3.0) * 0.05)
                 * step;
-            let ambient = self.spec.brakes.ambient_c.max(0.0);
+            let ambient = self.air_temperature_c();
             let capacity = engine.thermal.heat_capacity_j_per_k.max(1.0);
             self.coolant_c = (self.coolant_c
                 + (heat / capacity) * (1.0 - cooling.min(0.9))
@@ -1867,11 +1884,14 @@ impl VehicleRuntime {
             if water_cooling_c > 0.0 {
                 // The friction surface loses it first, then the patch the grip
                 // curve reads; the bulk core is barely touched in one step.
-                let surface = (self.tyre_surface_temperatures_c[index] - water_cooling_c).max(0.0);
+                // Water can take a tyre below freezing; only an absolute
+                // physical floor applies here, not the 0 °C reference.
+                let surface =
+                    (self.tyre_surface_temperatures_c[index] - water_cooling_c).max(-60.0);
                 let lost_from_surface =
                     (self.tyre_surface_temperatures_c[index] - surface).max(0.0);
                 self.tyre_surface_temperatures_c[index] = surface;
-                let patch = (self.tyre_temperatures_c[index] - lost_from_surface * 0.5).max(0.0);
+                let patch = (self.tyre_temperatures_c[index] - lost_from_surface * 0.5).max(-60.0);
                 self.tyre_temperatures_c[index] = patch;
             }
 
@@ -2223,10 +2243,12 @@ impl VehicleRuntime {
         (self.ers_energy_j / capacity).clamp(0.0, 1.0)
     }
 
-    /// Fit a fresh set of tyres: back to ambient temperature and zero wear.
+    /// Fit a fresh set of tyres: back to road temperature and zero wear.
     pub(crate) fn reset_tyres(&mut self) {
-        let ambient = self.spec.brakes.ambient_c.max(0.0);
+        let ambient = self.road_temperature_c();
         self.tyre_temperatures_c = [ambient; 4];
+        self.tyre_surface_temperatures_c = [ambient; 4];
+        self.tyre_core_temperatures_c = [ambient; 4];
         self.tyre_wear_j = [0.0; 4];
         self.water_film_mm = [0.0; 4];
     }
@@ -2504,12 +2526,7 @@ fn vehicle_settings(
             // The car's own lock wins unless the tuning overrides it, so an AC
             // car steers by the steering ratio it was authored with.
             .max_steer_angle(if wheel_spec.steerable {
-                let lock = if tuning.max_steer_angle_deg > 0.0 {
-                    tuning.max_steer_angle_deg
-                } else {
-                    spec.max_steer_angle_deg
-                };
-                lock.clamp(5.0, 60.0).to_radians()
+                steer_lock_deg(spec, tuning).to_radians()
             } else {
                 0.0
             })
@@ -2682,8 +2699,6 @@ struct TyreTemperatures {
 
 /// Advance the three tyre temperatures by `heat_j` over `step` seconds at
 /// `speed_mps` towards `ambient_c`.
-/// Advance the three tyre temperatures by `heat_j` over `step` seconds at
-/// `speed_mps` towards `ambient_c`.
 fn advance_tyre_temperatures(
     spec: &TyreThermalSpec,
     state: TyreTemperatures,
@@ -2697,7 +2712,7 @@ fn advance_tyre_temperatures(
     if !spec.has_layers() {
         // Single mass: everything happens in the carcass, as before.
         let next = state.core + (heat_j / spec.heat_capacity_j_per_k.max(1.0)) * (1.0 - cooling);
-        let target = ambient_c.max(0.0);
+        let target = ambient_c;
         let core = (next + target * cooling).clamp(target, 1_400.0);
         return TyreTemperatures {
             surface: core,
@@ -2709,7 +2724,7 @@ fn advance_tyre_temperatures(
     let surface_capacity = spec.surface_capacity_j_per_k.max(1.0);
     let patch_capacity = spec.patch_capacity_j_per_k.max(1.0);
     let core_capacity = spec.heat_capacity_j_per_k.max(1.0);
-    let ambient = ambient_c.max(0.0);
+    let ambient = ambient_c;
     let mut surface = (state.surface + heat_j / surface_capacity).clamp(ambient, 1_400.0);
     let mut patch = state.patch;
     let mut core = state.core;
@@ -2794,12 +2809,6 @@ fn advance_brake_temperatures(
     )
 }
 
-///
-/// Returns `(surface, core)` temperatures. The surface is the friction face the
-/// pads see, which is what the efficiency curve is indexed by; the core is the
-/// bulk of the rotor, which soaks heat in slowly and hands it back quickly, so
-/// the pads keep cooking after the pedal is released.
-#[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -24,7 +24,7 @@ use glam::{Quat, Vec3};
 use vettura_core::coords::ac_to_godot;
 use vettura_physics::{ErsMode, Pose, VehicleSpec};
 
-use crate::vehicle::{DriveInput, VehicleSnapshot, VehicleTuning};
+use crate::vehicle::{DriveInput, VehicleSnapshot, VehicleTuning, steer_lock_deg};
 use crate::world::{VehicleView, WorldError, WorldResult};
 
 const VERSION: i32 = 7;
@@ -696,12 +696,7 @@ impl AiDriver {
         let local_z = to_target.dot(forward);
         // The car's authored lock, overridable through the tuning exactly as
         // the physics does it.
-        let lock = if tuning.max_steer_angle_deg > 0.0 {
-            tuning.max_steer_angle_deg
-        } else {
-            spec.max_steer_angle_deg
-        };
-        let max_steer = lock.clamp(5.0, 60.0).to_radians().max(0.01);
+        let max_steer = steer_lock_deg(spec, &tuning).to_radians().max(0.01);
 
         // Pure pursuit when the target is in front. When the car is pointing
         // away from the line, fall back to a heading correction so it can
