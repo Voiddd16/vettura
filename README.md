@@ -62,4 +62,4 @@ test/
 
 ## 相关仓库
 
-- [`vettura-native`](https://github.com/Voiddd16/vettura-native)：Rust 侧引擎实现，负责 KN5/ACD 解析、Chrono::Vehicle 物理后端以及与 Godot 的桥接。
+- [`vettura-native`](https://github.com/Voiddd16/vettura-native)：Rust 侧引擎实现，负责 KN5/ACD 解析、Chrono::Vehicle 物理后端以及与 Godot 的桥接。声音也是同一条链：`FmodSystem` 节点直接调用 FMOD runtime 播放 AC 车模 `sfx/*.bank`（native 侧需 `--features fmod` 构建）。
