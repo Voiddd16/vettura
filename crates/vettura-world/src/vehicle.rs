@@ -1417,6 +1417,46 @@ impl VehicleRuntime {
                     body.add_torque(p2j(wheel_up * aligning))?;
                 }
             }
+            // Anti-dive / anti-squat: Jolt applies the longitudinal tyre force
+            // at the contact patch, which gives the largest possible pitch
+            // moment. A real axle picks up a share of that force in its links,
+            // so the pitch is smaller by `fraction × Fx × rod height`. The
+            // correction is a torque about the car's own lateral axis.
+            let cg = self.spec.cg_height_m.max(0.05);
+            let front_dive = self.spec.wheels[0]
+                .suspension
+                .anti_dive_fraction
+                .clamp(0.0, 1.0);
+            let rear_squat = self.spec.wheels[2]
+                .suspension
+                .anti_squat_fraction
+                .clamp(0.0, 1.0);
+            let forward = orientation * Vec3::NEG_Z;
+            if front_dive > 0.0 || rear_squat > 0.0 {
+                let mut front = 0.0f32;
+                let mut rear = 0.0f32;
+                for (index, wheel) in self.snapshot.wheels.iter().enumerate() {
+                    if !wheel.contact {
+                        continue;
+                    }
+                    let axis =
+                        (orientation * Quat::from_rotation_y(-wheel.steer_angle) * Vec3::NEG_Z)
+                            .dot(forward);
+                    if index < 2 {
+                        front += wheel.longitudinal_force_n * axis;
+                    } else {
+                        rear += wheel.longitudinal_force_n * axis;
+                    }
+                }
+                // Braking (force opposing motion) should pitch less; accelerating
+                // should squat less. Both come out as one torque about the car's
+                // right axis, positive nose-down.
+                let right = orientation * Vec3::X;
+                let moment = rear_squat * rear * cg - front_dive * front * cg;
+                if moment.abs() > 1.0e-3 {
+                    body.add_torque(p2j(right * moment))?;
+                }
+            }
             // Roll centre: Jolt applies the tyre's lateral force at the contact
             // patch, which is the longest lever arm about the centre of mass
             // and therefore the most body roll a car can have. A real car

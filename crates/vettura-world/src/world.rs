@@ -663,6 +663,10 @@ impl World {
         }
 
         self.advance_weather(dt);
+        // The road soaks up the sun (or sheds it in the rain), and every part
+        // of the tyre and brake model reads its temperature. This comes first
+        // for that reason.
+        self.advance_track_temperature(dt);
         {
             let Self {
                 physics, vehicles, ..
@@ -1165,6 +1169,28 @@ impl World {
     ///
     /// Deploy pushes the car forward along its heading; harvest drags on it.
     /// Both act at the driven axle, so the torque split follows the layout.
+    /// Heat (or cool) the road surface toward the sun equilibrium.
+    ///
+    /// The road is a large thermal mass: it takes minutes of sunshine to heat
+    /// through and a downpour to cool back, which is why the racing line
+    /// changes over a session and not over a lap. The evolution is driven by
+    /// `dt` and the weather only, so replays stay deterministic.
+    fn advance_track_temperature(&mut self, dt: f32) {
+        let tau = self.weather.track_time_constant_s.max(1.0);
+        let target = self.weather.sun_equilibrium_temperature_c();
+        if dt.is_finite() && dt > 0.0 {
+            let alpha = 1.0 - (-dt / tau).exp();
+            let next = self.weather.track_temperature_c
+                + (target - self.weather.track_temperature_c) * alpha;
+            self.weather.track_temperature_c = next.clamp(-60.0, 120.0);
+        }
+    }
+
+    /// Road-surface temperature the world has evolved to, °C.
+    pub fn track_temperature_c(&self) -> f32 {
+        self.weather.track_temperature_c
+    }
+
     fn apply_hybrid_forces(&mut self) -> WorldResult<()> {
         let dt = self.fixed_dt;
         for vehicle in self.vehicles.iter_mut() {

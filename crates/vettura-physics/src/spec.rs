@@ -303,6 +303,15 @@ pub struct SuspensionSpec {
     /// smaller by `roll_center_height × Fy`. `0` keeps Jolt's (maximum) lever
     /// arm, which is the case for hand-authored specs.
     pub roll_center_height_m: f32,
+    /// Fraction of the braking load transfer this axle's suspension geometry
+    /// reacts, `0..=1`. Jolt applies the longitudinal tyre force at the contact
+    /// patch, the longest lever arm about the centre of mass; a real axle picks
+    /// up part of that force in its links, so the pitch is smaller.
+    pub anti_dive_fraction: f32,
+    /// Fraction of the acceleration load transfer reacted by the geometry,
+    /// `0..=1`. Same mechanism as [`Self::anti_dive_fraction`] under power,
+    /// where a real rear axle resists squat.
+    pub anti_squat_fraction: f32,
 }
 
 impl Default for SuspensionSpec {
@@ -330,6 +339,10 @@ impl Default for SuspensionSpec {
             // authored in a frame that cannot be cross-referenced with
             // TRACK, so a mod that knows the real number uses ROLL_CENTER.
             roll_center_height_m: 0.05,
+            // A road car reacts a modest share of its load transfer in the
+            // suspension links; racers run more. Both can be authored.
+            anti_dive_fraction: 0.15,
+            anti_squat_fraction: 0.10,
         }
     }
 }
@@ -2720,6 +2733,22 @@ mod tests {
         // No authored data: no extra rolling resistance at all.
         let bare = TyreSpec::default();
         assert_eq!(bare.rolling_resistance_n(30.0, 0.1, 17.0), 0.0);
+    }
+
+    #[test]
+    fn anti_dive_and_squat_are_bounded_fractions() {
+        let suspension = SuspensionSpec::default();
+        assert!(suspension.anti_dive_fraction > 0.0 && suspension.anti_dive_fraction <= 1.0);
+        assert!(suspension.anti_squat_fraction > 0.0 && suspension.anti_squat_fraction <= 1.0);
+        // Both can be turned off for a car that transfers everything through
+        // the springs, and both can be authored.
+        let off = SuspensionSpec {
+            anti_dive_fraction: 0.0,
+            anti_squat_fraction: 0.0,
+            ..SuspensionSpec::default()
+        };
+        assert_eq!(off.anti_dive_fraction, 0.0);
+        assert_eq!(off.anti_squat_fraction, 0.0);
     }
 
     #[test]

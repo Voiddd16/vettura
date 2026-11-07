@@ -112,6 +112,11 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
                 // A mod that publishes the roll centre uses it; the default
                 // stays at the typical double-wishbone value.
                 roll_center_height_m: axle.roll_center.unwrap_or(0.05).clamp(-0.1, 0.3),
+                // Anti-dive / anti-squat are the links' geometry. AC does not
+                // publish them, so a mod can override them here; the defaults
+                // stay at typical road-car values.
+                anti_dive_fraction: axle.anti_dive.unwrap_or(0.15).clamp(0.0, 1.0),
+                anti_squat_fraction: axle.anti_squat.unwrap_or(0.10).clamp(0.0, 1.0),
                 fast_bump_damper_ns_per_m: axle.fast_bump.unwrap_or(0.0).clamp(0.0, 500_000.0),
                 fast_bump_threshold_mps: axle.fast_bump_threshold.unwrap_or(0.0).clamp(0.0, 5.0),
                 fast_rebound_damper_ns_per_m: axle
@@ -886,6 +891,8 @@ struct AxleData {
     bump_stop_rate: Option<f32>,
     static_camber: Option<f32>,
     roll_center: Option<f32>,
+    anti_dive: Option<f32>,
+    anti_squat: Option<f32>,
     fast_bump: Option<f32>,
     fast_bump_threshold: Option<f32>,
     fast_rebound: Option<f32>,
@@ -914,9 +921,9 @@ impl AxleData {
             bump_stop_rate: suspensions.get_f32(axle, "BUMP_STOP_RATE"),
             static_camber: suspensions.get_f32(axle, "STATIC_CAMBER"),
             // Optional; only some mods author the roll centre explicitly.
-            roll_center: suspensions
-                .get_f32(axle, "ROLL_CENTER")
-                .or_else(|| suspensions.get_f32("ARB", &format!("{axle}_ROLL_CENTER"))),
+            roll_center: suspensions.get_f32(axle, "ROLL_CENTER"),
+            anti_dive: suspensions.get_f32(axle, "ANTI_DIVE"),
+            anti_squat: suspensions.get_f32(axle, "ANTI_SQUAT"),
             // Two-rate dampers: the bleeder rate and the speed it kicks in.
             fast_bump: suspensions.get_f32(axle, "DAMP_FAST_BUMP"),
             fast_bump_threshold: suspensions.get_f32(axle, "DAMP_FAST_BUMPTHRESHOLD"),

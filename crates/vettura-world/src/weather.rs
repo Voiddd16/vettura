@@ -21,8 +21,14 @@ pub struct Weather {
     pub rain_intensity: f32,
     /// Air temperature, °C.
     pub air_temperature_c: f32,
-    /// Track-surface temperature, °C.
+    /// Track-surface temperature, °C. Evolves toward the sun equilibrium while
+    /// the world runs; set it directly for a fixed condition.
     pub track_temperature_c: f32,
+    /// Sun intensity, W/m². `0` is shade or a night session, and the road then
+    /// sits at the air temperature.
+    pub sun_w_m2: f32,
+    /// Time constant of the road's heat capacity, seconds.
+    pub track_time_constant_s: f32,
     /// Wind velocity in the physics frame, m/s. Use `+X` for a wind blowing to
     /// the right.
     pub wind: Vec3,
@@ -50,6 +56,10 @@ impl Weather {
             // weather still starts where the brake/tyre model expects.
             air_temperature_c: 32.0,
             track_temperature_c: 32.0,
+            // Bright but not tropical: a sunny afternoon. The road is slow to
+            // follow it, which is the whole point of the time constant.
+            sun_w_m2: 800.0,
+            track_time_constant_s: 1_800.0,
             wind: Vec3::ZERO,
             grip_scale: 1.0,
             air_density_kg_m3: 1.225,
@@ -87,6 +97,37 @@ impl Weather {
         self
     }
 
+    /// Sun intensity and the road's heat response, W/m² and seconds.
+    pub fn with_sun(mut self, sun_w_m2: f32, time_constant_s: f32) -> Self {
+        self.sun_w_m2 = if sun_w_m2.is_finite() {
+            sun_w_m2.clamp(0.0, 1_400.0)
+        } else {
+            0.0
+        };
+        self.track_time_constant_s = if time_constant_s.is_finite() {
+            time_constant_s.clamp(1.0, 3_600.0)
+        } else {
+            1_800.0
+        };
+        self
+    }
+
+    /// Temperature a sunny road settles at, °C.
+    ///
+    /// A wet road tracks the air almost exactly; a dry one absorbs the sun and
+    /// sits well above it, which is why the racing line is sticky on a hot
+    /// afternoon. Negative sun (never in practice) is ignored.
+    pub fn sun_equilibrium_temperature_c(&self) -> f32 {
+        let sun = if self.sun_w_m2.is_finite() {
+            self.sun_w_m2.clamp(0.0, 1_400.0)
+        } else {
+            0.0
+        };
+        // ~20 deg of excess at full sun on dry asphalt.
+        let dry = (1.0 - self.wetness.clamp(0.0, 1.0)).max(0.0);
+        self.air_temperature_c + sun * 0.025 * dry
+    }
+
     /// Temperature a component sitting in the open should relax toward, °C.
     ///
     /// Brakes and the engine exchange with the *air*, while the tyres exchange
@@ -122,6 +163,9 @@ impl Weather {
         self.rain_intensity = finite_clamp(self.rain_intensity, 0.0, 1.0, 0.0);
         self.air_temperature_c = finite_clamp(self.air_temperature_c, -60.0, 70.0, 22.0);
         self.track_temperature_c = finite_clamp(self.track_temperature_c, -60.0, 120.0, 32.0);
+        self.sun_w_m2 = finite_clamp(self.sun_w_m2, 0.0, 1_400.0, 800.0);
+        self.track_time_constant_s =
+            finite_clamp(self.track_time_constant_s, 1.0, 3_600.0, 1_800.0);
         self.grip_scale = finite_clamp(self.grip_scale, 0.0, 4.0, 1.0);
         self.air_density_kg_m3 = finite_clamp(self.air_density_kg_m3, 0.0, 5.0, 1.225);
         self.fog_density = finite_clamp(self.fog_density, 0.0, 1.0, 0.0);
@@ -140,6 +184,8 @@ impl Weather {
             rain_intensity: m(from.rain_intensity, to.rain_intensity),
             air_temperature_c: m(from.air_temperature_c, to.air_temperature_c),
             track_temperature_c: m(from.track_temperature_c, to.track_temperature_c),
+            sun_w_m2: m(from.sun_w_m2, to.sun_w_m2),
+            track_time_constant_s: m(from.track_time_constant_s, to.track_time_constant_s),
             wind: from.wind.lerp(to.wind, t),
             grip_scale: m(from.grip_scale, to.grip_scale),
             air_density_kg_m3: m(from.air_density_kg_m3, to.air_density_kg_m3),

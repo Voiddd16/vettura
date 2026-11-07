@@ -256,6 +256,20 @@ E    使 3×峰值滑移处仍保留 FALLOFF_LEVEL 的抓地
   > 落在车外 5.9 m），因此没有从硬点反推侧倾中心；默认值 + 显式覆盖是
   > 更诚实的做法。
 
+### anti-dive / anti-squat 与赛道被阳光加热
+
+- **anti-dive / anti-squat**：Jolt 把轮胎的纵向力加在接地点，这是绕质心最长的
+  力臂（=最大俯仰）。真实车的轴把这个力的一部分在连杆几何里直接传给车身，
+  于是俯仰更小。现在前轴/后轴各按 `anti_dive_fraction` / `anti_squat_fraction`
+  施加绕自身横轴的修正力矩，默认 15%/10%（可 authored，0=旧行为）。
+- **阳光加热赛道（track temperature 演化）**：路面是大热质量。`Weather` 新增
+  `sun_w_m2` 与 `track_time_constant_s`，世界每步把
+  `weather.track_temperature_c` 按一阶滞后推向 `sun_equilibrium_temperature_c`
+  （= 气温 + 太阳强度×0.025×干燥度，晴天约 +20 °C，雨天回到气温，夜间无太阳）。
+  这个温度正是轮胎/刹车的松弛目标，所以链条是
+  **阳光 → 路面温度 → 轮胎温度/胎压 → 抓地**，圈与圈之间路面在变热，
+  而不是一个恒定数字。
+
 ### 回正力矩 / 气动尾流 / AC 滚动阻力 / 传动补全
 
 四个“手感+数据”短板：

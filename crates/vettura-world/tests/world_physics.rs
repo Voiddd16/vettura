@@ -2738,3 +2738,106 @@ fn ac_steer_lock_and_ratio_set_the_wheel_lock() {
         "steer lock did not change the turning radius: {tight} vs {wide}"
     );
 }
+
+#[test]
+fn anti_dive_reduces_braking_pitch() {
+    // The same braking input on two identical cars; the anti-dive car must
+    // pitch less because its links take a share of the load transfer.
+    let run = |anti_dive: f32| -> f32 {
+        let mut spec = VehicleSpec::default();
+        for wheel in &mut spec.wheels {
+            wheel.suspension.anti_dive_fraction = anti_dive;
+        }
+        let mut world = World::new(SurfaceMap::new()).unwrap();
+        let car = world.add_vehicle(spec, Pose::default()).unwrap();
+        settle(&mut world, car);
+        world
+            .set_controls(
+                car,
+                Controls {
+                    throttle: 1.0,
+                    ..Controls::default()
+                },
+            )
+            .unwrap();
+        step(&mut world, 240 * 3);
+        let before = world.snapshot(car).unwrap().orientation;
+        let forward_before = before * Vec3::NEG_Z;
+        for _ in 0..120 {
+            world
+                .set_controls(
+                    car,
+                    Controls {
+                        brake: 0.8,
+                        ..Controls::default()
+                    },
+                )
+                .unwrap();
+            step(&mut world, 1);
+        }
+        let after = world.snapshot(car).unwrap();
+        // Nose-down pitch shows up as the nose dropping: the forward vector
+        // gains a downward component, so its angle to the horizontal grows.
+        let now = after.orientation * Vec3::NEG_Z;
+        // Absolute nose height relative to the start: nose-down pitch makes the
+        // forward vector point further below the horizontal.
+        (-now.y.min(forward_before.y)).abs() + (forward_before.y - now.y).abs()
+    };
+
+    let none = run(0.0);
+    let lots = run(0.6);
+    assert!(
+        lots < none - 1.0e-3,
+        "anti-dive did not reduce the pitch: {none} vs {lots}"
+    );
+}
+
+#[test]
+fn the_sun_heats_the_track_over_a_session() {
+    let mut world = World::new(SurfaceMap::new()).unwrap();
+    // A cold morning, a short time constant so the test can watch it happen.
+    let cold = Weather::dry()
+        .with_temperatures(10.0, 10.0)
+        .with_sun(900.0, 4.0);
+    world.set_weather(cold);
+    let start = world.track_temperature_c();
+    step(&mut world, 240 * 20);
+
+    let warm = world.track_temperature_c();
+    let equilibrium = cold.sun_equilibrium_temperature_c();
+    assert!(
+        warm > start + 5.0,
+        "the road did not heat: {start} → {warm}"
+    );
+    assert!(
+        (warm - equilibrium).abs() < 1.0,
+        "the road overshot the equilibrium: {warm} vs {equilibrium}"
+    );
+    // Equilibrium: air + ~22 deg of sun excess on dry asphalt.
+    assert!(equilibrium > 30.0, "{equilibrium}");
+
+    // Rain cools it straight back toward the air temperature.
+    let rainy = Weather::wet(1.0)
+        .with_temperatures(10.0, 10.0)
+        .with_sun(900.0, 4.0);
+    world.set_weather(rainy);
+    step(&mut world, 240 * 30);
+    assert!(
+        (world.track_temperature_c() - rainy.sun_equilibrium_temperature_c()).abs() < 1.0,
+        "a wet road did not track the air: {} vs {}",
+        world.track_temperature_c(),
+        rainy.sun_equilibrium_temperature_c()
+    );
+
+    // Night: no sun, the road sits at the air temperature.
+    let night = Weather::dry()
+        .with_temperatures(12.0, 30.0)
+        .with_sun(0.0, 2.0);
+    world.set_weather(night);
+    step(&mut world, 240 * 20);
+    assert!(
+        (world.track_temperature_c() - 12.0).abs() < 1.0,
+        "a shaded road did not cool to the air: {}",
+        world.track_temperature_c()
+    );
+}
