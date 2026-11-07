@@ -990,6 +990,12 @@ impl VehicleRuntime {
         };
         self.brake_temperatures_c = [self.spec.brakes.ambient_c.max(0.0); 4];
         self.brake_core_temperatures_c = self.brake_temperatures_c;
+        // The snapshot above resets the tyre fields to their defaults (0 °C);
+        // bring the rubber back to ambient so a reset car does not start frozen.
+        let ambient = self.spec.brakes.ambient_c.max(0.0);
+        self.tyre_temperatures_c = [ambient; 4];
+        self.tyre_surface_temperatures_c = [ambient; 4];
+        self.tyre_core_temperatures_c = [ambient; 4];
         self.previous_suspension_lengths = [0.0; 4];
         self.suspension_force_n = [0.0; 4];
         self.active_suspension_force_n = [0.0; 4];
@@ -1673,30 +1679,33 @@ impl VehicleRuntime {
                 let power_w = 0.5
                     * (wheel.longitudinal_force_n.abs() + wheel.lateral_force_n.abs())
                     * slip_speed;
-                if power_w.is_finite() && power_w > 0.0 {
-                    let heat = power_w * tyre.thermal.heat_share * step;
-                    let ambient = self.spec.brakes.ambient_c.max(0.0);
-                    // Three layers when the car authors them, one mass
-                    // otherwise (see `advance_tyre_temperatures`).
-                    let layered = advance_tyre_temperatures(
-                        &tyre.thermal,
-                        TyreTemperatures {
-                            surface: self.tyre_surface_temperatures_c[index],
-                            patch: self.tyre_temperatures_c[index],
-                            core: self.tyre_core_temperatures_c[index],
-                        },
-                        heat,
-                        speed_mps,
-                        ambient,
-                        step,
-                    );
-                    // The grip curve reads the patch: that is what comes up to
-                    // temperature over a lap, while the bulk stays cold.
-                    self.tyre_surface_temperatures_c[index] = layered.surface;
-                    self.tyre_temperatures_c[index] = layered.patch;
-                    self.tyre_core_temperatures_c[index] = layered.core;
-                    self.tyre_wear_j[index] += power_w * step;
-                }
+                let power_w = if power_w.is_finite() {
+                    power_w.max(0.0)
+                } else {
+                    0.0
+                };
+                let ambient = self.spec.brakes.ambient_c.max(0.0);
+                // Always integrate, even with no sliding: the layers have to
+                // exchange and cool while the tyre is doing nothing, otherwise
+                // a hot surface would stay hot forever after the sliding stops.
+                let layered = advance_tyre_temperatures(
+                    &tyre.thermal,
+                    TyreTemperatures {
+                        surface: self.tyre_surface_temperatures_c[index],
+                        patch: self.tyre_temperatures_c[index],
+                        core: self.tyre_core_temperatures_c[index],
+                    },
+                    power_w * tyre.thermal.heat_share * step,
+                    speed_mps,
+                    ambient,
+                    step,
+                );
+                // The grip curve reads the patch: that is what comes up to
+                // temperature over a lap, while the bulk stays cold.
+                self.tyre_surface_temperatures_c[index] = layered.surface;
+                self.tyre_temperatures_c[index] = layered.patch;
+                self.tyre_core_temperatures_c[index] = layered.core;
+                self.tyre_wear_j[index] += power_w * step;
             }
 
             // The water film: it builds up from the standing water the tread
@@ -1724,11 +1733,19 @@ impl VehicleRuntime {
                 .store(self.water_film_mm[index].to_bits(), Ordering::Relaxed);
             // Water carries tyre heat away, which is the main reason a wet
             // lap does not overheat the tyres: a film of a few millimetres
-            // raises the convective loss by an order of magnitude over air.
-            let cooling = (self.water_film_mm[index] * step * 0.5).min(step * 40.0);
-            if cooling > 0.0 {
-                self.tyre_temperatures_c[index] =
-                    (self.tyre_temperatures_c[index] - cooling).max(0.0);
+            // raises the convective loss by an order of magnitude over air. It
+            // acts on the friction surface, so in a layered tyre that is where
+            // the heat leaves.
+            let water_cooling_c = (self.water_film_mm[index] * step * 0.5).min(step * 40.0);
+            if water_cooling_c > 0.0 {
+                // The friction surface loses it first, then the patch the grip
+                // curve reads; the bulk core is barely touched in one step.
+                let surface = (self.tyre_surface_temperatures_c[index] - water_cooling_c).max(0.0);
+                let lost_from_surface =
+                    (self.tyre_surface_temperatures_c[index] - surface).max(0.0);
+                self.tyre_surface_temperatures_c[index] = surface;
+                let patch = (self.tyre_temperatures_c[index] - lost_from_surface * 0.5).max(0.0);
+                self.tyre_temperatures_c[index] = patch;
             }
 
             // The grip callback reads one multiplier per wheel.
@@ -2211,8 +2228,10 @@ fn chassis_half_extents(spec: &VehicleSpec) -> (f32, f32, f32) {
 ///
 /// The geometry and the wheel settings are both built once, so the cold
 /// pressure is what they use; the warm-rate variation is a runtime effect the
-/// immutable Jolt settings cannot follow.
-fn wheel_vertical_rate(spec: &VehicleSpec, _index: usize) -> f32 {
+/// immutable Jolt settings cannot follow. AC quotes the rate per axle; the
+/// shared tyre model keeps the axle average, so every wheel sees the same
+/// number.
+fn wheel_vertical_rate(spec: &VehicleSpec) -> f32 {
     spec.tyres
         .vertical_rate_n_per_m(spec.tyres.pressure_at(spec.brakes.ambient_c))
         .max(0.0)
@@ -2249,7 +2268,7 @@ fn wheel_geometries(spec: &VehicleSpec) -> [WheelGeometry; 4] {
         // suspension spring, which is what Jolt models on its own.
         let spring = series_spring_rate(
             wheel_spec.suspension.spring_rate_n_per_m.max(1_000.0),
-            wheel_vertical_rate(spec, index),
+            wheel_vertical_rate(spec),
         );
         let static_compression = (spring_force_scale / spring).clamp(0.001, travel * 0.45);
         let max_length = (static_compression + travel * 0.5).max(0.02);
