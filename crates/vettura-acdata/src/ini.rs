@@ -77,11 +77,15 @@ impl Ini {
     }
 
     pub fn get_i32(&self, section: &str, key: &str) -> Option<i32> {
-        self.get(section, key)?.parse().ok()
+        parse_number(self.get(section, key)?)?.parse().ok()
     }
 
     pub fn get_bool(&self, section: &str, key: &str) -> Option<bool> {
-        match self.get(section, key)?.trim().to_ascii_lowercase().as_str() {
+        match parse_number(self.get(section, key)?)?
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "1" | "true" | "yes" | "on" => Some(true),
             "0" | "false" | "no" | "off" => Some(false),
             _ => None,
@@ -103,7 +107,30 @@ impl IniSection {
 }
 
 fn parse_f32(value: &str) -> Option<f32> {
-    value.trim().parse().ok()
+    parse_number(value)?.parse().ok()
+}
+
+/// Strip an AC inline comment from a value, returning the bare number.
+///
+/// Real car data is full of `SPRING_RATE=120000 ; hard springs` and
+/// `LIMITER=19000 ; no limiter`; [`Ini::get`] keeps the raw text, but every
+/// numeric accessor must ignore the comment or the field silently falls back
+/// to its default.
+pub fn strip_comment(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let end = value
+        .find(';')
+        .into_iter()
+        .chain(value.find('#'))
+        .chain(value.find("//"))
+        .min()
+        .unwrap_or(value.len());
+    let number = value[..end].trim();
+    (!number.is_empty()).then_some(number)
+}
+
+fn parse_number(value: &str) -> Option<&str> {
+    strip_comment(value)
 }
 
 #[cfg(test)]
@@ -130,5 +157,28 @@ LIMITER = 18000 ; inline comment stays in the value
             Some("18000 ; inline comment stays in the value")
         );
         assert!(ini.section("missing").is_none());
+    }
+
+    #[test]
+    fn numeric_accessors_ignore_inline_comments() {
+        let ini = Ini::parse(
+            r#"
+[ENGINE_DATA]
+LIMITER=19000 ; no limiter
+MINIMUM = 2350		# idle
+[TURBO_0]
+MAX_BOOST=0.5 // bar
+ENABLED=1
+"#,
+        );
+        assert_eq!(ini.get_f32("ENGINE_DATA", "LIMITER"), Some(19_000.0));
+        assert_eq!(ini.get_i32("ENGINE_DATA", "MINIMUM"), Some(2_350));
+        assert_eq!(ini.get_f32("TURBO_0", "MAX_BOOST"), Some(0.5));
+        assert_eq!(ini.get_bool("TURBO_0", "ENABLED"), Some(true));
+        // `get` itself stays raw so textual fields keep their comment.
+        assert_eq!(
+            ini.get("ENGINE_DATA", "LIMITER"),
+            Some("19000 ; no limiter")
+        );
     }
 }
