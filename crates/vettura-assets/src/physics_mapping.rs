@@ -223,6 +223,21 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
             .get_f32("GEARBOX", "INERTIA")
             .filter(|value| value.is_finite() && *value > 0.0)
             .unwrap_or(spec.gearbox.inertia),
+        // AC writes the reverse ratio negative (it is a direction); the spec
+        // stores its magnitude and the backend applies the sign.
+        reverse_ratio: drivetrain
+            .get_f32("GEARS", "GEAR_R")
+            .filter(|value| value.is_finite() && value.abs() > 0.0)
+            .map(|value| value.abs())
+            .unwrap_or(spec.gearbox.reverse_ratio),
+        auto_cutoff_time: drivetrain
+            .get_f32("GEARBOX", "AUTO_CUTOFF_TIME")
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .unwrap_or(spec.gearbox.auto_cutoff_time),
+        handbrake_torque_nm: brakes
+            .get_f32("DATA", "HANDBRAKE_TORQUE")
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .unwrap_or(spec.gearbox.handbrake_torque_nm),
     };
 
     spec.tyres = TyreSpec {
@@ -247,6 +262,12 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
         lateral_load_sensitivity: tyre_axis_average(&tyres, "LS_EXPY"),
         longitudinal_load_sensitivity: tyre_axis_average(&tyres, "LS_EXPX"),
         relaxation_length_m: tyre_axis_average(&tyres, "RELAXATION_LENGTH"),
+        // Rolling resistance: the constant term, its speed-squared part and the
+        // slip-squared part, all scaled by how much pressure the tyre runs.
+        rolling_resistance_n: tyre_axis_average(&tyres, "ROLLING_RESISTANCE_0"),
+        rolling_resistance_v2: tyre_axis_average(&tyres, "ROLLING_RESISTANCE_1"),
+        rolling_resistance_slip: tyre_axis_average(&tyres, "ROLLING_RESISTANCE_SLIP"),
+        pressure_rr_gain: tyre_axis_average(&tyres, "PRESSURE_RR_GAIN"),
         // The tyre's own vertical stiffness, and how much stiffer it gets per
         // psi, turn the wheel into a series spring.
         spring_rate_n_per_m: tyre_axis_average(&tyres, "RATE"),

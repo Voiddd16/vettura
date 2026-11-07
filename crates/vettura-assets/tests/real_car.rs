@@ -147,6 +147,22 @@ fn real_f1_car_maps_engine_curve_and_inline_comments() {
     assert!((spec.tyres.longitudinal_load_sensitivity - 0.935).abs() < 1e-3);
     assert!((spec.tyres.relaxation_length_m - 0.104_395).abs() < 1e-3);
 
+    // Rolling resistance and the pneumatic trail: AC authors the former, and
+    // the trail is what makes the steering feel connected.
+    assert!(spec.tyres.rolling_resistance_n > 5.0);
+    assert!(spec.tyres.rolling_resistance_v2 > 0.0);
+    assert!(spec.tyres.rolling_resistance_slip > 0.0);
+    assert!(spec.tyres.pneumatic_trail_m > 0.0);
+
+    // Drivetrain completeness: reverse ratio, upshift fuel cut-off, handbrake.
+    assert!(
+        (spec.gearbox.reverse_ratio - 4.0).abs() < 1e-6,
+        "{:?}",
+        spec.gearbox.reverse_ratio
+    );
+    assert!((spec.gearbox.auto_cutoff_time - 10.0).abs() < 1e-6);
+    assert_eq!(spec.gearbox.handbrake_torque_nm, 0.0);
+
     // Brake rotor core: AC's `CORE_TRANSFER_*` rates, which is the heat soak
     // that keeps the pads cooking after the driver lifts off.
     assert!((spec.brakes.core_transfer_in_per_s - 0.095).abs() < 1e-6);

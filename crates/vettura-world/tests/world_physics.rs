@@ -340,6 +340,8 @@ fn aero_car() -> VehicleSpec {
             wings: Vec::new(),
             side_force_coeff: 0.0,
             center_of_pressure_m: 0.6,
+            dirty_air_loss: 0.0,
+            dirty_air_distance_m: 25.0,
         },
         ..VehicleSpec::default()
     }
@@ -2454,4 +2456,164 @@ fn a_cold_tyre_holds_less_air_than_a_warm_one() {
     let warm = spec.tyres.pressure_at(spec.tyres.thermal.optimal_c);
     assert!(cold < warm, "{cold} vs {warm}");
     assert!(cold > 0.0, "pressure stayed positive below zero: {cold}");
+}
+
+#[test]
+fn a_following_car_loses_downforce_in_the_wake() {
+    // Two identical cars, one ahead of the other: the follower must sit lower
+    // (less aerodynamic load) than it does in clean air.
+    let exposure = |gap_m: f32| -> f32 {
+        // A car with real downforce, so the wake has something to take away.
+        let spec = VehicleSpec {
+            aero: vettura_physics::AeroSpec {
+                downforce_coeff: 6.0,
+                front_bias: 0.4,
+                ride_height_fade: 0.25,
+                dirty_air_loss: 0.35,
+                dirty_air_distance_m: 25.0,
+                side_force_coeff: 0.0,
+                center_of_pressure_m: 0.6,
+                wings: Vec::new(),
+            },
+            ..VehicleSpec::default()
+        };
+        let mut world = World::new(SurfaceMap::new()).unwrap();
+        let leader = world.add_vehicle(spec.clone(), Pose::default()).unwrap();
+        let follower = world
+            .add_vehicle(
+                spec,
+                Pose {
+                    position: Vec3::new(0.0, 0.0, gap_m),
+                    ..Pose::default()
+                },
+            )
+            .unwrap();
+        settle(&mut world, leader);
+        settle(&mut world, follower);
+        world
+            .set_controls(
+                leader,
+                Controls {
+                    throttle: 1.0,
+                    ..Controls::default()
+                },
+            )
+            .unwrap();
+        world
+            .set_controls(
+                follower,
+                Controls {
+                    throttle: 1.0,
+                    ..Controls::default()
+                },
+            )
+            .unwrap();
+        step(&mut world, 240 * 2);
+        let snapshot = world.snapshot(follower).unwrap();
+        snapshot
+            .wheels
+            .iter()
+            .map(|wheel| wheel.suspension_length_m)
+            .sum::<f32>()
+            / 4.0
+    };
+
+    // 3 m behind the leader: deep in the wake. 200 m: clean air.
+    let in_traffic = exposure(6.0);
+    let clean = exposure(200.0);
+    assert!(
+        in_traffic > clean,
+        "the follower lost load in the wake: {in_traffic} vs {clean}"
+    );
+}
+
+#[test]
+fn a_steered_tyre_pushes_back_on_the_chassis() {
+    // The pneumatic trail is what makes the steering feel connected: with it on,
+    // a cornering car builds a yaw moment from the tyre forces alone. The
+    // observable proxy is that the same steering input produces a different
+    // (quieter) yaw response than without the trail.
+    let run = |trail: f32| -> f32 {
+        let spec = VehicleSpec {
+            tyres: TyreSpec {
+                pneumatic_trail_m: trail,
+                ..TyreSpec::default()
+            },
+            ..VehicleSpec::default()
+        };
+        let mut world = World::new(SurfaceMap::new()).unwrap();
+        let car = world.add_vehicle(spec, Pose::default()).unwrap();
+        settle(&mut world, car);
+        world
+            .set_controls(
+                car,
+                Controls {
+                    throttle: 1.0,
+                    ..Controls::default()
+                },
+            )
+            .unwrap();
+        step(&mut world, 240 * 3);
+        for _ in 0..120 {
+            world
+                .set_controls(
+                    car,
+                    Controls {
+                        throttle: 0.4,
+                        steering: 0.6,
+                        ..Controls::default()
+                    },
+                )
+                .unwrap();
+            step(&mut world, 1);
+        }
+        let snapshot = world.snapshot(car).unwrap();
+        let up = snapshot.orientation * Vec3::Y;
+        snapshot.angular_velocity.dot(up).abs()
+    };
+
+    let with_trail = run(0.04);
+    let without = run(0.0);
+    assert!(
+        (with_trail - without).abs() > 1.0e-3,
+        "the pneumatic trail made no difference: {with_trail} vs {without}"
+    );
+}
+
+#[test]
+fn ac_rolling_resistance_slows_a_coasting_car() {
+    let run = |tyre_rr: f32| -> f32 {
+        let spec = VehicleSpec {
+            tyres: TyreSpec {
+                rolling_resistance_n: tyre_rr,
+                ..TyreSpec::default()
+            },
+            ..VehicleSpec::default()
+        };
+        let mut world = World::new(SurfaceMap::new()).unwrap();
+        let car = world.add_vehicle(spec, Pose::default()).unwrap();
+        settle(&mut world, car);
+        world
+            .set_controls(
+                car,
+                Controls {
+                    throttle: 1.0,
+                    ..Controls::default()
+                },
+            )
+            .unwrap();
+        step(&mut world, 240 * 3);
+        world.set_controls(car, Controls::default()).unwrap();
+        let before = world.snapshot(car).unwrap().speed_mps;
+        step(&mut world, 240 * 3);
+        let after = world.snapshot(car).unwrap().speed_mps;
+        before - after
+    };
+
+    let bare = run(0.0);
+    let rubber = run(30.0);
+    assert!(
+        rubber > bare + 0.2,
+        "tyre rolling resistance did not slow the car: {bare} vs {rubber}"
+    );
 }

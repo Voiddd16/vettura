@@ -1043,6 +1043,21 @@ pub struct TyreSpec {
     /// Amplitude of the once-per-revolution chassis kick a flat spot produces,
     /// as a fraction of the wheel's vertical load.
     pub flat_spot_vibration_gain: f32,
+    /// Distance behind the contact patch centre where the lateral force acts,
+    /// metres. This is the pneumatic trail that produces the self-aligning
+    /// torque: it is what makes a real steering wheel fight back and centre
+    /// itself. `0` disables the torque.
+    pub pneumatic_trail_m: f32,
+    /// Rolling resistance, constant term, N. AC's `ROLLING_RESISTANCE_0`.
+    pub rolling_resistance_n: f32,
+    /// Rolling resistance, per (m/s)², N/(m/s)². AC's `ROLLING_RESISTANCE_1`.
+    pub rolling_resistance_v2: f32,
+    /// Rolling resistance per square radian of slip, N/rad². AC's
+    /// `ROLLING_RESISTANCE_SLIP`.
+    pub rolling_resistance_slip: f32,
+    /// Extra rolling resistance per psi above cold, fraction. AC's
+    /// `PRESSURE_RR_GAIN`.
+    pub pressure_rr_gain: f32,
 }
 
 impl Default for TyreSpec {
@@ -1071,6 +1086,16 @@ impl Default for TyreSpec {
             flat_spot_capacity_j: 25_000.0,
             flat_spot_grip_loss: 0.3,
             flat_spot_vibration_gain: 0.06,
+            // ~20 % of a racing contact patch length: enough for the wheel to
+            // feel connected at speed, not enough to fight the driver.
+            pneumatic_trail_m: 0.035,
+            // AC's rolling resistance is opt-in through `tyres.ini`; without
+            // it the per-surface coefficient the world already had is the whole
+            // model.
+            rolling_resistance_n: 0.0,
+            rolling_resistance_v2: 0.0,
+            rolling_resistance_slip: 0.0,
+            pressure_rr_gain: 0.0,
         }
     }
 }
@@ -1276,6 +1301,49 @@ impl TyreSpec {
     /// Slip energy needed to wear a tyre out, joules.
     pub fn wear_capacity_j(&self) -> f32 {
         self.wear.energy_capacity_j.max(1.0)
+    }
+
+    /// Self-aligning torque for one wheel, N·m.
+    ///
+    /// The lateral force acts `pneumatic_trail_m` behind the contact patch
+    /// centre, so it produces a moment about the wheel's own vertical axis that
+    /// always rotates the wheel back towards the direction of travel. Signed so
+    /// that it opposes the steer the way a real steering wheel does.
+    pub fn aligning_torque_nm(&self, lateral_force_n: f32) -> f32 {
+        if self.pneumatic_trail_m <= 0.0 || !lateral_force_n.is_finite() {
+            return 0.0;
+        }
+        (-lateral_force_n * self.pneumatic_trail_m).clamp(-2_000.0, 2_000.0)
+    }
+
+    /// Rolling resistance force of one wheel, N.
+    ///
+    /// AC's model is three terms: a constant, one that grows with the square of
+    /// the road speed, and one that grows with the square of the slip. Pressure
+    /// above the cold value adds a fractional amount, which is why a hot tyre
+    /// rolls slightly harder.
+    pub fn rolling_resistance_n(&self, speed_mps: f32, slip_rad: f32, pressure_psi: f32) -> f32 {
+        let constant = self.rolling_resistance_n.max(0.0);
+        let speed = if speed_mps.is_finite() {
+            speed_mps.abs().min(120.0)
+        } else {
+            0.0
+        };
+        let slip = if slip_rad.is_finite() {
+            slip_rad.abs().min(2.0)
+        } else {
+            0.0
+        };
+        let pressure = if pressure_psi.is_finite() {
+            (pressure_psi - self.cold_pressure_psi).clamp(-10.0, 40.0)
+        } else {
+            0.0
+        };
+        let gain = (1.0 + self.pressure_rr_gain.clamp(0.0, 1.0) * pressure.max(0.0)).max(0.0);
+        let force = constant
+            + self.rolling_resistance_v2.max(0.0) * speed * speed
+            + self.rolling_resistance_slip.max(0.0) * slip * slip;
+        (force * gain).clamp(0.0, 5_000.0)
     }
 
     /// Vertical rate of this tyre at a given inflation pressure, N/m.
@@ -1530,6 +1598,11 @@ pub struct AeroSpec {
     pub center_of_pressure_m: f32,
     /// Per-surface data from `aero.ini`, empty for hand-authored specs.
     pub wings: Vec<WingSpec>,
+    /// Downforce lost directly behind another car, `0..=1`. `0` disables the
+    /// wake model, which is the case for hand-authored specs.
+    pub dirty_air_loss: f32,
+    /// Distance at which the wake stops mattering, metres.
+    pub dirty_air_distance_m: f32,
 }
 
 impl Default for AeroSpec {
@@ -1541,6 +1614,10 @@ impl Default for AeroSpec {
             side_force_coeff: 0.0,
             center_of_pressure_m: 0.6,
             wings: Vec::new(),
+            // Off until the car authors it; a real aero map loses a real
+            // fraction of its load in traffic.
+            dirty_air_loss: 0.0,
+            dirty_air_distance_m: 25.0,
         }
     }
 }
@@ -1572,6 +1649,22 @@ impl AeroSpec {
         let magnitude =
             0.5 * air_density_kg_m3 * self.side_force_coeff.max(0.0) * speed_sq * smoothing;
         (-magnitude * sine).clamp(-50_000.0, 50_000.0)
+    }
+
+    /// Downforce multiplier from sitting in another car's wake, `0..=1`.
+    ///
+    /// `exposure` is how far behind the car ahead this one is, in car lengths:
+    /// `0` when there is no car ahead and `1` when it is right on the gearbox.
+    /// The loss peaks immediately behind the car and fades over
+    /// `dirty_air_distance_m`, which is why following is hard and why the
+    /// second car in a train often carries more speed into a corner.
+    pub fn dirty_air_multiplier(&self, exposure: f32) -> f32 {
+        let exposure = if exposure.is_finite() {
+            exposure.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (1.0 - self.dirty_air_loss.clamp(0.0, 1.0) * exposure).clamp(0.0, 1.0)
     }
 
     /// Yaw moment the side force produces at `center_of_pressure_m`, N·m.
@@ -1689,6 +1782,14 @@ pub struct GearboxSpec {
     pub clutch_max_torque_nm: f32,
     /// Rotational inertia of the gearbox internals, kg·m².
     pub inertia: f32,
+    /// Reverse gear ratio (positive; the sign is applied by the backend).
+    /// AC's `GEAR_R`; `0` falls back to the default reverse ratio.
+    pub reverse_ratio: f32,
+    /// Time the fuel is cut during an upshift, seconds. AC's
+    /// `AUTO_CUTOFF_TIME`; `0` disables the cut-off in backends that model it.
+    pub auto_cutoff_time: f32,
+    /// Handbrake torque at one rear wheel, N·m. AC's `HANDBRAKE_TORQUE`.
+    pub handbrake_torque_nm: f32,
 }
 
 impl Default for GearboxSpec {
@@ -1701,6 +1802,9 @@ impl Default for GearboxSpec {
             rev_match_rpm: 1_200.0,
             clutch_max_torque_nm: 1_150.0,
             inertia: 0.012,
+            reverse_ratio: 0.0,
+            auto_cutoff_time: 0.0,
+            handbrake_torque_nm: 0.0,
         }
     }
 }
@@ -2558,6 +2662,65 @@ mod tests {
         assert!((tyre.vertical_rate_n_per_m(27.0) - 401_020.0).abs() < 1.0);
         // No authored rate: no vertical stiffness from the tyre at all.
         assert_eq!(TyreSpec::default().vertical_rate_n_per_m(29.0), 0.0);
+    }
+
+    #[test]
+    fn aligning_torque_and_rolling_resistance_come_from_the_tyre_data() {
+        let tyre = TyreSpec {
+            pneumatic_trail_m: 0.035,
+            rolling_resistance_n: 8.0,
+            rolling_resistance_v2: 5.0e-4,
+            rolling_resistance_slip: 40.0,
+            pressure_rr_gain: 0.45,
+            cold_pressure_psi: 17.0,
+            ..TyreSpec::default()
+        };
+        // The torque always opposes the lateral force: a tyre running left
+        // twists the wheel back towards travel.
+        let force = tyre.aligning_torque_nm(1_000.0);
+        assert!((force + 35.0).abs() < 1e-4, "{force}");
+        assert!((tyre.aligning_torque_nm(-1_000.0) - 35.0).abs() < 1e-4);
+        // No trail, no torque; nonsense stays harmless.
+        let no_trail = TyreSpec {
+            pneumatic_trail_m: 0.0,
+            ..tyre.clone()
+        };
+        assert_eq!(no_trail.aligning_torque_nm(1_000.0), 0.0);
+        assert_eq!(tyre.aligning_torque_nm(f32::NAN), 0.0);
+
+        // Rolling resistance: the three AC terms, and pressure only ever adds.
+        let cold = tyre.rolling_resistance_n(30.0, 0.1, 17.0);
+        let hot = tyre.rolling_resistance_n(30.0, 0.1, 30.0);
+        assert!(
+            (cold - (8.0 + 5.0e-4 * 900.0 + 40.0 * 0.01)).abs() < 1e-3,
+            "{cold}"
+        );
+        assert!(hot > cold, "{hot} vs {cold}");
+        // Speed and scrub both cost rubber.
+        assert!(tyre.rolling_resistance_n(60.0, 0.1, 17.0) > cold);
+        assert!(tyre.rolling_resistance_n(30.0, 0.5, 17.0) > cold);
+        // No authored data: no extra rolling resistance at all.
+        let bare = TyreSpec::default();
+        assert_eq!(bare.rolling_resistance_n(30.0, 0.1, 17.0), 0.0);
+    }
+
+    #[test]
+    fn dirty_air_costs_downforce_only_directly_behind_a_car() {
+        let aero = AeroSpec {
+            dirty_air_loss: 0.3,
+            dirty_air_distance_m: 20.0,
+            ..AeroSpec::default()
+        };
+        // Clean air: nothing lost.
+        assert_eq!(aero.dirty_air_multiplier(0.0), 1.0);
+        // Right on the gearbox: the full authored loss.
+        assert!((aero.dirty_air_multiplier(1.0) - 0.7).abs() < 1e-6);
+        // Half a car length back: half the loss.
+        assert!((aero.dirty_air_multiplier(0.5) - 0.85).abs() < 1e-6);
+        // A car that does not author it is unaffected in traffic.
+        assert_eq!(AeroSpec::default().dirty_air_multiplier(1.0), 1.0);
+        // Nonsense reads as clean air.
+        assert_eq!(aero.dirty_air_multiplier(f32::NAN), 1.0);
     }
 
     #[test]

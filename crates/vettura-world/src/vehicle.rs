@@ -1395,6 +1395,20 @@ impl VehicleRuntime {
                     let contact = self.snapshot.wheels[index].contact_point;
                     body.add_force_at_point(p2j(outward * camber_force), p2j_r(contact))?;
                 }
+                // Self-aligning torque: the lateral force acts a pneumatic
+                // trail behind the contact patch, so it twists the wheel back
+                // towards the direction of travel. This is what makes the
+                // steering feel connected and what helps a fast car hold its
+                // line without driver input.
+                let aligning = self
+                    .spec
+                    .tyres
+                    .aligning_torque_nm(self.snapshot.wheels[index].lateral_force_n);
+                if aligning.abs() > 1.0e-3 {
+                    let steer_angle = self.snapshot.wheels[index].steer_angle;
+                    let wheel_up = orientation * Quat::from_rotation_y(-steer_angle) * Vec3::Y;
+                    body.add_torque(p2j(wheel_up * aligning))?;
+                }
             }
             for (axle, wheels) in [
                 [Wheel::FrontLeft, Wheel::FrontRight],
@@ -1478,8 +1492,13 @@ impl VehicleRuntime {
         weather: &Weather,
         linear: Vec3,
         relative_air: Vec3,
+        dirty_air_exposure: f32,
     ) -> WorldResult<()> {
         let spec = &self.spec;
+        // Sitting in another car's wake costs downforce, exactly as in real
+        // racing: the car ahead has already taken the energy out of the air, so
+        // the follower has less grip through fast corners.
+        let dirty_air = spec.aero.dirty_air_multiplier(dirty_air_exposure);
         let orientation = self.snapshot.orientation;
         let down = orientation * Vec3::NEG_Y;
         let center = self.snapshot.position;
@@ -1521,7 +1540,7 @@ impl VehicleRuntime {
             } else {
                 spec.aero.downforce_coeff.max(0.0)
             };
-            let base = 0.5 * weather.air_density_kg_m3 * cl_area * speed_sq * smoothing;
+            let base = 0.5 * weather.air_density_kg_m3 * cl_area * speed_sq * smoothing * dirty_air;
 
             if base > 1.0e-3 {
                 let front = base * spec.aero.front_bias.clamp(0.0, 1.0);
@@ -1563,10 +1582,12 @@ impl VehicleRuntime {
 
                 let mut body = physics.body_mut(self.body)?;
                 if front > 1.0e-3 {
-                    body.add_force_at_point(p2j(down * front * front_fade), p2j_r(front_axle))?;
+                    let force = down * front * front_fade * dirty_air;
+                    body.add_force_at_point(p2j(force), p2j_r(front_axle))?;
                 }
                 if rear > 1.0e-3 {
-                    body.add_force_at_point(p2j(down * rear * rear_fade), p2j_r(rear_axle))?;
+                    let force = down * rear * rear_fade * dirty_air;
+                    body.add_force_at_point(p2j(force), p2j_r(rear_axle))?;
                 }
             }
         }
@@ -2137,19 +2158,42 @@ impl VehicleRuntime {
     }
 
     /// Average rolling-resistance coefficient of the wheels on the ground.
-    pub(crate) fn rolling_resistance(&self, weather: &Weather, surfaces: &SurfaceMap) -> f32 {
-        let mut sum = 0.0;
+    /// Rolling-resistance force of this car, N, opposing its own motion.
+    ///
+    /// Two terms: the per-surface coefficient the world has always had, and —
+    /// when the car authors it — the tyre's own rolling resistance from AC's
+    /// `tyres.ini`, which has a constant part, a speed-squared part and a
+    /// slip-squared part. The latter is what makes a car coast down and what
+    /// costs a little speed under braking.
+    pub(crate) fn rolling_resistance_force_n(
+        &self,
+        weather: &Weather,
+        surfaces: &SurfaceMap,
+    ) -> f32 {
+        let mut force = 0.0f32;
+        let mut coefficient_sum = 0.0f32;
         let mut count = 0u32;
-        for wheel in &self.snapshot.wheels {
+        for (index, wheel) in self.snapshot.wheels.iter().enumerate() {
             if !wheel.contact {
                 continue;
             }
             if let Some(properties) = surfaces.table().get(wheel.surface) {
-                sum += weather.rolling_resistance(properties, wheel.water_depth_m);
+                coefficient_sum += weather.rolling_resistance(properties, wheel.water_depth_m);
                 count += 1;
             }
+            // Tyre rolling resistance for this wheel. The slip term uses the
+            // slip angle, so a scrub cornering slowly also costs rubber.
+            let pressure = self.spec.tyres.pressure_at(self.tyre_temperatures_c[index]);
+            force += self.spec.tyres.rolling_resistance_n(
+                self.snapshot.speed_mps,
+                wheel.slip_angle,
+                pressure,
+            );
         }
-        if count == 0 { 0.0 } else { sum / count as f32 }
+        if count == 0 {
+            return force.max(0.0);
+        }
+        force + coefficient_sum / count as f32 * self.spec.mass_kg * 9.806_65
     }
 }
 
@@ -2382,8 +2426,12 @@ fn vehicle_settings(
                 0.0
             })
             .max_brake_torque(brake_torque.max(1.0))
+            // The handbrake only ever acts on the rear; AC can author its own
+            // torque, and without it we keep a share of the brake torque.
             .max_hand_brake_torque(if wheel.is_front() {
                 0.0
+            } else if spec.gearbox.handbrake_torque_nm > 0.0 {
+                spec.gearbox.handbrake_torque_nm / 2.0
             } else {
                 brake_torque * 0.7
             })
@@ -2406,6 +2454,13 @@ fn vehicle_settings(
     }
 
     let final_drive = spec.engine.final_drive.max(0.5);
+    // AC authors the reverse ratio in `GEARS GEAR_R`; the default keeps the
+    // long-standing value so hand-authored cars behave as before.
+    let reverse_ratio = if spec.gearbox.reverse_ratio > 0.0 {
+        spec.gearbox.reverse_ratio.clamp(0.5, 8.0)
+    } else {
+        3.2
+    };
     let differentials = match spec.drivetrain.layout {
         DrivetrainLayout::Rwd => vec![
             VehicleDifferentialSettings::new(Some(2), Some(3))
@@ -2459,7 +2514,7 @@ fn vehicle_settings(
     }
     let transmission = VehicleTransmissionSettings::default()
         .gear_ratios(gear_ratios)
-        .reverse_gear_ratios(vec![-3.2])
+        .reverse_gear_ratios(vec![-reverse_ratio])
         // `drivetrain.ini` reports shift and clutch times in milliseconds;
         // the clutch strength comes from the clutch torque capacity.
         .switch_time((spec.gearbox.switch_time * 0.001).clamp(0.01, 0.5))

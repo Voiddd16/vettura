@@ -1188,11 +1188,15 @@ impl World {
     fn apply_external_forces(&mut self, dt: f32) -> WorldResult<()> {
         let weather = self.weather;
         let surface_map = &self.surface_map;
+        // Dirty air: each car works out how far behind the car ahead it is, in
+        // units of the wake's reach, so its downforce can be cut while it sits
+        // in someone's wake. This is per-car physics, not a race rule.
         let Self {
             physics, vehicles, ..
         } = self;
+        let exposures = &dirty_air_exposures(vehicles)[..];
 
-        for vehicle in vehicles.iter_mut() {
+        for (vehicle, _drag_exposure) in vehicles.iter_mut().zip(exposures) {
             let linear = {
                 let body = physics.body(vehicle.body)?;
                 j2p(body.linear_velocity())
@@ -1217,10 +1221,10 @@ impl World {
                 * vehicle.drag_multiplier();
             let drag_force = -relative_air * drag_factor * air_speed;
 
-            let rolling = vehicle.rolling_resistance(&weather, surface_map);
+            let rolling = vehicle.rolling_resistance_force_n(&weather, surface_map);
             let horizontal_velocity = Vec3::new(linear.x, 0.0, linear.z);
-            let rolling_force = if horizontal_velocity.length() > 0.1 {
-                -horizontal_velocity.normalize() * rolling * vehicle.spec.mass_kg * 9.81
+            let rolling_force = if horizontal_velocity.length() > 0.1 && rolling > 0.0 {
+                -horizontal_velocity.normalize() * rolling
             } else {
                 Vec3::ZERO
             };
@@ -1240,10 +1244,10 @@ impl World {
 
         // Aero (per-axle downforce with ride-height fade) and the fuel load
         // inertia need the snapshot, so they are applied per vehicle.
-        for vehicle in vehicles.iter_mut() {
+        for (vehicle, exposure) in vehicles.iter_mut().zip(exposures) {
             let linear = vehicle.snapshot.linear_velocity;
             let relative_air = linear - weather.wind;
-            vehicle.apply_aero_forces(physics, &weather, linear, relative_air)?;
+            vehicle.apply_aero_forces(physics, &weather, linear, relative_air, *exposure)?;
             vehicle.apply_suspension_forces(physics, dt)?;
         }
 
@@ -1361,6 +1365,45 @@ impl World {
 
 const TAG_GROUND: u64 = 0xffff_ffff_0000_0001;
 const TAG_TRACK_OBJECT: u64 = 2 << 32;
+
+/// How far each car is behind the car ahead, as `0..=1` of the wake's reach.
+///
+/// Only a car travelling roughly the same way and ahead within the wake's
+/// reach counts: a car going the other way is not "ahead", and one more than a
+/// car length clear is out of the wake entirely. The falloff is quadratic
+/// because the wake is deepest right behind the car and thins fast.
+fn dirty_air_exposures(vehicles: &[VehicleRuntime]) -> Vec<f32> {
+    let mut exposures = vec![0.0f32; vehicles.len()];
+    for (index, vehicle) in vehicles.iter().enumerate() {
+        let spec = &vehicle.spec;
+        if spec.aero.dirty_air_loss <= 0.0 {
+            continue;
+        }
+        let reach = spec.aero.dirty_air_distance_m.max(1.0);
+        let mine = vehicle.snapshot.position;
+        let forward = vehicle.snapshot.orientation * Vec3::NEG_Z;
+        let mut best = f32::INFINITY;
+        for (other_index, other) in vehicles.iter().enumerate() {
+            if other_index == index {
+                continue;
+            }
+            let to_other = other.snapshot.position - mine;
+            let ahead = to_other.dot(forward);
+            if ahead <= 0.5 {
+                continue; // level or behind: not a wake source
+            }
+            let offset = (to_other - forward * ahead).length().max(0.0);
+            // A car alongside me is not in my wake; a car in front is.
+            let distance = (ahead + offset * 2.0).min(reach * 4.0);
+            best = best.min(distance);
+        }
+        if best.is_finite() {
+            let exposure = (1.0 - best / reach).clamp(0.0, 1.0);
+            exposures[index] = exposure * exposure;
+        }
+    }
+    exposures
+}
 
 fn tag_track_object(id: TrackObjectId) -> u64 {
     TAG_TRACK_OBJECT | (id.0 & 0xffff_ffff)
