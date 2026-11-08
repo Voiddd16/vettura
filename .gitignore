@@ -14,6 +14,7 @@ export_presets.cfg
 .fmod.env
 .cache/
 scripts/.venv/
+scripts/__pycache__/
 
 # macOS / 编辑器杂项
 .DS_Store

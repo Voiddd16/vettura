@@ -65,6 +65,7 @@ test/
 工程脚本放在 `scripts/`，用 Python + uv 管理；目前提供：
 
 - `scripts/fetch_fmod.py`：拉取 FMOD Engine SDK 2.02.22 并编译 mod bank 所需 DSP 插件
+- `scripts/pack_fmod.py`：把 FMOD 运行期动态库拷进 Godot 导出目录（发行包必需）
 
 用法见 [`scripts/README.md`](scripts/README.md)。
 
