@@ -15,7 +15,7 @@
 - ⚠️ 2.03 / 2.04 编的 bank → **不保证**能读。遇到老 mod 时先用 `scripts/fetch_fmod.py` 拉对应 SDK，再单独跑一次验证。
 
 FMOD 版本号必须由主工程 `scripts/fetch_fmod.py` 拉到本地缓存，不进本仓库，详见
-`/vettura/scripts/fetch_fmod.py` 与 `vettura-native/docs/build.md`。
+`/vettura/scripts/fetch_fmod.py` 与 `docs/build.md`。
 
 ## 本地拉取与链接
 
@@ -24,7 +24,6 @@ cd /path/to/vettura/scripts
 uv run fetch_fmod.py                 # 当前平台
 uv run fetch_fmod.py --all           # macOS / Windows / Linux
 
-cd /path/to/vettura-native
 cargo build -p vettura-godot --features fmod
 ```
 
@@ -88,7 +87,7 @@ AudioEngine::start()
 | `set_vehicle_parameters(event, rpm, throttle, load, speed, view)` | 常见名适配，故障容错 |
 | `parameter_names(event)` / `sound_event_names()` / `event_guid_by_name()` | 调试与 mod 适配 |
 
-最小探针见 `vettura-native/godot/fmod_probe.tscn`，它验证：
+最小探针见 `gdext/fmod_probe.tscn`，它验证：
 
 ```text
 [fmod] start= true
@@ -101,7 +100,7 @@ AudioEngine::start()
 
 ## 打包 / 发行：runtime 动态库必须一起发
 
-`vettura-native` 只**动态链接** FMOD，SDK 二进制不入库，所以发行包必须自带对应
+native 侧只**动态链接** FMOD，SDK 二进制不入库，所以发行包必须自带对应
 平台的 `fmod` / `fmodstudio`（以及老 AC/mod bank 依赖的 Distance Filter 插件）。
 用主工程脚本一键完成：
 

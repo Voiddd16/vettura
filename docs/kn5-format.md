@@ -234,4 +234,4 @@ F1 2008 试样里 50 张贴图中，`DXT5` 35 张、无 FourCC 的未压缩格�
 后果：严格加载器（例如 Godot 的 `Image::load_dds_from_buffer`）只要头部声明了
 mip 就要求完整链，否则整张贴图作废、返回空图（报 “Expected Image data size …
 got … instead”）。`vettura-kn5::strip_mip_levels()` 负责把头部改成“只有基础层”，
-`vettura-native` 的解码路径随后解压缩并重新生成 mip；详见 `docs/godot.md`。
+Rust 侧（`kn5/`）的解码路径随后解压缩并重新生成 mip；详见 `docs/godot.md`。

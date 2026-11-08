@@ -4,7 +4,7 @@ extends Node3D
 ## 用法（macOS，需先 `cargo build -p vettura-godot --features fmod`）：
 ##
 ##     /Applications/Godot.app/Contents/MacOS/Godot --headless --path .. \
-##         res://vettura-native/godot/fmod_probe.tscn
+##         res://gdext/fmod_probe.tscn
 ##
 ## 期望输出：
 ##     [fmod] start= true

@@ -2,7 +2,7 @@
 
 ## 总览
 
-`vettura-native` 是一个 Rust workspace，最终产物是一个 Godot 4 GDExtension
+Rust workspace 就在本 Godot 工程根目录，最终产物是一个 Godot 4 GDExtension
 动态库。核心数据格式和物理求解都与 Godot 解耦，CLI 工具可以直接复用。
 
 ```
@@ -12,7 +12,7 @@
 └──────────────▲───────────────┘
                │ GDExtension
 ┌──────────────┴───────────────┐
-│     vettura-native (cdylib)  │  Kn5File / AcCar / VehicleBody
+│   gdext/ (cdylib)          │  Kn5File / AcCar / VehicleBody
 └───────┬──────────────┬───────┘
         │              │
 ┌───────▼──────┐  ┌────▼──────────────┐
@@ -29,6 +29,22 @@
               │ chrono (C++/CMake)│
               └───────────────────┘
 ```
+
+## 目录与 crate 对应
+
+workspace 根就是 Godot 工程根，每个 crate 一个顶层目录：
+
+| 目录 | crate | 职责 |
+| --- | --- | --- |
+| `core/` | `vettura-core` | 单位、坐标系转换、共享错误 |
+| `kn5/` | `vettura-kn5` | KN5 网格 / 材质 / 贴图 |
+| `acdata/` | `vettura-acdata` | `data.acd`、INI、LUT |
+| `assets/` | `vettura-assets` | AC 车目录（前三者组合）+ 物理数据映射 |
+| `physics/` | `vettura-physics` | 车辆物理后端与 `VehicleSpec` |
+| `world/` | `vettura-world` | 多车世界、赛道、天气、AI |
+| `audio/` | `vettura-audio` | `sfx/GUIDs.txt` + FMOD runtime |
+| `gdext/` | `vettura-godot` | GDExtension 桥接层与 `.gdextension` |
+| `tools/` | `kn5-inspect` / `acd-inspect` | 命令行检查工具 |
 
 ## Crate 职责
 
@@ -85,7 +101,7 @@
 
 Chrono::Vehicle 的适配器，住在 `vettura-physics` 内的
 `src/backends/chrono/`，由 cargo feature `chrono` 门控，**默认关闭**。C++ 侧在
-`crates/vettura-physics/cpp/`：
+`physics/cpp/`：
 
 - `chrono_bridge.h`：C ABI 契约（POD + 不透明句柄 + status code）；
 - `vettura_vehicle_spec.cpp`：spec → Chrono JSON（Chrono 的 wheeled vehicle 是

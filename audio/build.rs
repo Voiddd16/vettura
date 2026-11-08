@@ -174,6 +174,9 @@ fn has_runtime_lib(dir: &Path) -> bool {
 }
 
 /// 只找运行期动态库目录（`scripts/fetch_fmod.py` 的 `.cache/fmod/runtime/<os>`）。
+///
+/// 合并后 workspace 根就是 Godot 工程根，`.cache/fmod` 是祖先目录，直接从
+/// `CARGO_MANIFEST_DIR` 向上找即可。
 fn locate_runtime() -> Option<PathBuf> {
     let host = target_os();
     let mut roots = vec![];
@@ -184,13 +187,6 @@ fn locate_runtime() -> Option<PathBuf> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     for ancestor in manifest.ancestors() {
         roots.push(ancestor.join(".cache").join("fmod").join("runtime"));
-        roots.push(
-            ancestor
-                .join("vettura")
-                .join(".cache")
-                .join("fmod")
-                .join("runtime"),
-        );
     }
 
     roots

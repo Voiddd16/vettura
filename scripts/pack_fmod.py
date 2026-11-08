@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """把 FMOD Engine 2.02.22 运行期动态库拷进 Godot 导出目录。
 
-发行版必须自带 FMOD runtime：`vettura-native` 只**动态链接** FMOD，SDK 二进制
+发行版必须自带 FMOD runtime：native 侧（`gdext/`）只**动态链接** FMOD，SDK 二进制
 不入库，所以打包时要把对应平台的 `fmod` / `fmodstudio`（以及 AC/mod 老 bank
 依赖的 Distance Filter DSP 插件）复制到可执行文件旁边。
 

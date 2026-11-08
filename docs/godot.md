@@ -9,19 +9,22 @@
 
 ## 构建
 
+Rust workspace 就在本 Godot 工程根目录（每个 crate 一个顶层目录，`gdext/` 是
+GDExtension 桥接层）：
+
 ```bash
-cd vettura-native
-cargo build -p vettura-native
+cargo build -p vettura-godot            # 产物 target/debug/libvettura_native.dylib
+cargo build -p vettura-godot --features fmod   # 接真机 FMOD 声音
 ```
 
 产物：
 
 ```
-vettura-native/target/debug/libvettura_native.dylib
+target/debug/libvettura_native.dylib
 ```
 
-`godot/vettura_native.gdextension` 已配置（注意 Rust 包名是 `vettura-godot`，
-目录名和库名才是 `vettura-native` / `libvettura_native`）：
+`gdext/vettura_native.gdextension` 已配置（注意 Rust 包名是 `vettura-godot`，
+目录名是 `gdext/`，库名是 `libvettura_native`）：
 
 ```ini
 [configuration]
@@ -30,45 +33,36 @@ compatibility_minimum = "4.7"
 reloadable = true
 
 [libraries]
-macos = "res://vettura-native/target/debug/libvettura_native.dylib"
-linux.x86_64 = "res://vettura-native/target/debug/libvettura_native.so"
-windows.x86_64 = "res://vettura-native/target/debug/vettura_native.dll"
+macos = "res://target/debug/libvettura_native.dylib"
+linux.x86_64 = "res://target/debug/libvettura_native.so"
+windows.x86_64 = "res://target/debug/vettura_native.dll"
 ```
 
-Godot 项目根目录是 `/Users/zhangziyi/Desktop/vettura`，因此
-`res://vettura-native/...` 能正确解析。Godot 4.3 起 macOS 平台按架构细分
+`.gdextension` 里的路径相对本工程根目录解析，workspace 根就是工程根，所以
+`res://target/...` 直接可用；Godot 4.3 起 macOS 平台按架构细分
 feature tag（`macos` / `macos.arm64` / `macos.x86_64`），所以几种写法都列了出来。
+`target/` 里有 `.gdignore`，Godot 的资源系统会整目录跳过，不会去导入构建产物。
 
-## 主项目接入（必做）
+## 主项目接入（已就位）
 
-`.gdextension` 里所有路径都是 `res://vettura-native/...`。因此 Godot 工程根目录下
-必须能看到一个名为 `vettura-native` 的目录，否则 Godot 会静默报
-“GDExtension dynamic library not found”。仓库里提供了一个脚本：
-
-```bash
-./scripts/link_into_godot.sh          # 默认指向 ../vettura
-./scripts/link_into_godot.sh /path/to/godot/project
-```
-
-它做一件事：在 Godot 工程根目录创建 `vettura-native -> <本仓库>` 的符号链接。之后：
+Rust 代码已经在工程里，不需要额外链接步骤：
 
 ```bash
 cargo build -p vettura-godot
-godot --headless --path /path/to/godot/project \
-    res://vettura-native/godot/baseline.tscn
+godot --headless --path . res://gdext/baseline.tscn
 ```
 
 `baseline.tscn` 是主项目接入冒烟：加载 Daytona `roadcourse`，从
 `cim_2008_ferrari` 生成真实规格车辆，全油门 20 秒，输出
 `[baseline] ... PASS` 并以退出码 `0` 结束。失败会 `push_error` + `quit(1)`。
 
-> Godot 首次打开带有 `res://vettura-native` 的工程时，若 `.godot/extension_list.cfg`
-> 里没有这一条，请在编辑器里重新导入一次工程让它生成；文件内容应至少包含：
-> `res://vettura-native/godot/vettura_native.gdextension`。
+> `.godot/extension_list.cfg` 记录已加载的扩展，内容应至少包含：
+> `res://gdext/vettura_native.gdextension`。改了 `.gdextension` 位置后在编辑器里
+> 重新打开一次工程即可。
 
 ## 编辑器代码提示与文档
 
-`vettura-native` 已经为 `godot` crate 启用了 `register-docs`：
+本 workspace 已经为 `godot` crate 启用了 `register-docs`：
 
 ```toml
 # 根 Cargo.toml
@@ -111,7 +105,7 @@ impl Kn5File {
 修改 Rust 文档注释后必须重新编译扩展，然后让 Godot 重新加载：
 
 ```bash
-cargo build -p vettura-native
+cargo build -p vettura-godot
 ```
 
 如果编辑器没有立即刷新脚本补全，可以重启 Godot，或用：
@@ -290,16 +284,16 @@ var car: VehicleBody = world.spawn_vehicle_from_path(
 
    ```bash
    godot --headless --path /path/to/godot/project \
-       res://vettura-native/godot/kn5_probe.tscn
+       res://gdext/kn5_probe.tscn
    ```
 
    期望输出（示例）：`mesh instances = 125 surfaces = 125`、
    `materials = 125 with albedo = 125 with normal = 121`、
    `WHEEL_LF -> (-0.70, 0.30, -1.53)`。
 
-2. **主项目接入**：`godot/baseline.tscn` 加载真实赛道 + 真实车，全油门 20 秒，
+2. **主项目接入**：`gdext/baseline.tscn` 加载真实赛道 + 真实车，全油门 20 秒，
    打印 `[baseline] ... PASS` 并以退出码 `0` 结束。见到 `[baseline] PASS`
-   就说明 `res://vettura-native` 路径、`.gdextension`、`WorldBody` / `VehicleBody`、
+   就说明 `.gdextension` 的 `res://target/...` 路径、`WorldBody` / `VehicleBody`、
    `AcCar → VehicleSpec`、Jolt step、轮子绑定这条链路都是通的。
 
 ## 注意事项
@@ -320,6 +314,5 @@ var car: VehicleBody = world.spawn_vehicle_from_path(
 - `cargo build -p vettura-godot` 失败时先确认 `godot` crate 的 `api-4-7`
   feature；
 - 扩展未加载时检查 `.gdextension` 路径和 dylib 是否存在；之前这里踩过一次坑：
-   crate 目录从 `vettura-native` 改名后 `.gdextension` 仍指向
-  `res://vettura-godot/...`，导致扩展静默不加载；
+  crate 目录改名后 `.gdextension` 仍指向旧路径，导致扩展静默不加载；
 - 可用 `godot --headless --path .. --editor --quit` 验证扩展注册。

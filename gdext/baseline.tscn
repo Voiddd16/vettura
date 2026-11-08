@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://cvetturacorebaseline"]
 
-[ext_resource type="Script" path="res://vettura-native/godot/baseline.gd" id="1_baseline"]
+[ext_resource type="Script" path="res://gdext/baseline.gd" id="1_baseline"]
 
 [node name="VetturaBaseline" type="Node3D"]
 script = ExtResource("1_baseline")

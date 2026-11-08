@@ -1,0 +1,22 @@
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = "4.7"
+reloadable = true
+
+[libraries]
+; 路径按 Godot 的 res:// 解析（res:// = 本工程根目录）。workspace 根就是本目录，
+; 产物在 `target/`（已用 `.gdignore` 从 Godot 资源系统屏蔽）；库名与
+; `gdext/Cargo.toml` 的 [lib] name 一致。
+; macOS 在 Godot 4.3 起按架构细分 feature tag，几种写法都列出来。
+; `debug` 条目给编辑器用，`release` 条目给导出包用；导出包同时需要
+; `scripts/pack_fmod.py` 拷进来的 fmod 动态库（见 docs/audio.md）。
+macos = "res://target/debug/libvettura_native.dylib"
+macos.arm64 = "res://target/debug/libvettura_native.dylib"
+macos.x86_64 = "res://target/debug/libvettura_native.dylib"
+macos.release = "res://target/release/libvettura_native.dylib"
+macos.arm64.release = "res://target/release/libvettura_native.dylib"
+macos.x86_64.release = "res://target/release/libvettura_native.dylib"
+linux.x86_64 = "res://target/debug/libvettura_native.so"
+linux.x86_64.release = "res://target/release/libvettura_native.so"
+windows.x86_64 = "res://target/debug/vettura_native.dll"
+windows.x86_64.release = "res://target/release/vettura_native.dll"

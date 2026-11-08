@@ -1,12 +1,13 @@
 # Vettura
 
-Vettura 是一款以 **Godot 4** 为运行时的赛车游戏主工程，目标是导入 Assetto Corsa 的车模与物理数据（KN5 / ACD），并在移动端风格的渲染管线下运行。
+Vettura 是一款以 **Godot 4** 为运行时的赛车游戏主工程，目标是导入 Assetto Corsa 的车模与物理数据（KN5 / ACD），并在移动端风格的渲染管线下运行。Rust 原生部分（KN5/ACD 解析、车辆物理、FMOD 声音）作为 workspace 直接放在本工程里。
 
 ## 环境要求
 
 | 项目 | 版本 |
 | --- | --- |
 | Godot | 4.7（`mobile` 渲染后端） |
+| Rust | stable ≥ 1.94（`rust-toolchain.toml` 锁定） |
 | 物理引擎 | Jolt Physics（`project.godot` 中已启用） |
 | 目标平台 | 移动端为主，桌面端可运行 |
 
@@ -15,15 +16,70 @@ Vettura 是一款以 **Godot 4** 为运行时的赛车游戏主工程，目标�
 ```
 vettura/
 ├── project.godot              # Godot 工程配置（应用名、渲染、物理、主场景）
+├── Cargo.toml                 # Rust workspace 根（就是本工程根）
+├── core/                      # vettura-core：共享数据结构 / 错误类型 / 坐标转换
+├── kn5/                       # vettura-kn5：KN5 网格与材质解析
+├── acdata/                    # vettura-acdata：data.acd 解密与 INI/LUT
+├── assets/                    # vettura-assets：AC 车目录组织（上面三者的组合）
+├── physics/                   # vettura-physics：车辆物理后端（Jolt / Simple / Chrono FFI）
+├── world/                     # vettura-world：多车世界、赛道、天气、AI、计时
+├── audio/                     # vettura-audio：AC sfx 发现 + FMOD runtime 直达
+├── gdext/                     # vettura-godot：GDExtension 桥接层（Kn5File/AcCar/VehicleBody/WorldBody/FmodSystem）
+│   ├── vettura_native.gdextension
+│   └── baseline.tscn / fmod_probe.tscn / kn5_probe.tscn   # 无头冒烟场景
+├── tools/                     # kn5-inspect / acd-inspect 命令行工具
+├── scripts/                   # Python（uv）工程脚本：FMOD 下载与打包
+├── docs/                      # 架构、构建、Godot 集成、音频、物理文档
 ├── test_visual/               # 测试性开发页面：默认车模浮空预览 + 触摸 + 多视角
 ├── addons/
 │   └── godot_mcp/             # Godot MCP 编辑器插件，供 AI/CLI 操作场景与脚本
-└── test/                      # 本地测试资源（不纳入版本库，见下文）
+├── test/                      # 本地测试资源（不纳入版本库，见下文）
+└── target/                    # cargo 构建产物（.gdignore，Godot 不导入）
 ```
 
 `.godot/` 为编辑器导入缓存，`test/` 为本地大体积资源，二者均被 `.gitignore` 排除。
-`vettura-native` 通过软链接暴露为 `res://vettura-native/`；如果它不在本目录下，
-先在 `vettura-native` 仓库里执行 `./scripts/link_into_godot.sh`。
+
+## Rust / native 部分
+
+合并前 native 是独立仓库（`github.com/Voiddd16/vettura-native`，已归档），现在就是本工程的
+workspace：每个 crate 一个顶层目录，`cargo` 命令在工程根执行。
+
+| 模块 | 状态 |
+| --- | --- |
+| KN5 解析（v5/v6、节点树、网格、材质、DDS 贴图） | 可用 |
+| `data.acd` 解密与解包 / AC INI / LUT 读取 | 可用 |
+| AC 车数据 → `VehicleSpec` 映射 | 初版 |
+| 物理后端接口 + 固定步长调度；SimpleBackend 占位动力学 | 可用 |
+| Chrono::Vehicle FFI（vehicle 平地工况，`--features chrono`） | 可用，需先拉 Chrono 源码 |
+| `world/`：Jolt 固定步长世界、表面/天气、车-车/车-墙碰撞 | 可用 |
+| AC 赛道：`models*.ini` / `surfaces.ini` / 物理节点扫描 / `fast_lane.ai` / `pit_lane.ai` / 发车格 / AI 纯跟踪 + 车流避让 / 分段计时 | 可用 |
+| 车辆物理进阶：气动下压力 / 差速器限滑 / 刹车热衰减 / 燃油载荷 / 变速箱离合器 / DRS | 可用 |
+| 赛道演进：`groove.ini` → 橡胶堆积，赛线随行驶提升抓地 | 可用 |
+| 轮胎：热/胎压/磨损、平点/抱死振动、载荷敏感、松弛长度、Magic Formula 滑移曲线 | 可用 |
+| ERS/混动、发动机热/功率保护、水膜/aquaplaning、气动侧向力/横摆稳定性、悬架非线性与运动学 | 可用 |
+| KN5 → Godot 场景（节点树 / ArrayMesh / 贴图 / 材质） | 可用 |
+| Godot 扩展类（`Kn5File` / `AcCar` / `VehicleBody` / `WorldBody` / `FmodSystem`） | 可用，见 `gdext/baseline.tscn` |
+| AC 车模声音 + FMOD runtime | 可用：读 `sfx/GUIDs.txt` → 直接调 FMOD 播放 `.bank`（`--features fmod`） |
+
+```bash
+cargo fmt --all
+cargo check --workspace
+cargo test --workspace
+cargo build -p vettura-godot                       # 产出 target/debug/libvettura_native.dylib
+cargo build -p vettura-godot --features fmod       # 接真机 FMOD 声音
+```
+
+`gdext/vettura_native.gdextension` 把库路径指向 `res://target/debug/libvettura_native.dylib`
+（macOS），与工程同根，无需软链接。端到端冒烟：
+
+```bash
+godot --headless --path . res://gdext/baseline.tscn      # 真实赛道 + 真实车 20 秒
+godot --headless --path . res://gdext/fmod_probe.tscn    # 需要 --features fmod 与本地测试车
+godot --headless --path . res://gdext/kn5_probe.tscn
+```
+
+细节见 [`docs/build.md`](docs/build.md)、[`docs/godot.md`](docs/godot.md)、
+[`docs/architecture.md`](docs/architecture.md)、[`docs/audio.md`](docs/audio.md)。
 
 ## 运行
 
@@ -68,7 +124,3 @@ test/
 - `scripts/pack_fmod.py`：把 FMOD 运行期动态库拷进 Godot 导出目录（发行包必需）
 
 用法见 [`scripts/README.md`](scripts/README.md)。
-
-## 相关仓库
-
-- [`vettura-native`](https://github.com/Voiddd16/vettura-native)：Rust 侧引擎实现，负责 KN5/ACD 解析、Chrono::Vehicle 物理后端以及与 Godot 的桥接。声音也是同一条链：`FmodSystem` 节点直接调用 FMOD runtime 播放 AC 车模 `sfx/*.bank`（native 侧需 `--features fmod` 构建）。

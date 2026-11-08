@@ -47,7 +47,7 @@ fn main() {
     }
 }
 
-/// `CARGO_MANIFEST_DIR` = `<workspace>/crates/vettura-physics`。
+/// `CARGO_MANIFEST_DIR` = `<workspace>/physics`。
 fn workspace_root(manifest_dir: &Path) -> Option<&Path> {
     manifest_dir.ancestors().nth(2)
 }

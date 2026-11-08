@@ -5,7 +5,7 @@ extends Node3D
 ##
 ## ```bash
 ## /Applications/Godot.app/Contents/MacOS/Godot --headless --path .. \
-##     res://vettura-native/godot/kn5_probe.tscn
+##     res://gdext/kn5_probe.tscn
 ## ```
 ##
 ## 打开 test/ 下的真实 F1 2008 mod，把车模实例化到场景里，然后打印

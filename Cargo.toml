@@ -1,27 +1,30 @@
 [workspace]
 resolver = "3"
+# Rust 代码直接放在 Godot 工程根目录：每个 crate 一个顶层目录，
+# workspace 根就是 `project.godot` 所在目录（构建产物在 `target/`，已被
+# `target/.gdignore` 从 Godot 资源系统里屏蔽）。
 members = [
-    "crates/vettura-core",
-    "crates/vettura-kn5",
-    "crates/vettura-acdata",
-    "crates/vettura-assets",
-    "crates/vettura-physics",
-    "crates/vettura-godot",
-    "crates/vettura-world",
-    "crates/vettura-audio",
+    "core", # vettura-core：共享数据结构 / 错误类型
+    "kn5", # vettura-kn5：KN5 网格解析
+    "acdata", # vettura-acdata：AC data.acd / car.ini 解析
+    "assets", # vettura-assets：车目录组织（上面三者的组合）
+    "physics", # vettura-physics：车辆物理后端
+    "world", # vettura-world：多车世界、赛道、天气、AI
+    "audio", # vettura-audio：AC sfx 发现 + FMOD runtime
+    "gdext", # vettura-godot：GDExtension 桥接层
     "tools/kn5-inspect",
     "tools/acd-inspect",
 ]
 # `cargo build` / `cargo test` stay fast and headless.
 # Build the Godot extension explicitly with `cargo build -p vettura-godot`.
 default-members = [
-    "crates/vettura-core",
-    "crates/vettura-kn5",
-    "crates/vettura-acdata",
-    "crates/vettura-assets",
-    "crates/vettura-physics",
-    "crates/vettura-world",
-    "crates/vettura-audio",
+    "core",
+    "kn5",
+    "acdata",
+    "assets",
+    "physics",
+    "world",
+    "audio",
     "tools/kn5-inspect",
     "tools/acd-inspect",
 ]
@@ -36,14 +39,13 @@ publish = false
 
 [workspace.dependencies]
 # Internal crates
-vettura-core = { path = "crates/vettura-core" }
-vettura-kn5 = { path = "crates/vettura-kn5" }
-
-vettura-acdata = { path = "crates/vettura-acdata" }
-vettura-assets = { path = "crates/vettura-assets" }
-vettura-physics = { path = "crates/vettura-physics" }
-vettura-world = { path = "crates/vettura-world" }
-vettura-audio = { path = "crates/vettura-audio" }
+vettura-core = { path = "core" }
+vettura-kn5 = { path = "kn5" }
+vettura-acdata = { path = "acdata" }
+vettura-assets = { path = "assets" }
+vettura-physics = { path = "physics" }
+vettura-world = { path = "world" }
+vettura-audio = { path = "audio" }
 
 # FMOD Engine 2.02.22 绑定：libfmod 锁 ~2.222；SDK 二进制不入库，由脚本下载到本地缓存。
 # bank 兼容规则：2.02.22 runtime 只保证加载 2.02.x 编出来的 bank；2.03/2.04 不保证。

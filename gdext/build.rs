@@ -39,18 +39,11 @@ fn locate_runtime() -> Option<PathBuf> {
         candidates.push(cache.join("fmod").join("runtime").join(&host));
     }
 
+    // 合并后 workspace 根就是 Godot 工程根，`.cache/fmod` 是祖先目录。
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     for ancestor in manifest.ancestors() {
         candidates.push(
             ancestor
-                .join(".cache")
-                .join("fmod")
-                .join("runtime")
-                .join(&host),
-        );
-        candidates.push(
-            ancestor
-                .join("vettura")
                 .join(".cache")
                 .join("fmod")
                 .join("runtime")

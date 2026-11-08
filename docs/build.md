@@ -1,7 +1,7 @@
 # 编译指南
 
-本文档列出编译本项目不同产物所需的命令。所有命令默认在
-`vettura-native/` 目录下执行。
+本文档列出编译本项目不同产物所需的命令。所有命令默认在工程根目录
+（`project.godot` 所在目录，也就是 Rust workspace 根）下执行。
 
 ## 1. 环境准备
 
@@ -109,15 +109,14 @@ cargo build -p vettura-godot
 target/debug/libvettura_native.dylib
 ```
 
-`godot/vettura_native.gdextension` 已把 `macos.debug` 指向该路径：
+`gdext/vettura_native.gdextension` 已把 `macos.debug` 指向该路径：
 
 ```ini
-macos.debug = "res://vettura-native/target/debug/libvettura_native.dylib"
+macos.debug = "res://target/debug/libvettura_native.dylib"
 ```
 
-因此编译完成后，Godot 工程根目录下必须有 `vettura-native` 这个链接名（默认约定
-工程在 `../vettura`，用 `./scripts/link_into_godot.sh` 建立）。路径搞定时打开该
-`project.godot` 即可加载扩展。
+workspace 就在工程里，`res://target/...` 直接可解析，不需要软链接；`target/`
+里放了 `.gdignore`，Godot 会跳过整个构建目录。
 
 ### 4.2 发布版
 
@@ -134,7 +133,7 @@ target/release/libvettura_native.dylib
 `.gdextension` 中已有对应的 `macos.release` 配置：
 
 ```ini
-macos.release = "res://vettura-native/target/release/libvettura_native.dylib"
+macos.release = "res://target/release/libvettura_native.dylib"
 ```
 
 ### 4.3 其他平台产物名
@@ -151,8 +150,8 @@ macos.release = "res://vettura-native/target/release/libvettura_native.dylib"
 ### 4.4 验证扩展能否加载
 
 ```bash
-# 在 vettura-native/ 下执行；--path 指向 Godot 工程根目录
-godot --headless --path /path/to/godot/project --editor --quit
+# 在工程根目录执行
+godot --headless --path . --editor --quit
 ```
 
 如果扩展加载失败，优先检查：
@@ -163,7 +162,7 @@ godot --headless --path /path/to/godot/project --editor --quit
 4. Godot 版本是否为 4.7。
 
 > 不要随意设置 `CARGO_TARGET_DIR`。`.gdextension` 写死了
-> `res://vettura-native/target/...`，改变 target 目录会导致 Godot 找不到库。
+> `res://target/...`，改变 target 目录会导致 Godot 找不到库。
 > 如确需修改，请同步修改 `.gdextension`。
 
 ## 5. 命令行工具
@@ -239,7 +238,7 @@ cargo clippy --workspace --exclude vettura-godot --all-targets -- -D warnings
 cargo test --workspace --exclude vettura-godot
 ```
 
-`vettura-assets` 包含集成测试 `crates/vettura-assets/tests/car_folder.rs`，
+`vettura-assets` 包含集成测试 `assets/tests/car_folder.rs`，
 它会读取测试车目录；没有测试数据时相关用例会跳过。
 
 `vettura-kn5` 有一个可选的真实样例测试。设置环境变量后会额外解析该文件：
@@ -295,7 +294,7 @@ cargo doc --workspace --exclude vettura-godot --no-deps --open
 
 ## 8. Chrono::Vehicle（`vettura-physics` 的 `chrono` feature）
 
-Chrono 适配器**不再是独立 crate**，而是 `crates/vettura-physics/src/backends/chrono/`，
+Chrono 适配器**不再是独立 crate**，而是 `physics/src/backends/chrono/`，
 由 cargo feature `chrono` 门控，默认关闭；重量级的 C++ 源码统一放在仓库根的
 `third_party/chrono/`（见 [third_party/README.md](../third_party/README.md)）。
 
@@ -315,7 +314,7 @@ CMake 源码树 / 安装目录）后第一次构建会跑 CMake，需要 **CMake
 
 ### 8.1 胶水层选型：C ABI（不是 cxx）
 
-桥接层是 `crates/vettura-physics/cpp/chrono_bridge.h` 声明的 `extern "C"` 接口，
+桥接层是 `physics/cpp/chrono_bridge.h` 声明的 `extern "C"` 接口，
 Rust 侧手写 `unsafe extern "C"` 声明。选 C ABI 的原因：
 
 - 要跨边界的东西全是 POD（`vettura_chrono_spec/pose/controls/state`）加一个
@@ -368,7 +367,7 @@ Chrono 侧 CMake 实际选项（`build.rs` 写死）：
 
 ### 8.3 build.rs 的行为
 
-`crates/vettura-physics/build.rs`（feature 打开时执行，不开时直接返回）：
+`physics/build.rs`（feature 打开时执行，不开时直接返回）：
 
 | 步骤 | 内容 |
 | --- | --- |
@@ -394,10 +393,10 @@ build.rs 会先编译探测一次 `#include <string>`，失败就自动
 BUILD=$(ls -d target/debug/build/vettura-physics-*/out/chrono-build | head -1)
 SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk   # 本机 CLT 头损坏时的兜底
 c++ -std=c++17 -O2 -w -nostdinc++ -isysroot "$SDK" -I"$SDK/usr/include/c++/v1" \
-  -Icrates/vettura-physics/cpp -Ithird_party/chrono/src -I"$BUILD" \
+  -Iphysics/cpp -Ithird_party/chrono/src -I"$BUILD" \
   -isystem /opt/homebrew/include/eigen3 \
-  crates/vettura-physics/cpp/chrono_probe.cpp \
-  crates/vettura-physics/cpp/vettura_vehicle_spec.cpp \
+  physics/cpp/chrono_probe.cpp \
+  physics/cpp/vettura_vehicle_spec.cpp \
   -L"$BUILD/lib" -lChrono_vehicle -lChrono_core -o /tmp/vettura-probe
 DYLD_LIBRARY_PATH="$BUILD/lib" /tmp/vettura-probe /tmp/vettura-probe-json
 ```
@@ -415,10 +414,10 @@ FMOD 默认**不链接**；要真正播放 AC 车模声浪时，先用主工程 
 再启用 `fmod` feature：
 
 ```bash
-cd /path/to/vettura/scripts
+cd scripts
 uv run fetch_fmod.py                 # 下载 FMOD Engine 2.02.22 并解压/编译插件
 
-cd /path/to/vettura-native
+cd ..
 cargo build -p vettura-godot --features fmod
 ```
 
@@ -463,10 +462,9 @@ cargo clippy --workspace --exclude vettura-godot --all-targets -- -D warnings
 cargo test --workspace --exclude vettura-godot
 cargo build -p vettura-godot
 # 可选：FMOD 真机声音联调
-cd /path/to/vettura/scripts && uv run fetch_fmod.py
-cd /path/to/vettura-native && cargo build -p vettura-godot --features fmod
-godot --headless --path /path/to/vettura \
-    res://vettura-native/godot/fmod_probe.tscn
+cd scripts && uv run fetch_fmod.py
+cd .. && cargo build -p vettura-godot --features fmod
+godot --headless --path . res://gdext/fmod_probe.tscn
 ```
 
 ### 发行打包
@@ -475,8 +473,8 @@ godot --headless --path /path/to/vettura \
 
 ```bash
 cargo build -p vettura-godot --features fmod --release
-godot --headless --path /path/to/vettura --export-release "macOS" ../dist
-cd /path/to/vettura/scripts
+godot --headless --path . --export-release "macOS" ../dist
+cd scripts
 uv run pack_fmod.py --platform macos --dest ../dist/Vettura.app   # .app 自动落到 Contents/MacOS
 ```
 
@@ -487,10 +485,10 @@ uv run pack_fmod.py --platform macos --dest ../dist/Vettura.app   # .app 自动�
 
 | 现象 | 原因与处理 |
 | --- | --- |
-| `cargo build` 后 `target/debug` 里没有 dylib | 正常，默认成员不含 `vettura-native`；执行 `cargo build -p vettura-godot` |
+| `cargo build` 后 `target/debug` 里没有 dylib | 正常，默认成员不含 `vettura-godot`；执行 `cargo build -p vettura-godot` |
 | Godot 报找不到 GDExtension | 检查 dylib 是否存在、`.gdextension` 路径、Godot 是否为 4.7 |
 | 链接错误或 `cc` 找不到 | macOS 安装 Xcode CLT：`xcode-select --install` |
 | `rust-version` 不满足 | 升级 Rust：`rustup update stable` |
 | 调试构建太慢 / 运行卡顿 | 根 `Cargo.toml` 已设 `opt-level = 1`（依赖为 3），不要改成 0 |
-| 修改了 `CARGO_TARGET_DIR` 后扩展失效 | `.gdextension` 使用固定 `target/` 路径，需同步修改 |
+| 修改了 `CARGO_TARGET_DIR` 后扩展失效 | `.gdextension` 使用固定 `target/` 路径，需同步修改（或改 `gdext/vettura_native.gdextension`）|
 | 测试试图编译 Godot 扩展 | 使用 `--exclude vettura-godot` |

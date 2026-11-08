@@ -7,14 +7,30 @@ export_presets.cfg
 # 参见 README.md 的「本地测试资源」章节
 /test/
 
-# vettura-native 仓库在本地的软链接入口（见 vettura-native/scripts/link_into_godot.sh）
-/vettura-native/
-
 # FMOD 凭证与 SDK 缓存：账号、installer、so/dylib 均禁止入库
 .fmod.env
 .cache/
 scripts/.venv/
 scripts/__pycache__/
+
+# Rust workspace 构建产物（workspace 根就是工程根）
+/target/*
+/dist/
+*.dSYM/
+CMakeCache.txt
+CMakeFiles/
+# `target/.gdignore` 必须入库：它让 Godot 跳过整个 target/，不导入构建产物
+!/target/.gdignore
+
+# vendored C++ 源码按需拉取（体积大），只跟踪说明文档。
+# 拉取方式与版本记录在 third_party/README.md。
+third_party/*
+!third_party/README.md
+
+# 本地 AI 技能安装器产物
+.agents/
+.claude/
+skills-lock.json
 
 # macOS / 编辑器杂项
 .DS_Store

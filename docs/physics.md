@@ -487,7 +487,7 @@ Chrono 是 CMake/C++ 项目，源码放在仓库根的 `third_party/chrono/`（t
 
 ### FFI：C ABI，不是 cxx
 
-用 `extern "C"` 暴露最小接口，契约就是 `crates/vettura-physics/cpp/chrono_bridge.h`。
+用 `extern "C"` 暴露最小接口，契约就是 `physics/cpp/chrono_bridge.h`。
 **没有用 cxx**：要传的东西全是 POD + 一个不透明句柄，用不到 cxx 的类型安全；
 而 C ABI 是唯一一个所有编译器都共识的契约，可以让 Chrono 用任意 C++ 工具链编出来。
 

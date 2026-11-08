@@ -2,7 +2,7 @@
  * `layout_matches_the_c_header` 测试使用。
  *
  * 运行：
- *   clang -std=c99 crates/vettura-physics/cpp/layout_probe.c -o /tmp/layout && /tmp/layout
+ *   clang -std=c99 physics/cpp/layout_probe.c -o /tmp/layout && /tmp/layout
  */
 #include <stdio.h>
 #include <stddef.h>

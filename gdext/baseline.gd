@@ -1,5 +1,5 @@
 extends Node3D
-## `vettura-native` 的最小可用性冒烟场景。
+## 工程自带的最小可用性冒烟场景。
 ##
 ## 它只回答一个问题：**主项目能不能通过 GDExtension 把一台真实 AC 车放到真实
 ## AC 赛道上，并让 Jolt 真的把它推着走？** 因此故意不用 Input、相机、HUD，控制量
@@ -10,7 +10,7 @@ extends Node3D
 ## ```bash
 ## /Applications/Godot.app/Contents/MacOS/Godot --headless \
 ##     --path /path/to/your/godot/project \
-##     res://vettura-native/godot/baseline.tscn
+##     res://gdext/baseline.tscn
 ## ```
 ##
 ## 期望：控制台输出 `[baseline] ...` 前缀的行，最后一行 `[baseline] PASS`，

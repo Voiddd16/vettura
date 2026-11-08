@@ -9,7 +9,7 @@ workspace 编译，只被某个 crate 在需要时通过 `build.rs` / CMake 引�
 
 | 目录 | 内容 | 谁在用 |
 | --- | --- | --- |
-| `chrono/` | [Project Chrono 10.0.0](https://github.com/projectchrono/chrono.git)（C++，含 `Chrono::Vehicle`） | `crates/vettura-physics` 的 `chrono` feature（见 [docs/build.md](../docs/build.md) §8） |
+| `chrono/` | [Project Chrono 10.0.0](https://github.com/projectchrono/chrono.git)（C++，含 `Chrono::Vehicle`） | `physics` 的 `chrono` feature（见 [docs/build.md](../docs/build.md) §8） |
 
 > `third_party/*` 默认被 `.gitignore` 忽略（源码体积大，约 1.8 GB 含 `.git`），
 > 只跟踪本文件。新克隆仓库后需要按下面的命令自己拉一次。
@@ -26,7 +26,7 @@ git clone --depth 1 --branch 10.0.0 \
 - commit：`9faf13dd8f1128dd75ed233a9627027b0422c3f7`
 - 验证：`git -C third_party/chrono describe --tags` 应为 `10.0.0`
 
-`crates/vettura-physics/build.rs` 按以下顺序定位源码（见 `find_chrono_root`）：
+`physics/build.rs` 按以下顺序定位源码（见 `find_chrono_root`）：
 
 1. 环境变量 `VETTURA_CHRONO_ROOT`（指向含 `CMakeLists.txt` 的目录）；
 2. 仓库根 `third_party/chrono/`；
@@ -44,7 +44,7 @@ Chrono 自己（约束/有限元）的；我们默认走 Jolt。因此引用方�
 
 | Chrono 里的内容 | 我们的做法 | 说明 |
 | --- | --- | --- |
-| `ChPac89Tire` 的 Magic Formula 曲线核心 | **公式移植**到 `crates/vettura-physics/src/tyre_model.rs`（BSD-3-Clause，已注明出处） | 就一行解析式，移植后 Jolt 路径不引入第二套物理引擎 |
+| `ChPac89Tire` 的 Magic Formula 曲线核心 | **公式移植**到 `physics/src/tyre_model.rs`（BSD-3-Clause，已注明出处） | 就一行解析式，移植后 Jolt 路径不引入第二套物理引擎 |
 | `ChPac02Tire` 的松弛长度公式（`CalcSigmaK/CalcSigmaA`） | 不移植 | 需要 MF-Swift 参数（`PTX1/PTY1/...`），而 AC 直接给 `RELAXATION_LENGTH`，用 AC 的数据更诚实 |
 | `ChFialaTire`/`ChTMeasyTire` 等完整轮胎模型 | 不移植 | 需要接管轮胎力的注入与轮毂转动，而 Jolt 的轮胎冲量同时驱动两者，绕开它会破坏传动耦合 |
 | 悬架模板（双叉臂/麦弗逊…） | 不移植 | Jolt 的 `WheelSettings` 建好后不可变，真实运动学没有落点（见 [docs/physics.md](../docs/physics.md) 的外倾一节） |
