@@ -20,10 +20,11 @@ FMOD 版本号必须由主工程 `scripts/fetch_fmod.py` 拉到本地缓存，�
 ## 本地拉取与链接
 
 ```bash
-cd /path/to/vettura/scripts
+cd scripts
 uv run fetch_fmod.py                 # 当前平台
 uv run fetch_fmod.py --all           # macOS / Windows / Linux
 
+cd ..                                # 回到工程根（workspace 根）
 cargo build -p vettura-godot --features fmod
 ```
 

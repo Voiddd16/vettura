@@ -33,7 +33,7 @@ FMOD_PASS=<密码>
 
 也可以用环境变量 `FMOD_USER` / `FMOD_PASS` 覆盖。SDK 二进制不入库；
 项目用 `libfmod ~2.222` 对应 FMOD Engine 2.02.22，bank 兼容规则见
-`docs/audio.md`。
+[`../docs/audio.md`](../docs/audio.md)。
 
 ## 打包 runtime（发行游戏时需要）
 
