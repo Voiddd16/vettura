@@ -7,8 +7,15 @@ reloadable = true
 ; 路径按 Godot 的 res:// 解析（res:// = vettura 工程根目录）；库名与
 ; crates/vettura-native/Cargo.toml 的 [lib] name 一致。
 ; macOS 在 Godot 4.3 起按架构细分 feature tag，几种写法都列出来。
+; `debug` 条目给编辑器用，`release` 条目给导出包用；导出包同时需要
+; scripts/pack_fmod.py 拷进来的 fmod 动态库（见 docs/audio.md）。
 macos = "res://vettura-native/target/debug/libvettura_native.dylib"
 macos.arm64 = "res://vettura-native/target/debug/libvettura_native.dylib"
 macos.x86_64 = "res://vettura-native/target/debug/libvettura_native.dylib"
+macos.release = "res://vettura-native/target/release/libvettura_native.dylib"
+macos.arm64.release = "res://vettura-native/target/release/libvettura_native.dylib"
+macos.x86_64.release = "res://vettura-native/target/release/libvettura_native.dylib"
 linux.x86_64 = "res://vettura-native/target/debug/libvettura_native.so"
+linux.x86_64.release = "res://vettura-native/target/release/libvettura_native.so"
 windows.x86_64 = "res://vettura-native/target/debug/vettura_native.dll"
+windows.x86_64.release = "res://vettura-native/target/release/vettura_native.dll"

@@ -199,12 +199,43 @@ fn locate_runtime() -> Option<PathBuf> {
         .map(|root| root.join(host))
 }
 
+fn has_lib_files(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        if !path.is_file() {
+            return false;
+        }
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        name.starts_with("fmod") || name.starts_with("libfmod")
+    })
+}
+
+/// SDK 里动态库可能在 `api/<api>/lib` 或 `api/<api>/lib/<arch>`（Linux/Windows）。
 fn lib_dir(sdk: &Path, api: &str, arch: &str) -> PathBuf {
     let direct = sdk.join(api).join("lib");
-    if direct.exists() {
+    if has_lib_files(&direct) {
         return direct;
     }
-    direct.join(arch)
+    let wanted = direct.join(arch);
+    if has_lib_files(&wanted) {
+        return wanted;
+    }
+    if let Ok(entries) = fs::read_dir(&direct) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && has_lib_files(&path) {
+                return path;
+            }
+        }
+    }
+    wanted
 }
 
 fn main() {
@@ -281,7 +312,7 @@ fn main() {
             println!("cargo:rustc-link-lib=dylib={core}");
             println!("cargo:rustc-link-lib=dylib={studio}");
             println!(
-                "cargo:warning=Windows 运行期请把 fmod.dll / fmodstudio.dll 放到 exe 或扩展同目录"
+                "cargo:warning=Windows 运行期用主工程 scripts/pack_fmod.py 把 fmod.dll / fmodstudio.dll 拷到 exe 同目录"
             );
         }
         "macos" => {

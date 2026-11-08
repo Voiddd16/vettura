@@ -469,6 +469,20 @@ godot --headless --path /path/to/vettura \
     res://vettura-native/godot/fmod_probe.tscn
 ```
 
+### 发行打包
+
+导出包要自带 FMOD runtime（只动态链接，SDK 不入库）：
+
+```bash
+cargo build -p vettura-godot --features fmod --release
+godot --headless --path /path/to/vettura --export-release "macOS" ../dist
+cd /path/to/vettura/scripts
+uv run pack_fmod.py --platform macos --dest ../dist/Vettura.app   # .app 自动落到 Contents/MacOS
+```
+
+`vettura_native.gdextension` 已区分 debug / release 条目：编辑器用 `target/debug`，
+导出包用 `target/release`。细节与平台差异见 [audio.md](audio.md) 的「打包 / 发行」。
+
 ## 10. 常见问题
 
 | 现象 | 原因与处理 |

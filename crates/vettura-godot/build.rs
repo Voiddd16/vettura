@@ -89,6 +89,17 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", runtime.display());
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", runtime.display());
     println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
+    // 发行布局：Godot 导出的 exe 与 GDExtension 同目录（@loader_path），
+    // macOS 的 .app 也常把第三方 dylib 放 Contents/Frameworks。
+    match target_os().as_str() {
+        "macos" => {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path/../Frameworks");
+        }
+        "linux" => {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib");
+        }
+        _ => {}
+    }
 
     // 让 cargo 在 runtime 目录变化时重跑。
     println!("cargo:rerun-if-changed={}", runtime.display());
