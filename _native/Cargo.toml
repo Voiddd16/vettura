@@ -1,0 +1,67 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/vettura-core",
+    "crates/vettura-kn5",
+    "crates/vettura-acdata",
+    "crates/vettura-assets",
+    "crates/vettura-physics",
+    "crates/vettura-godot",
+    "crates/vettura-world",
+    "crates/vettura-audio",
+    "tools/kn5-inspect",
+    "tools/acd-inspect",
+]
+# `cargo build` / `cargo test` stay fast and headless.
+# Build the Godot extension explicitly with `cargo build -p vettura-godot`.
+default-members = [
+    "crates/vettura-core",
+    "crates/vettura-kn5",
+    "crates/vettura-acdata",
+    "crates/vettura-assets",
+    "crates/vettura-physics",
+    "crates/vettura-world",
+    "crates/vettura-audio",
+    "tools/kn5-inspect",
+    "tools/acd-inspect",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT OR Apache-2.0"
+authors = ["Vettura contributors"]
+publish = false
+
+[workspace.dependencies]
+# Internal crates
+vettura-core = { path = "crates/vettura-core" }
+vettura-kn5 = { path = "crates/vettura-kn5" }
+
+vettura-acdata = { path = "crates/vettura-acdata" }
+vettura-assets = { path = "crates/vettura-assets" }
+vettura-physics = { path = "crates/vettura-physics" }
+vettura-world = { path = "crates/vettura-world" }
+vettura-audio = { path = "crates/vettura-audio" }
+
+# FMOD Engine 2.02.22 绑定：libfmod 锁 ~2.222；SDK 二进制不入库，由脚本下载到本地缓存。
+# bank 兼容规则：2.02.22 runtime 只保证加载 2.02.x 编出来的 bank；2.03/2.04 不保证。
+libfmod = "~2.222"
+
+# Shared third-party dependencies
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+glam = { version = "0.34", features = ["serde"] }
+godot = { version = "0.5.5", features = ["api-4-7", "register-docs"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.dev]
+# KN5 files are large; keep debug builds usable for the inspect tools.
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

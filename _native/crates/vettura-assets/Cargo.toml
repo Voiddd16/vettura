@@ -1,0 +1,17 @@
+[package]
+name = "vettura-assets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Assetto Corsa car folder resolver and physics mapping"
+
+[dependencies]
+glam.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+vettura-acdata.workspace = true
+vettura-kn5.workspace = true
+vettura-physics.workspace = true

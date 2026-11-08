@@ -1,0 +1,29 @@
+[package]
+name = "vettura-godot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Godot 4 GDExtension bindings for Vettura"
+
+[lib]
+name = "vettura_native"
+# `cdylib` 给 Godot 加载，`rlib` 让 `cargo test -p vettura-godot` 能跑单元测试
+# （纯数据转换，不依赖引擎初始化）。
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+glam.workspace = true
+godot.workspace = true
+vettura-assets.workspace = true
+vettura-audio.workspace = true
+vettura-core.workspace = true
+vettura-kn5.workspace = true
+vettura-physics.workspace = true
+vettura-world.workspace = true
+
+[features]
+# Link FMOD Engine into the GDExtension. Requires `FMOD_SYS_FMOD_DIRECTORY`.
+fmod = ["vettura-audio/fmod"]

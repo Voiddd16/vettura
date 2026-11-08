@@ -1,0 +1,20 @@
+[package]
+name = "vettura-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "Assetto Corsa car audio discovery and direct FMOD Studio runtime integration"
+build = "build.rs"
+
+[dependencies]
+thiserror.workspace = true
+
+# FMOD Engine 2.02.22；只有在启用 `fmod` feature 时编译并链接。
+libfmod = { workspace = true, optional = true }
+
+[features]
+default = []
+fmod = ["dep:libfmod"]

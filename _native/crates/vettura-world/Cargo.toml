@@ -1,0 +1,24 @@
+[package]
+name = "vettura-world"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Jolt-based world physics for Vettura: surfaces, weather, car-car and car-track interaction"
+
+[dependencies]
+glam.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+vettura-core.workspace = true
+vettura-physics.workspace = true
+vettura-kn5.workspace = true
+vettura-acdata.workspace = true
+
+# Jolt 5.6 through the safe `oxijolt` wrapper. The prebuilt archive is used on
+# supported hosts; `cross-platform-deterministic` turns on Jolt's deterministic
+# floating-point settings so the same inputs replay bit-identically across
+# platforms (within the limits documented by oxijolt).
+oxijolt = { version = "1.5.0", features = ["cross-platform-deterministic"] }

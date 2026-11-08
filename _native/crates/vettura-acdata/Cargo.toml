@@ -1,0 +1,12 @@
+[package]
+name = "vettura-acdata"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Assetto Corsa data formats: data.acd, INI, LUT"
+
+[dependencies]
+thiserror.workspace = true

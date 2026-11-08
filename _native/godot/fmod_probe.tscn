@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://bvetturafmodprobe"]
+
+[ext_resource type="Script" path="res://vettura-native/godot/fmod_probe.gd" id="1_fmod"]
+
+[node name="FmodProbe" type="Node3D"]
+script = ExtResource("1_fmod")
