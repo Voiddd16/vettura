@@ -634,6 +634,12 @@ pub(crate) struct VehicleRuntime {
     oil_c: f32,
     /// Current turbo boost pressure, bar.
     turbo_boost_bar: f32,
+    /// Remaining upshift fuel cut, seconds.
+    fuel_cut_s: f32,
+    /// Phase of the soft limiter's cutting cycle, `0..1`.
+    limiter_phase: f32,
+    /// Last gear seen, so an upshift can be detected.
+    previous_gear: i32,
     /// Maximum crank torque Jolt's engine was built with, N·m.
     engine_max_torque_nm: f32,
     /// Water film carried by each tyre, mm.
@@ -846,6 +852,9 @@ impl VehicleRuntime {
             coolant_c: ambient_c,
             oil_c: ambient_c,
             turbo_boost_bar: 0.0,
+            fuel_cut_s: 0.0,
+            limiter_phase: 0.0,
+            previous_gear: 0,
             engine_max_torque_nm: engine_torque_cap,
             water_film_mm: [0.0; 4],
             previous_suspension_lengths: [0.0; 4],
@@ -918,6 +927,23 @@ impl VehicleRuntime {
             1.0
         };
         let mut forward = input.throttle * power * boost_scale;
+        // Upshift fuel cut: for `auto_cutoff_time` after a gear change the
+        // engine is off its limiter, exactly as a real ECU does while the
+        // box shifts.
+        if self.fuel_cut_s > 0.0 {
+            forward = 0.0;
+        }
+        // Soft limiter: above the redline the fuel is cut in bursts at
+        // `LIMITER_HZ` instead of stopping the engine, so the rpm bounces
+        // off the limit instead of hitting a wall.
+        let limiter = self.spec.engine.limiter_duty(self.snapshot.engine_rpm);
+        if limiter < 1.0 {
+            self.limiter_phase =
+                (self.limiter_phase + self.spec.engine.limiter_hz.max(0.0) * 1.0 / 240.0) % 1.0;
+            if self.limiter_phase > limiter {
+                forward = 0.0;
+            }
+        }
         // Lifting off: the engine's pumping and friction losses become the
         // braking torque. Jolt scales its torque by this input, so a small
         // negative value reproduces `[COAST_REF]` exactly. Only apply at zero
@@ -946,6 +972,23 @@ impl VehicleRuntime {
     /// The first-order lag is what makes a turbo car different from a
     /// naturally aspirated one: boost builds over `lag_up_s` when the driver
     /// opens the throttle and decays over `lag_down_s` when they lift.
+    /// Detect a gear change and run the fuel-cut timer.
+    pub(crate) fn prepare_powertrain(&mut self, dt: f32) {
+        // AC documents the cut-off in milliseconds.
+        let cut = self.spec.gearbox.auto_cutoff_time * 0.001;
+        if cut > 0.0 {
+            let gear = self.snapshot.gear;
+            let shifting_up = gear > 0 && self.previous_gear > 0 && gear != self.previous_gear;
+            if shifting_up {
+                self.fuel_cut_s = cut;
+            }
+            self.fuel_cut_s = (self.fuel_cut_s - dt).max(0.0);
+        } else {
+            self.fuel_cut_s = 0.0;
+        }
+        self.previous_gear = self.snapshot.gear;
+    }
+
     pub(crate) fn update_boost(&mut self, physics: &mut PhysicsWorld, dt: f32) -> WorldResult<()> {
         let turbo = self.spec.engine.turbo;
         if turbo.is_enabled() {
@@ -1282,8 +1325,15 @@ impl VehicleRuntime {
             let compression = (geometry.rest_length - length).max(0.0);
             let extension = (length - geometry.rest_length).max(0.0);
             // Camber follows the same compression the spring does: as the body
-            // rolls onto a wheel, its tyre leans further negative.
-            self.camber_rad[index] = suspension.camber_rad(compression);
+            // rolls onto a wheel, its tyre leans further negative. A steered
+            // wheel also leans from the steering axis' inclination, which is
+            // what loads the outer tyre in a steering-heavy corner.
+            let steer_camber = if state.steer_angle.abs() > 1.0e-4 {
+                suspension.steer_camber_gain(state.steer_angle)
+            } else {
+                0.0
+            };
+            self.camber_rad[index] = suspension.camber_rad(compression) + steer_camber;
             // A stop can only act inside the travel Jolt actually has. Clamp
             // its engagement point just before the hard limit, otherwise an AC
             // `BUMPSTOP_UP` larger than the modelled travel would never act.
@@ -1430,6 +1480,20 @@ impl VehicleRuntime {
                     let steer_angle = self.snapshot.wheels[index].steer_angle;
                     let wheel_up = orientation * Quat::from_rotation_y(-steer_angle) * Vec3::Y;
                     body.add_torque(p2j(wheel_up * aligning))?;
+                }
+                // Caster trail: the vertical load pushes on the contact patch a
+                // caster-trail distance behind the steering pivot, so a steered
+                // wheel is pushed back towards straight ahead. This is the
+                // second self-centring term, and the one that scales with load
+                // rather than with cornering force.
+                let caster = self.spec.wheels[index]
+                    .suspension
+                    .caster_trail_m(self.spec.wheels[index].radius_m);
+                let steer_angle = self.snapshot.wheels[index].steer_angle;
+                if caster > 1.0e-4 && steer_angle.abs() > 1.0e-4 {
+                    let load = self.snapshot.wheels[index].load_n.max(0.0);
+                    let wheel_up = orientation * Quat::from_rotation_y(-steer_angle) * Vec3::Y;
+                    body.add_torque(p2j(wheel_up * (caster * load * steer_angle)))?;
                 }
             }
             // Anti-dive / anti-squat: Jolt applies the longitudinal tyre force
@@ -1586,10 +1650,11 @@ impl VehicleRuntime {
     pub(crate) fn apply_aero_forces(
         &self,
         physics: &mut PhysicsWorld,
-        weather: &Weather,
+        _weather: &Weather,
         linear: Vec3,
         relative_air: Vec3,
         dirty_air_exposure: f32,
+        air_density_kg_m3: f32,
     ) -> WorldResult<()> {
         let spec = &self.spec;
         // Sitting in another car's wake costs downforce, exactly as in real
@@ -1624,7 +1689,7 @@ impl VehicleRuntime {
                 let aoa = self.wing_aoa_deg(wing);
                 let cl_area = wing.cl_area(aoa, clearance);
                 let downforce =
-                    0.5 * weather.air_density_kg_m3 * cl_area * speed_sq * smoothing * dirty_air;
+                    0.5 * air_density_kg_m3 * cl_area * speed_sq * smoothing * dirty_air;
                 if downforce.abs() > 1.0e-3 {
                     body.add_force_at_point(p2j(down * downforce), p2j_r(world))?;
                 }
@@ -1638,7 +1703,7 @@ impl VehicleRuntime {
             } else {
                 spec.aero.downforce_coeff.max(0.0)
             };
-            let base = 0.5 * weather.air_density_kg_m3 * cl_area * speed_sq * smoothing * dirty_air;
+            let base = 0.5 * air_density_kg_m3 * cl_area * speed_sq * smoothing * dirty_air;
 
             if base > 1.0e-3 {
                 let front = base * spec.aero.front_bias.clamp(0.0, 1.0);

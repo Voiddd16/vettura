@@ -256,6 +256,22 @@ E    使 3×峰值滑移处仍保留 FALLOFF_LEVEL 的抓地
   > 落在车外 5.9 m），因此没有从硬点反推侧倾中心；默认值 + 显式覆盖是
   > 更诚实的做法。
 
+### 转向轴几何（caster/kingpin）、软限速器、换挡断油、海拔
+
+四个“还剩的小短板”，都是纯数据+小修正：
+
+- **caster / kingpin（转向轴几何）**：转向会让**前轮也获得外倾**
+  （`steer_camber_gain` ≈ −KPI·sin δ），所以大转向角弯里不用等车身侧倾，
+  外侧轮胎就已经倾斜了；caster 拖距 `caster_trail` 让垂直载荷在转向轴后
+  产生额外的回正力矩（第二个自动回正项，随载荷而非侧向力增长）。
+- **软限速器（`LIMITER_HZ`）**：超过红线不是切断，而是按 60 Hz 断续断火，
+  占空比随超速收窄 → 转速“弹”在红线上而不是撞墙。
+- **换挡断油（`AUTO_CUTOFF_TIME`）**：AC 写的是毫秒；检测到升挡后把油门清零
+  那么久，否则 ECU 不会喷油。
+- **海拔（`ALTITUDE_SENSITIVITY`）**：每公里掉 14% 功率（`EngineSpec::
+  altitude_multiplier`），同时 `World::air_density_kg_m3()` 用 ISA 标高
+  稀薄空气，同时作用于**阻力与下压力**。
+
 ### anti-dive / anti-squat 与赛道被阳光加热
 
 - **anti-dive / anti-squat**：Jolt 把轮胎的纵向力加在接地点，这是绕质心最长的
@@ -487,7 +503,7 @@ Chrono 是 CMake/C++ 项目，源码放在仓库根的 `third_party/chrono/`（t
 
 ### FFI：C ABI，不是 cxx
 
-用 `extern "C"` 暴露最小接口，契约就是 `physics/cpp/chrono_bridge.h`。
+用 `extern "C"` 暴露最小接口，契约就是 `crates/vettura-physics/cpp/chrono_bridge.h`。
 **没有用 cxx**：要传的东西全是 POD + 一个不透明句柄，用不到 cxx 的类型安全；
 而 C ABI 是唯一一个所有编译器都共识的契约，可以让 Chrono 用任意 C++ 工具链编出来。
 

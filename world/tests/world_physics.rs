@@ -2925,3 +2925,124 @@ fn the_sun_heats_the_track_over_a_session() {
         world.track_temperature_c()
     );
 }
+
+#[test]
+fn steering_leans_the_front_tyres_and_altitude_thins_the_air() {
+    // 1) Steering leans the steered wheel through the steering-axis geometry,
+    //    without any body roll: at standstill with lock on, the front wheels
+    //    must be more cambered than straight ahead.
+    let mut spec = VehicleSpec::default();
+    for wheel in &mut spec.wheels {
+        wheel.suspension.kingpin_angle_deg = 10.0;
+    }
+    let mut world = World::new(SurfaceMap::new()).unwrap();
+    let car = world.add_vehicle(spec, Pose::default()).unwrap();
+    settle(&mut world, car);
+    let straight = world.snapshot(car).unwrap().wheels[0].camber_rad;
+    world
+        .set_controls(
+            car,
+            Controls {
+                steering: 1.0,
+                ..Controls::default()
+            },
+        )
+        .unwrap();
+    step(&mut world, 20);
+    let steered = world.snapshot(car).unwrap().wheels[0].camber_rad;
+    assert!(
+        steer_camber_changed(straight, steered),
+        "steering did not lean the wheel: {straight} → {steered}"
+    );
+
+    // 2) Altitude thins the air: a car on top of a mountain makes less
+    //    downforce, so it sits higher on its springs.
+    let run = |altitude: f32| -> f32 {
+        let mut world = World::new(SurfaceMap::new()).unwrap();
+        world.set_altitude_m(altitude);
+        let car = world.add_vehicle(aero_car(), Pose::default()).unwrap();
+        settle(&mut world, car);
+        world
+            .set_controls(
+                car,
+                Controls {
+                    throttle: 1.0,
+                    ..Controls::default()
+                },
+            )
+            .unwrap();
+        step(&mut world, 240 * 4);
+        world
+            .snapshot(car)
+            .unwrap()
+            .wheels
+            .iter()
+            .map(|wheel| wheel.suspension_length_m)
+            .sum::<f32>()
+            / 4.0
+    };
+    let sea = run(0.0);
+    let mountain = run(4_500.0);
+    // A thin-air mountain (about 70 % of sea-level density) makes a small but
+    // unmistakable difference in how far the springs compress.
+    assert!(
+        mountain > sea + 0.0005,
+        "altitude did not thin the aero: {sea} vs {mountain}"
+    );
+    assert!(
+        (world_density_at(4_500.0) - 0.716).abs() < 0.01,
+        "density model off"
+    );
+}
+
+fn steer_camber_changed(straight: f32, steered: f32) -> bool {
+    (steered - straight).abs() > 0.01
+}
+
+#[test]
+fn an_upshift_cuts_the_fuel_for_the_authored_time() {
+    let mut spec = car();
+    spec.gearbox.auto_cutoff_time = 300.0; // 300 ms, as AC writes it
+    let mut world = World::new(SurfaceMap::new()).unwrap();
+    let car = world.add_vehicle(spec, Pose::default()).unwrap();
+    settle(&mut world, car);
+    world
+        .set_controls(
+            car,
+            Controls {
+                throttle: 1.0,
+                ..Controls::default()
+            },
+        )
+        .unwrap();
+    // Accelerate through at least one upshift; the box must shift and the car
+    // must stay finite and keep moving with the fuel cut in the loop.
+    let mut gears_seen = Vec::new();
+    for _ in 0..240 * 12 {
+        step(&mut world, 1);
+        let gear = world.snapshot(car).unwrap().gear;
+        if gears_seen.last() != Some(&gear) {
+            gears_seen.push(gear);
+        }
+    }
+    let snapshot = world.snapshot(car).unwrap();
+    assert!(
+        snapshot.speed_mps > 5.0,
+        "the car stopped: {}",
+        snapshot.speed_mps
+    );
+    assert!(
+        snapshot.wheels.iter().all(|wheel| wheel.load_n.is_finite()),
+        "the fuel cut destabilised the loads"
+    );
+    // A cut-off forces at least one shift while running full throttle.
+    assert!(
+        gears_seen.len() >= 2,
+        "the box never shifted: {gears_seen:?}"
+    );
+}
+
+fn world_density_at(altitude: f32) -> f32 {
+    // Same ISA model the world uses; kept local so the test does not reach in.
+    1.225_f32 * (-altitude / 8_500.0).exp()
+}

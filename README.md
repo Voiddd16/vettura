@@ -57,6 +57,7 @@ workspace：每个 crate 一个顶层目录，`cargo` 命令在工程根执行�
 | 赛道演进：`groove.ini` → 橡胶堆积，赛线随行驶提升抓地 | 可用 |
 | 轮胎：热/胎压/磨损、平点/抱死振动、载荷敏感、松弛长度、Magic Formula 滑移曲线 | 可用 |
 | ERS/混动、发动机热/功率保护、水膜/aquaplaning、气动侧向力/横摆稳定性、悬架非线性与运动学 | 可用 |
+| 传动/环境补全：`power.lut` 全扭矩曲线、涡轮增压滞后、`COAST_REF` 收油制动、软限速器、换挡断油、海拔功率与空气密度 | 可用 |
 | KN5 → Godot 场景（节点树 / ArrayMesh / 贴图 / 材质） | 可用 |
 | Godot 扩展类（`Kn5File` / `AcCar` / `VehicleBody` / `WorldBody` / `FmodSystem`） | 可用，见 `gdext/baseline.tscn` |
 | AC 车模声音 + FMOD runtime | 可用：读 `sfx/GUIDs.txt` → 直接调 FMOD 播放 `.bank`（`--features fmod`） |
@@ -68,6 +69,49 @@ cargo test --workspace
 cargo build -p vettura-godot                       # 产出 target/debug/libvettura_native.dylib
 cargo build -p vettura-godot --features fmod       # 接真机 FMOD 声音
 ```
+
+## 物理系统（`world/` + `physics/`）
+
+车辆物理直接读 AC 的 `data.acd`（`car.ini` / `engine.ini` / `drivetrain.ini` /
+`suspensions.ini` / `tyres.ini` / `aero.ini` / `brakes.ini` / 赛道 `groove.ini`
+/ `surfaces.ini`），落到 Jolt 的固定步长世界里。写法是**同一套原则**：Jolt
+线性提供底座（线性弹簧、阻尼、轮胎曲线、传动），其余按"平行力/乘性倍率/输入
+修正"叠加——所以每个子系统的默认参数都不改变 Jolt 原有行为，只有 AC 数据
+（或显式 authored 值）才打开对应物理。
+
+| 子系统 | 覆盖内容 |
+| --- | --- |
+| 轮胎 | `DY0/DX0` 峰值摩擦、`FZ0`/`LS_EXP*` 载荷敏感、`RELAXATION_LENGTH` 松弛长度、`FRICTION_LIMIT_ANGLE`/`FALLOFF_LEVEL` → Magic Formula 滑移曲线（移植自 Project Chrono 的 Pac89 公式）、胎温/胎压/磨损/grain-blister、平点与抱死振动、联合滑移摩擦圆、动态水膜 |
+| 悬架 | 渐进弹簧 / bump & rebound stop / heave 第三弹簧 / 两级阻尼（bleeder）/ 压缩-回弹非对称、静态与动态外倾、外倾推力、侧倾中心与 anti-dive/anti-squat 的力臂修正、caster/KPI 转向轴几何、半主动/全主动执行器 |
+| 动力总成 | `power.lut` 全扭矩曲线、涡轮增压（`MAX_BOOST`/`WASTEGATE`/`REFERENCE_RPM`/`GAMMA`/`LAG_*`）、`COAST_REF` 收油制动、换挡/离合器时间、差速器限滑、软限速器（`LIMITER_HZ`）、换挡断油（`AUTO_CUTOFF_TIME`）、倒挡齿比（`GEAR_R`）、手刹扭矩 |
+| 空气动力学 | 逐翼 `LUT_AOA_CL`/`LUT_GH_CL` 攻角 × 离地表（地效与失速）、前后轴分配、侧向力与回正横摆力矩、DRS、脏空气尾流（`dirty_air`）、海拔稀薄空气 |
+| 热与环境 | 刹车双质量（摩擦面 + 转子核心热浸）、发动机水温/油温窗口、三层胎温与 `PERFORMANCE_CURVE`、负温度（冬季工况）、阳光加热路面的时间演化（阳光→路温→胎温→抓地） |
+| 车身与控制 | `car.ini INERTIA` 惯量张量、燃油载荷与油耗、ERS 部署/回收与油耗、ABS/TC 闭环、`STEER_LOCK`/`STEER_RATIO` 转向锁 |
+| 世界与内容 | AC 赛道加载与物理三角、`groove.ini` 橡胶堆积、`fast_lane.ai`/`pit_lane.ai`、AI 纯跟踪 + 车流避让、分段计时、碰撞碎片刚体（二次碰撞）、固定步长确定性回放 |
+
+已知边界（写进 `docs/physics.md`，不是 TODO）：
+
+- **轮胎力与轮毂转动由 Jolt 同一套冲量驱动**。要接管轮胎力（逐六分力、逐轮
+  刹车/ABS）就必须同时接管轮毂，而 oxijolt 公开 API 不给这个入口，所以这条
+  留给"换后端/fork"的架构阶段；
+- `Chrono::Vehicle` 后端（`--features chrono`）只覆盖整车平地工况，与 Jolt
+  世界并存而不是混合；共享的是同一份 `VehicleSpec`；
+- AC 的 `WBCAR_*`/`WBTYRE_*` 悬架硬点与 `TRACK` 不在同一可信坐标系（实测瞬心
+  落到车外 5.9 m），因此侧倾中心 / caster / anti-dive 用**典型默认值 + 显式
+  覆盖**，没有从错数据反推。
+
+设计取舍与 Chrono 移植边界见 `docs/physics.md` 与 `third_party/README.md`。
+
+跑真实资产验证（Daytona 赛道 + F1 2008 车；需本地 `test/` 资源在位）：
+
+```bash
+cargo test -p vettura-world --test track_module -- --ignored   # 赛道/AI/计时/发车格
+cargo test -p vettura-assets --test real_car -- --ignored       # 真实车数据映射
+```
+
+单元侧覆盖每一条物理模型（`world/tests/world_physics.rs` 60 例 + spec/映射层
+单测），新增模型时按"可观测行为"写测试：例如侧倾中心降低 → 侧倾变小、
+anti-dive 增大 → 制动俯仰变小、脏空气 → 跟车下压力变小。
 
 `gdext/vettura_native.gdextension` 把库路径指向 `res://target/debug/libvettura_native.dylib`
 （macOS），与工程同根，无需软链接。端到端冒烟：

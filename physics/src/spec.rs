@@ -312,6 +312,14 @@ pub struct SuspensionSpec {
     /// `0..=1`. Same mechanism as [`Self::anti_dive_fraction`] under power,
     /// where a real rear axle resists squat.
     pub anti_squat_fraction: f32,
+    /// Caster angle of the steering axis, degrees. Positive leans the axis
+    /// backwards, which puts the contact patch behind the steering pivot and
+    /// makes the wheel self-centre.
+    pub caster_angle_deg: f32,
+    /// Kingpin (steering-axis) inclination, degrees. Steering a wheel with an
+    /// inclined axis leans it, which is how a steered corner also picks up
+    /// camber without any body roll.
+    pub kingpin_angle_deg: f32,
 }
 
 impl Default for SuspensionSpec {
@@ -343,6 +351,9 @@ impl Default for SuspensionSpec {
             // suspension links; racers run more. Both can be authored.
             anti_dive_fraction: 0.15,
             anti_squat_fraction: 0.10,
+            // Typical road-car steering-axis geometry.
+            caster_angle_deg: 4.0,
+            kingpin_angle_deg: 8.0,
         }
     }
 }
@@ -380,6 +391,31 @@ impl SuspensionSpec {
         } else {
             0.0
         }
+    }
+
+    /// Camber a steered wheel picks up from the steering axis, radians.
+    ///
+    /// Turning a wheel whose steering axis is inclined leans the wheel, so a
+    /// car running lock has camber on the steered axle without any body roll
+    /// at all. This is the reason a steering-heavy corner also loads the
+    /// outside tyre's edge.
+    pub fn steer_camber_gain(&self, steer_angle_rad: f32) -> f32 {
+        if !steer_angle_rad.is_finite() {
+            return 0.0;
+        }
+        -self.kingpin_angle_deg.to_radians() * steer_angle_rad.sin()
+    }
+
+    /// Caster trail: how far behind the steering pivot the contact patch sits,
+    /// metres. It is the lever the vertical load pushes on to centre the
+    /// wheel, and it is what makes a shopping-trolley wheel track straight.
+    pub fn caster_trail_m(&self, wheel_radius_m: f32) -> f32 {
+        let radius = if wheel_radius_m.is_finite() {
+            wheel_radius_m.max(0.05)
+        } else {
+            0.05
+        };
+        (radius * self.caster_angle_deg.to_radians().tan()).clamp(0.0, 0.5)
     }
 
     /// Camber of the wheel at a given compression, radians.
@@ -767,6 +803,13 @@ pub struct EngineSpec {
     /// Shape of the coast curve above the reference, `0..=1`. AC's
     /// `[COAST_REF] NON_LINEARITY`: `0` linear in rpm, `1` fully quadratic.
     pub coast_non_linearity: f32,
+    /// Frequency the rev limiter cuts fuel at, Hz. AC's `LIMITER_HZ`; `0`
+    /// means the limiter simply stops the engine, which is what a hard rpm
+    /// clamp does anyway.
+    pub limiter_hz: f32,
+    /// Power lost per kilometre of altitude, fraction. AC's
+    /// `ALTITUDE_SENSITIVITY`; `0` disables the effect.
+    pub altitude_sensitivity: f32,
     pub gear_ratios: Vec<f32>,
     pub final_drive: f32,
     pub thermal: EngineThermalSpec,
@@ -785,6 +828,8 @@ impl Default for EngineSpec {
             coast_torque_nm: 0.0,
             coast_reference_rpm: 3_000.0,
             coast_non_linearity: 0.0,
+            limiter_hz: 0.0,
+            altitude_sensitivity: 0.0,
             gear_ratios: vec![3.2, 2.1, 1.6, 1.3, 1.1, 0.95],
             final_drive: 3.7,
             thermal: EngineThermalSpec::default(),
@@ -925,6 +970,37 @@ impl EngineSpec {
         let non_linearity = self.coast_non_linearity.clamp(0.0, 1.0);
         let shape = ratio * (1.0 - non_linearity) + ratio * ratio * non_linearity;
         torque * shape
+    }
+
+    /// Rev-limiter duty cycle at an engine speed, `0..=1`.
+    ///
+    /// A soft limiter does not stop the engine; it cuts the fuel repeatedly at
+    /// `limiter_hz`, and the fraction of time the fuel is on falls as the rpm
+    /// climbs past the redline. That is what makes a limiter feel like a
+    /// bounce instead of a wall.
+    pub fn limiter_duty(&self, rpm: f32) -> f32 {
+        if self.limiter_hz <= 0.0 || !rpm.is_finite() {
+            return 1.0;
+        }
+        let redline = self.redline_rpm.max(1.0);
+        if rpm <= redline {
+            return 1.0;
+        }
+        // 5 % of overspeed is a full cut.
+        let excess = ((rpm - redline) / (redline * 0.05)).clamp(0.0, 1.0);
+        (1.0 - excess).clamp(0.0, 1.0)
+    }
+
+    /// Power multiplier from altitude, `0..=1`.
+    ///
+    /// A naturally aspirated engine breathes the thinning air, so it loses
+    /// power with height; AC quantifies that as a fraction per kilometre.
+    pub fn altitude_multiplier(&self, altitude_m: f32) -> f32 {
+        if self.altitude_sensitivity <= 0.0 || !altitude_m.is_finite() {
+            return 1.0;
+        }
+        let km = altitude_m / 1_000.0;
+        (1.0 - self.altitude_sensitivity.max(0.0) * km).clamp(0.2, 1.0)
     }
 
     /// Power multiplier from coolant and oil temperature, `0..=1`.
@@ -2735,6 +2811,52 @@ mod tests {
         // No authored data: no extra rolling resistance at all.
         let bare = TyreSpec::default();
         assert_eq!(bare.rolling_resistance_n(30.0, 0.1, 17.0), 0.0);
+    }
+
+    #[test]
+    fn steering_axis_geometry_adds_camber_and_self_centering() {
+        let suspension = SuspensionSpec::default();
+        // Straight ahead: no camber from the axis and no trail effect.
+        assert_eq!(suspension.steer_camber_gain(0.0), 0.0);
+        // Lock on: the wheel leans.
+        let steer_gain = suspension.steer_camber_gain(0.3);
+        assert!(steer_gain.abs() > 0.01, "{steer_gain}");
+        assert!(suspension.caster_trail_m(0.33) > 0.01);
+        // Nonsense or a disabled axis do nothing.
+        assert_eq!(suspension.steer_camber_gain(f32::NAN), 0.0);
+        let flat = SuspensionSpec {
+            caster_angle_deg: 0.0,
+            kingpin_angle_deg: 0.0,
+            ..SuspensionSpec::default()
+        };
+        assert_eq!(flat.caster_trail_m(0.33), 0.0);
+        assert_eq!(flat.steer_camber_gain(0.3), 0.0);
+    }
+
+    #[test]
+    fn the_soft_limiter_and_altitude_detune_the_engine() {
+        let engine = EngineSpec {
+            redline_rpm: 8_000.0,
+            limiter_hz: 60.0,
+            altitude_sensitivity: 0.14,
+            ..EngineSpec::default()
+        };
+        // Below the redline the limiter is open.
+        assert_eq!(engine.limiter_duty(8_000.0), 1.0);
+        // Past it the duty falls and bottoms out at a full cut.
+        let mid = engine.limiter_duty(8_200.0);
+        assert!(mid > 0.0 && mid < 1.0, "{mid}");
+        assert_eq!(engine.limiter_duty(9_000.0), 0.0);
+        // A hard limiter (no frequency) is always open here.
+        assert_eq!(EngineSpec::default().limiter_duty(20_000.0), 1.0);
+
+        // Altitude: no loss at sea level, 14 % per kilometre with floor 20 %.
+        assert_eq!(engine.altitude_multiplier(0.0), 1.0);
+        assert!((engine.altitude_multiplier(1_000.0) - 0.86).abs() < 1e-6);
+        assert!((engine.altitude_multiplier(5_000.0) - 0.3).abs() < 1e-6);
+        assert!(engine.altitude_multiplier(20_000.0) >= 0.2);
+        // No authored sensitivity: no altitude effect at all.
+        assert_eq!(EngineSpec::default().altitude_multiplier(3_000.0), 1.0);
     }
 
     #[test]

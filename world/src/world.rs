@@ -148,6 +148,9 @@ pub struct World {
     weather: Weather,
     weather_target: Option<Weather>,
     weather_rate: f32,
+    /// Altitude above sea level of this track, metres. Thins the air for the
+    /// aerodynamics and the engine.
+    altitude_m: f32,
     vehicles: Vec<VehicleRuntime>,
     debris: Vec<DebrisRuntime>,
     body_to_vehicle: HashMap<BodyId, VehicleHandle>,
@@ -219,6 +222,7 @@ impl World {
             weather: Weather::dry(),
             weather_target: None,
             weather_rate: 1.0,
+            altitude_m: 0.0,
             vehicles: Vec::new(),
             debris: Vec::new(),
             body_to_vehicle: HashMap::new(),
@@ -671,6 +675,9 @@ impl World {
             let Self {
                 physics, vehicles, ..
             } = self;
+            for vehicle in vehicles.iter_mut() {
+                vehicle.prepare_powertrain(dt);
+            }
             for vehicle in vehicles.iter_mut() {
                 vehicle.update_boost(physics, dt)?;
             }
@@ -1188,6 +1195,26 @@ impl World {
         }
     }
 
+    /// Altitude above sea level this track sits at, metres.
+    pub fn altitude_m(&self) -> f32 {
+        self.altitude_m
+    }
+
+    /// Set the track's altitude. Thins the air for aero and engine, and the
+    /// density change is instantaneous because it is a location, not a state.
+    pub fn set_altitude_m(&mut self, altitude_m: f32) {
+        if altitude_m.is_finite() && altitude_m >= 0.0 {
+            self.altitude_m = altitude_m.clamp(0.0, 10_000.0);
+        }
+    }
+
+    /// Air density at this track's altitude, kg/m³.
+    pub fn air_density_kg_m3(&self) -> f32 {
+        // ISA scale height, ~8.5 km.
+        let density = self.weather.air_density_kg_m3.max(0.0) * (-self.altitude_m / 8_500.0).exp();
+        density.clamp(0.02, 5.0)
+    }
+
     /// Road-surface temperature the world has evolved to, °C.
     pub fn track_temperature_c(&self) -> f32 {
         self.weather.track_temperature_c
@@ -1223,6 +1250,8 @@ impl World {
         // Dirty air: each car works out how far behind the car ahead it is, in
         // units of the wake's reach, so its downforce can be cut while it sits
         // in someone's wake. This is per-car physics, not a race rule.
+        // The altitude-scaled density is read before the borrow is split.
+        let altitude_density = self.air_density_kg_m3();
         let Self {
             physics, vehicles, ..
         } = self;
@@ -1246,8 +1275,9 @@ impl World {
             } else {
                 vehicle.spec.drag_coefficient.max(0.0) * vehicle.spec.frontal_area_m2.max(0.0)
             };
+            // Altitude thins the air for the drag as well.
             let drag_factor = 0.5
-                * weather.air_density_kg_m3
+                * altitude_density
                 * drag_area
                 * vehicle.tuning.drag_scale.max(0.0)
                 * vehicle.drag_multiplier();
@@ -1279,7 +1309,14 @@ impl World {
         for (vehicle, exposure) in vehicles.iter_mut().zip(exposures) {
             let linear = vehicle.snapshot.linear_velocity;
             let relative_air = linear - weather.wind;
-            vehicle.apply_aero_forces(physics, &weather, linear, relative_air, *exposure)?;
+            vehicle.apply_aero_forces(
+                physics,
+                &weather,
+                linear,
+                relative_air,
+                *exposure,
+                altitude_density,
+            )?;
             vehicle.apply_suspension_forces(physics, dt)?;
         }
 

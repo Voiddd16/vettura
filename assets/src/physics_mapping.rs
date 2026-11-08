@@ -119,6 +119,10 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
                 // stay at typical road-car values.
                 anti_dive_fraction: axle.anti_dive.unwrap_or(0.15).clamp(0.0, 1.0),
                 anti_squat_fraction: axle.anti_squat.unwrap_or(0.10).clamp(0.0, 1.0),
+                // Steering-axis geometry; AC does not publish it, so the
+                // road-car defaults stay unless a mod authors it.
+                caster_angle_deg: axle.caster_deg.unwrap_or(4.0).clamp(-15.0, 20.0),
+                kingpin_angle_deg: axle.kingpin_deg.unwrap_or(8.0).clamp(-15.0, 20.0),
                 fast_bump_damper_ns_per_m: axle.fast_bump.unwrap_or(0.0).clamp(0.0, 500_000.0),
                 fast_bump_threshold_mps: axle.fast_bump_threshold.unwrap_or(0.0).clamp(0.0, 5.0),
                 fast_rebound_damper_ns_per_m: axle
@@ -194,6 +198,14 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
             .get_f32("COAST_REF", "NON_LINEARITY")
             .unwrap_or(0.0)
             .clamp(0.0, 1.0),
+        limiter_hz: engine
+            .get_f32("ENGINE_DATA", "LIMITER_HZ")
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .unwrap_or(spec.engine.limiter_hz),
+        altitude_sensitivity: engine
+            .get_f32("ENGINE_DATA", "ALTITUDE_SENSITIVITY")
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .unwrap_or(spec.engine.altitude_sensitivity),
         gear_ratios: read_gear_ratios(&drivetrain)
             .unwrap_or_else(|| spec.engine.gear_ratios.clone()),
         final_drive: drivetrain
@@ -899,6 +911,8 @@ struct AxleData {
     roll_center: Option<f32>,
     anti_dive: Option<f32>,
     anti_squat: Option<f32>,
+    caster_deg: Option<f32>,
+    kingpin_deg: Option<f32>,
     fast_bump: Option<f32>,
     fast_bump_threshold: Option<f32>,
     fast_rebound: Option<f32>,
@@ -933,6 +947,8 @@ impl AxleData {
                 .or_else(|| suspensions.get_f32("ARB", &format!("{axle}_ROLL_CENTER"))),
             anti_dive: suspensions.get_f32(axle, "ANTI_DIVE"),
             anti_squat: suspensions.get_f32(axle, "ANTI_SQUAT"),
+            caster_deg: suspensions.get_f32(axle, "CASTER"),
+            kingpin_deg: suspensions.get_f32(axle, "KINGPIN"),
             // Two-rate dampers: the bleeder rate and the speed it kicks in.
             fast_bump: suspensions.get_f32(axle, "DAMP_FAST_BUMP"),
             fast_bump_threshold: suspensions.get_f32(axle, "DAMP_FAST_BUMPTHRESHOLD"),

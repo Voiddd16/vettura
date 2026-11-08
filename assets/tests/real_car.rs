@@ -140,6 +140,13 @@ fn real_f1_car_maps_engine_curve_and_inline_comments() {
         .0;
     assert!((peak_x - 5.95).abs() < 1e-3, "peak slipped to {peak_x}");
 
+    // Engine: `LIMITER_HZ=60` for a soft limiter and `ALTITUDE_SENSITIVITY`
+    // for the altitude power loss.
+    assert!((spec.engine.limiter_hz - 60.0).abs() < 1e-6);
+    assert!((spec.engine.altitude_sensitivity - 0.14).abs() < 1e-6);
+    assert!(spec.wheels[0].suspension.caster_angle_deg > 0.0);
+    assert!(spec.wheels[0].suspension.kingpin_angle_deg > 0.0);
+
     // Tyre load sensitivity and relaxation length, AC's `FZ0`/`LS_EXP*`
     // averaged over the axles (3705/4295 N, 0.78/0.83, 0.92/0.95).
     assert!((spec.tyres.reference_load_n - 4_000.0).abs() < 1.0);
@@ -155,7 +162,8 @@ fn real_f1_car_maps_engine_curve_and_inline_comments() {
     assert!(spec.tyres.pneumatic_trail_m > 0.0);
 
     // Steering: `STEER_LOCK=230` through `STEER_RATIO=15` is ~15.3 deg at the
-    // wheel, not 30 deg of the old default.
+    // wheel, not 30 deg of the old default. The F1 pack authors no caster or
+    // kingpin, so the road-car defaults stay.
     assert!((spec.max_steer_angle_deg - 230.0 / 15.0).abs() < 1e-3);
 
     // The axle's roll centre, above the road and below the centre of mass.
