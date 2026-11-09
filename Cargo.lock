@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acd-inspect"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -345,7 +345,7 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "kn5-inspect"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -653,14 +653,14 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vettura-acdata"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "vettura-assets"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "glam 0.34.1",
  "thiserror",
@@ -672,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "vettura-audio"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "libfmod",
  "thiserror",
@@ -680,14 +680,14 @@ dependencies = [
 
 [[package]]
 name = "vettura-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "glam 0.34.1",
 ]
 
 [[package]]
 name = "vettura-godot"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "glam 0.34.1",
  "godot",
@@ -701,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "vettura-kn5"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "glam 0.34.1",
  "thiserror",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "vettura-physics"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "glam 0.34.1",
  "serde",
@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "vettura-world"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "glam 0.34.1",
  "oxijolt",

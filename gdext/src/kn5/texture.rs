@@ -14,14 +14,15 @@
 //!    解压缩并让 Godot 重新生成 mip；法线类贴图会开启 `renormalize`，避免逐级
 //!    降采样后法线长度衰减。
 //!
-//! 解码结果按贴图名缓存，重复引用不会重复解码。
+//! 解码结果按贴图名缓存（[`super::cache::FileResources`]），重复引用不会重复
+//! 解码。
 
-use std::collections::HashMap;
+pub use vettura_kn5::strip_mip_levels;
 
 use godot::classes::{Image, ImageTexture};
 use godot::global::Error;
 use godot::prelude::*;
-use vettura_kn5::{Kn5, dds_layout, strip_mip_levels};
+use vettura_kn5::dds_layout;
 
 /// 贴图用途；决定 mip 重新生成的方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,52 +41,8 @@ impl TextureKind {
     }
 }
 
-/// 贴图名（大小写不敏感）→ 已解码的 `ImageTexture`。
-pub struct TextureLibrary<'a> {
-    kn5: &'a Kn5,
-    /// 贴图名（小写）→ 贴图下标。
-    index_by_name: HashMap<String, usize>,
-    /// 与 `kn5.textures` 等长的缓存槽；`None` 表示尚未解码或解码失败。
-    cache: Vec<Option<Gd<ImageTexture>>>,
-}
-
-impl<'a> TextureLibrary<'a> {
-    pub fn new(kn5: &'a Kn5) -> Self {
-        let mut index_by_name = HashMap::with_capacity(kn5.textures.len());
-        for (index, texture) in kn5.textures.iter().enumerate() {
-            index_by_name
-                .entry(texture.name.to_ascii_lowercase())
-                .or_insert(index);
-        }
-
-        Self {
-            kn5,
-            index_by_name,
-            cache: vec![None; kn5.textures.len()],
-        }
-    }
-
-    /// 按贴图名取贴图；`kind` 决定退化路径的处理方式。
-    pub fn get(&mut self, name: &str, kind: TextureKind) -> Option<Gd<ImageTexture>> {
-        let index = *self.index_by_name.get(&name.to_ascii_lowercase())?;
-        if let Some(cached) = &self.cache[index] {
-            return Some(cached.clone());
-        }
-
-        let texture = &self.kn5.textures[index];
-        if !texture.active {
-            godot_warn!("KN5 texture '{}' is marked inactive", texture.name);
-            return None;
-        }
-
-        let decoded = decode(&texture.name, texture.data.as_slice(), kind);
-        self.cache[index] = decoded.clone();
-        decoded
-    }
-}
-
 /// DDS 字节 → `ImageTexture`。失败时打印告警并返回 `None`（材质退化为无贴图）。
-fn decode(name: &str, bytes: &[u8], kind: TextureKind) -> Option<Gd<ImageTexture>> {
+pub(crate) fn decode(name: &str, bytes: &[u8], kind: TextureKind) -> Option<Gd<ImageTexture>> {
     if bytes.is_empty() {
         godot_warn!("embedded KN5 texture has no data");
         return None;

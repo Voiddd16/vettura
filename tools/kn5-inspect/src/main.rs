@@ -2,14 +2,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use vettura_kn5::{Kn5, NodeKind};
+use vettura_kn5::{Kn5, NodeKind, synth::SynthOptions};
 
 /// Print a summary of an Assetto Corsa `.kn5` model.
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Args {
-    /// Path to the .kn5 file.
-    path: PathBuf,
+    /// Path to the .kn5 file. Omit when generating a synthetic one.
+    path: Option<PathBuf>,
 
     /// List embedded textures.
     #[arg(long)]
@@ -30,14 +30,48 @@ struct Args {
     /// Write embedded DDS textures into this directory.
     #[arg(long, value_name = "DIR")]
     extract_textures: Option<PathBuf>,
+
+    /// Write a synthetic .kn5 (with valid DXT1 textures) here instead of
+    /// inspecting an existing file. Used by the load-time probes and benches.
+    #[arg(long, value_name = "PATH")]
+    synth: Option<PathBuf>,
+
+    /// Synthetic model: mesh count.
+    #[arg(long, default_value_t = 128)]
+    synth_meshes: usize,
+
+    /// Synthetic model: vertices per mesh.
+    #[arg(long, default_value_t = 1024)]
+    synth_vertices: usize,
+
+    /// Synthetic model: texture count.
+    #[arg(long, default_value_t = 32)]
+    synth_textures: usize,
+
+    /// Synthetic model: approximate bytes per texture.
+    #[arg(long, default_value_t = 65536)]
+    synth_texture_bytes: usize,
+
+    /// Write synthetic textures with KN5-style truncated mip chains
+    /// (Godot has to repair them, like real car mods).
+    #[arg(long, default_value_t = true)]
+    synth_truncated_mips: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let kn5 = Kn5::from_path(&args.path)
-        .with_context(|| format!("failed to parse {}", args.path.display()))?;
 
-    println!("file:      {}", args.path.display());
+    if let Some(out) = &args.synth {
+        return write_synthetic(&args, out);
+    }
+
+    let Some(path) = args.path.as_ref() else {
+        anyhow::bail!("give a .kn5 path, or use --synth PATH to generate one");
+    };
+    let kn5 =
+        Kn5::from_path(path).with_context(|| format!("failed to parse {}", path.display()))?;
+
+    println!("file:      {}", path.display());
     println!("version:   {}", kn5.version);
     if let Some(extra) = kn5.header_extra {
         println!("header:    extra={extra}");
@@ -141,6 +175,46 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn write_synthetic(args: &Args, out: &Path) -> Result<()> {
+    let options = SynthOptions {
+        meshes: args.synth_meshes,
+        vertices_per_mesh: args.synth_vertices,
+        textures: args.synth_textures,
+        texture_bytes: args.synth_texture_bytes,
+        texture_mip_levels: 8,
+        truncated_texture_mips: args.synth_truncated_mips,
+    };
+    let bytes = vettura_kn5::synth::synthetic_kn5(options);
+    std::fs::write(out, &bytes).with_context(|| format!("cannot write {}", out.display()))?;
+
+    println!(
+        "wrote {} ({}) bytes: {} meshes x {} vertices, {} textures{}",
+        out.display(),
+        human_bytes(bytes.len()),
+        options.meshes,
+        options.vertices_per_mesh,
+        options.textures,
+        if options.truncated_texture_mips {
+            ", truncated mip chains"
+        } else {
+            ", full mip chains"
+        }
+    );
+    Ok(())
+}
+
+fn human_bytes(bytes: usize) -> String {
+    const KIB: f64 = 1024.0;
+    let value = bytes as f64;
+    if value >= KIB * KIB {
+        format!("{:.1} MiB", value / (KIB * KIB))
+    } else if value >= KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn extract_textures(kn5: &Kn5, dir: &Path) -> Result<()> {

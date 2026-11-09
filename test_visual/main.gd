@@ -49,6 +49,10 @@ var _camera_mode := 0
 ## 绕车模式的角度，需要跨帧累积，所以放这里而不是 `update_camera()` 的局部量。
 var _orbit_angle := 0.0
 
+## 车模是否加载成功（`test/` 资源缺失时为 `false`）。
+func has_car() -> bool:
+	return _car_root != null
+
 func _ready() -> void:
 	_load_default_car()
 	_update_hud()
@@ -61,6 +65,21 @@ func _process(delta: float) -> void:
 
 ## 打开默认车目录并把主模型实例化进 `CarPivot`。
 func _load_default_car() -> void:
+	# `test/` 是本地大体积资源，不入库（见 README）。缺资产时降级成警告并跳过
+	# 加载：预览页、其它冒烟场景和 `--install-android-build-template` 之类的
+	# 工程级命令都不该因为一台没下载的车把控制台刷成一片 ERROR。
+	if not DirAccess.dir_exists_absolute(DEFAULT_CAR_DIR):
+		push_warning("[visual] 默认车目录不存在，跳过模型加载：%s\n" % DEFAULT_CAR_DIR
+				+ "（放置教程见 README「本地测试资源」）")
+		_update_hud()
+		return
+
+	# GDExtension 还没注册（例如首次打开、缓存未生成）时也不刷错误。
+	if not ClassDB.class_exists("AcCar"):
+		push_warning("[visual] GDExtension 未注册（AcCar 不存在），跳过模型加载")
+		_update_hud()
+		return
+
 	var car := AcCar.new()
 	if not car.open(DEFAULT_CAR_DIR):
 		push_error("[visual] AcCar.open failed: %s" % DEFAULT_CAR_DIR)

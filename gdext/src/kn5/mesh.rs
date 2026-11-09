@@ -9,14 +9,15 @@
 //! 参考：Content Manager 的 `Kn5RenderableObject`（顶点布局 `PNTG`）和
 //! `Kn5SkinnedObject`（`PNTGW4B`）。
 
-use godot::classes::mesh::{ArrayType, PrimitiveType};
-use godot::classes::{ArrayMesh, MeshInstance3D, Node, Skeleton3D, Skin};
-use godot::prelude::*;
-use vettura_kn5::{Kn5, Mesh, Node as Kn5Node, NodeKind, SkinnedMesh};
+use std::sync::Arc;
 
+use godot::classes::mesh::{ArrayType, PrimitiveType};
+use godot::classes::{ArrayMesh, MeshInstance3D, Node, Node3D, Skeleton3D, Skin};
+use godot::prelude::*;
+use vettura_kn5::{Kn5, Mesh, MeshFlags, Node as Kn5Node, NodeKind, SkinnedMesh, Transform};
+
+use super::cache::FileResources;
 use super::convert::kn5_transform_to_godot;
-use super::material;
-use super::texture::TextureLibrary;
 
 /// surface 数组的槽位数量（`Mesh::ArrayType::MAX`）。
 const ARRAY_TYPE_COUNT: usize = 13;
@@ -135,39 +136,84 @@ pub fn skinned_array_mesh(mesh: &SkinnedMesh, name: &str) -> Option<Gd<ArrayMesh
     Some(surface_from_arrays(arrays))
 }
 
-/// 网格节点 → 挂好网格与材质的 `MeshInstance3D`。
+/// dummy 节点 → 只带变换的 `Node3D`（挂点，例如 `WHEEL_LF`）。
+pub fn dummy_instance(name: &str, transform: &Transform) -> Gd<Node3D> {
+    let mut node = Node3D::new_alloc();
+    node.set_transform(kn5_transform_to_godot(transform));
+    node.set_name(&StringName::from(name));
+    node
+}
+
+/// 静态网格节点 → 挂好网格与材质的 `MeshInstance3D`。
 ///
-/// 返回 `None` 表示该节点不应实例化（dummy，或几何数据为空）。
-pub fn mesh_instance(
-    node: &Kn5Node,
-    kn5: &Kn5,
-    textures: &mut TextureLibrary<'_>,
+/// 返回 `None` 表示该节点不应实例化（几何数据为空）。
+pub fn static_mesh_instance(
+    name: &str,
+    mesh: &Mesh,
+    resources: &FileResources,
 ) -> Option<Gd<MeshInstance3D>> {
+    let array_mesh = static_array_mesh(mesh, name)?;
+    finish_instance(
+        name,
+        array_mesh,
+        mesh.flags,
+        mesh.material_index(),
+        resources,
+    )
+}
+
+/// 蒙皮网格节点 → 带 `BONES/WEIGHTS` 的 `MeshInstance3D`（无骨骼时退化为静态表面）。
+pub fn skinned_mesh_instance(
+    name: &str,
+    mesh: &Arc<SkinnedMesh>,
+    resources: &FileResources,
+) -> Option<Gd<MeshInstance3D>> {
+    let array_mesh = skinned_array_mesh(mesh, name)?;
+    let mut instance = finish_instance(
+        name,
+        array_mesh,
+        mesh.flags,
+        mesh.material_index(),
+        resources,
+    )?;
+    if !mesh.bones.is_empty() {
+        attach_skeleton(&mut instance, mesh);
+    }
+    Some(instance)
+}
+
+/// 网格 + 材质 + 渲染标志 → 完成的 `MeshInstance3D`。
+fn finish_instance(
+    name: &str,
+    mut array_mesh: Gd<ArrayMesh>,
+    flags: MeshFlags,
+    material_index: Option<usize>,
+    resources: &FileResources,
+) -> Option<Gd<MeshInstance3D>> {
+    // 网格为空的节点在 `static_array_mesh` 里已被拒绝；这里只做挂载。
     let mut instance = MeshInstance3D::new_alloc();
-
-    let (array_mesh, flags) = match &node.kind {
-        NodeKind::Mesh(mesh) => {
-            let array_mesh = static_array_mesh(mesh, &node.name)?;
-            (array_mesh, mesh.flags)
+    instance.set_name(&StringName::from(name));
+    if let Some(index) = material_index {
+        if resources.kn5().materials.get(index).is_some() {
+            // 材质按 KN5 材质下标缓存：同一份模型里的网格共享一份材质。
+            if let Some(material) = resources.material(index) {
+                array_mesh.surface_set_material(0, &material);
+            } else {
+                godot_warn!("material {} could not be created for '{}'", index, name);
+            }
+        } else {
+            godot_warn!(
+                "material index {} is out of range (node '{}', {} materials)",
+                index,
+                name,
+                resources.kn5().materials.len()
+            );
         }
-        NodeKind::SkinnedMesh(mesh) => {
-            let array_mesh = skinned_array_mesh(mesh, &node.name)?;
-            attach_skeleton(&mut instance, mesh);
-            (array_mesh, mesh.flags)
-        }
-        NodeKind::Dummy { .. } => return None,
-    };
+    }
 
-    let mut array_mesh = array_mesh;
-    let material_index = node.as_mesh().map_or_else(
-        || node.as_skinned_mesh().and_then(SkinnedMesh::material_index),
-        |mesh| mesh.material_index(),
-    );
-    apply_material(&mut array_mesh, kn5, material_index, textures);
     instance.set_mesh(&array_mesh);
     instance.set_visible(flags.is_visible);
     instance.set_cast_shadows_setting(shadow_setting(flags.cast_shadows));
-
     Some(instance)
 }
 
@@ -191,26 +237,6 @@ fn attach_skeleton(instance: &mut MeshInstance3D, mesh: &SkinnedMesh) {
     child.set_name(&StringName::from("SKN"));
     instance.add_child(&child.upcast::<Node>());
     instance.set_skeleton_path(&NodePath::from("SKN"));
-}
-
-fn apply_material(
-    array_mesh: &mut Gd<ArrayMesh>,
-    kn5: &Kn5,
-    material_index: Option<usize>,
-    textures: &mut TextureLibrary<'_>,
-) {
-    // `ArrayMesh` 是引用计数资源：这里的 `&mut` 只是为了 API 语义，set 之后
-    // 挂到 MeshInstance3D 上的同一份资源会立即看到材质。
-    let Some(index) = material_index else {
-        return;
-    };
-    let Some(kn5_material) = kn5.materials.get(index) else {
-        godot_warn!("material index {} is out of range", index);
-        return;
-    };
-
-    let material = material::create(kn5_material, textures);
-    array_mesh.surface_set_material(0, &material);
 }
 
 fn shadow_setting(

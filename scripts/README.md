@@ -8,6 +8,7 @@
 | --- | --- |
 | `fetch_fmod.py` | 从 fmod.com 下载 FMOD Engine SDK 2.02.22，解压到本地 `.cache/`，并编译 AC/mod bank 可能依赖的 `FMOD Distance Filter` DSP 插件 |
 | `pack_fmod.py` | 把 FMOD 运行期动态库拷进 Godot 导出目录（发行包必需）；缓存缺失时自动下载，支持跨平台与 `--arch` |
+| `load_probe.py` | 生成合成车模（`.kn5` + 合法 DXT1 DDS）并跑 Godot 无头加载探针，输出解析 / 冷实例化 / 缓存命中 / 分帧加载四段耗时。纯标准库，无需 uv 依赖 |
 
 ## 使用方式
 
@@ -22,6 +23,14 @@ uv run fetch_fmod.py --all
 
 # 已下载过，只重新解压 + 重建 runtime 与插件
 uv run fetch_fmod.py --extract-only
+```
+
+`load_probe.py` 不依赖任何第三方库（纯标准库）：
+
+```bash
+python3 scripts/load_probe.py                 # 默认 66 MiB 合成车模
+python3 scripts/load_probe.py --meshes 64     # 小模型快速迭代
+python3 scripts/load_probe.py --godot /path/to/Godot
 ```
 
 凭证从仓库根目录的 `.fmod.env` 读取（已加入 `.gitignore`，禁止提交）：

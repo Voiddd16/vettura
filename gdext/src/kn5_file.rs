@@ -1,11 +1,22 @@
+//! 加载入口：[`Kn5File`] 资源与分帧加载器 [`Kn5SceneBuilder`]。
+//!
+//! 两个入口都通过 [`crate::kn5::cache`] 拿到按文件共享的解析结果与解码缓存：
+//! 同一台车被 `AcCar`、`Kn5File`、多个实例同时引用时，`.kn5` 只解析一次，
+//! 每张内嵌 DDS 只解码一次，每个 KN5 材质只创建一次 `StandardMaterial3D`。
+
+use std::path::Path;
+use std::rc::Rc;
+use std::sync::Arc;
+
 use godot::classes::{ArrayMesh, Material, Node, Node3D, Resource};
 use godot::prelude::*;
 use vettura_kn5::{Kn5, NodeKind, transform_to_mat4};
 
+use crate::kn5::builder::Build;
+use crate::kn5::cache::{self, FileResources};
 use crate::kn5::convert;
 use crate::kn5::mesh;
-use crate::kn5::scene::{self, SceneOptions};
-use crate::kn5::texture::TextureLibrary;
+use crate::kn5::scene::SceneOptions;
 
 /// KN5 模型资源。
 ///
@@ -29,71 +40,74 @@ pub struct Kn5File {
     #[init(val = GString::new())]
     path: GString,
 
-    model: Option<Kn5>,
+    /// 按文件共享的缓存句柄；`None` 表示尚未成功加载。
+    resources: Option<Rc<FileResources>>,
+}
+
+fn parse_native(native: &str) -> Option<Arc<Kn5>> {
+    match Kn5::parse_owned(std::fs::read(native).ok()?) {
+        Ok(model) => Some(Arc::new(model)),
+        Err(err) => {
+            godot_error!("KN5 load failed: {}", err);
+            None
+        }
+    }
 }
 
 #[godot_api]
 impl Kn5File {
     /// 加载一个 `.kn5` 文件。
     ///
-    /// `path` 可以是绝对路径，也可以是 Godot 资源路径。加载成功返回
-    /// `true`；失败会打印错误并返回 `false`，此时旧模型会被清空。
+    /// `path` 可以是绝对路径，也可以是 Godot 资源路径。加载成功返回 `true`；
+    /// 失败会打印错误并返回 `false`，此时旧模型会被清空。
     #[func]
     pub fn load(&mut self, path: GString) -> bool {
-        match Kn5::from_path(crate::paths::native_path(&path)) {
-            Ok(model) => {
-                self.path = path;
-                self.model = Some(model);
-                true
-            }
-            Err(err) => {
-                godot_error!("KN5 load failed: {}", err);
-                self.model = None;
-                false
-            }
-        }
+        self.path = path;
+        self.resources = self.resources();
+        self.resources.is_some()
     }
 
     /// 当前是否已成功加载模型。
     #[func]
     pub fn is_loaded(&self) -> bool {
-        self.model.is_some()
+        self.resources.is_some()
     }
 
     /// 节点总数，包含根节点。
     #[func]
     pub fn node_count(&self) -> i64 {
-        self.model.as_ref().map_or(0, |kn5| kn5.node_count() as i64)
+        self.model().map_or(0, |kn5| kn5.node_count() as i64)
     }
 
     /// 可渲染网格数量（静态网格 + 蒙皮网格，不含 dummy）。
     #[func]
     pub fn mesh_count(&self) -> i64 {
-        self.model.as_ref().map_or(0, |kn5| kn5.mesh_count() as i64)
+        self.model().map_or(0, |kn5| kn5.mesh_count() as i64)
     }
 
     /// 三角形总数。
     #[func]
     pub fn triangle_count(&self) -> i64 {
-        self.model
-            .as_ref()
-            .map_or(0, |kn5| kn5.triangle_count() as i64)
+        self.model().map_or(0, |kn5| kn5.triangle_count() as i64)
     }
 
     /// 内嵌贴图数量。
     #[func]
     pub fn texture_count(&self) -> i64 {
-        self.model
-            .as_ref()
-            .map_or(0, |kn5| kn5.textures.len() as i64)
+        self.model().map_or(0, |kn5| kn5.textures.len() as i64)
     }
 
     /// 材质数量。
     #[func]
     pub fn material_count(&self) -> i64 {
-        self.model
-            .as_ref()
-            .map_or(0, |kn5| kn5.materials.len() as i64)
+        self.model().map_or(0, |kn5| kn5.materials.len() as i64)
+    }
+
+    /// 已解码的贴图数量（第一次 `instantiate()` 后会达到 `texture_count()`）。
+    #[func]
+    pub fn decoded_texture_count(&self) -> i64 {
+        self.resources()
+            .map_or(0, |r| r.decoded_texture_count() as i64)
     }
 
     /// 最近一次成功加载的文件路径；未加载时为空字符串。
@@ -118,23 +132,23 @@ impl Kn5File {
     #[func]
     pub fn instantiate_with_options(
         &mut self,
-        mut parent: Gd<Node>,
+        parent: Gd<Node>,
         skip_hidden: bool,
         root_name: GString,
     ) -> Option<Gd<Node3D>> {
+        let resources = self.resources.as_ref()?.clone();
         let name = if root_name.is_empty() {
             None
         } else {
             Some(root_name.to_string())
         };
-        let name = name.as_deref();
 
-        scene::instantiate(
-            self.model.as_ref()?,
-            &mut parent,
-            name,
-            SceneOptions { skip_hidden },
-        )
+        let mut build = Build::new(resources, SceneOptions { skip_hidden });
+        if let Some(name) = name {
+            build = build.with_root_name(Some(name));
+        }
+        build.step(0, parent.clone());
+        build.root()
     }
 
     /// 按节点名生成独立的 `ArrayMesh`（不创建节点树）。
@@ -142,17 +156,15 @@ impl Kn5File {
     /// 适合只需要网格数据的场景，例如把轮胎网格挂到物理车轮上。
     #[func]
     pub fn build_array_mesh(&mut self, node_name: GString) -> Option<Gd<ArrayMesh>> {
-        mesh::array_mesh_for(self.model.as_ref()?, &node_name.to_string())
+        mesh::array_mesh_for(self.model()?, &node_name.to_string())
     }
 
     /// 按索引创建独立材质（`StandardMaterial3D`）。
     #[func]
     pub fn build_material(&mut self, index: i64) -> Option<Gd<Material>> {
-        let model = self.model.as_ref()?;
+        let resources = self.resources.as_ref()?;
         let index = usize::try_from(index).ok()?;
-        let kn5_material = model.materials.get(index)?;
-        let mut textures = TextureLibrary::new(model);
-        Some(crate::kn5::material::create(kn5_material, &mut textures).upcast::<Material>())
+        Some(resources.material(index)?.upcast::<Material>())
     }
 
     /// 查 dummy 节点的位置（Godot 帧，米）。
@@ -161,7 +173,7 @@ impl Kn5File {
     /// 例如 `WHEEL_LF`、`SUSP_LF`。
     #[func]
     pub fn dummy_position(&mut self, node_name: GString) -> Vector3 {
-        let Some(model) = self.model.as_ref() else {
+        let Some(model) = self.model() else {
             godot_warn!("dummy_position() 在加载模型前被调用");
             return Vector3::ZERO;
         };
@@ -178,11 +190,14 @@ impl Kn5File {
         convert::ac_to_godot_point(matrix.w_axis.x, matrix.w_axis.y, matrix.w_axis.z)
     }
 
-    /// 访问解析后的模型，给未来的网格/贴图转换层使用。
-    ///
-    /// 当前没有暴露为 `#[func]`，因为 `Kn5` 不是 Godot 类型。
-    #[allow(dead_code)]
-    pub fn model(&self) -> Option<&Kn5> {
-        self.model.as_ref()
+    /// 按文件路径从缓存里取资源句柄；不在缓存里就解析一次。
+    fn resources(&self) -> Option<Rc<FileResources>> {
+        let native = crate::paths::native_path(&self.path);
+        cache::acquire(Path::new(&native), || parse_native(&native))
+    }
+
+    /// 解析后的模型（当前没有单独缓存，直接取共享句柄里的 `Arc<Kn5>`）。
+    fn model(&self) -> Option<&Kn5> {
+        self.resources.as_ref().map(|r| r.kn5().as_ref())
     }
 }

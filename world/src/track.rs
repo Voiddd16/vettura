@@ -25,6 +25,7 @@ use vettura_core::coords::ac_to_godot;
 
 use crate::groove::{DEFAULT_GROOVE_CELL_M, GrooveMap, GrooveSettings, parse_groove_ini};
 use crate::timing::LapTimer;
+
 use vettura_kn5::{Kn5, Node, NodeKind, transform_to_mat4};
 use vettura_physics::Pose;
 
@@ -1547,7 +1548,9 @@ fn finite_vec3(value: Vec3) -> Vec3 {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn parses_models_sections_and_ignores_dynamic_objects() {
@@ -1660,7 +1663,7 @@ IS_VALID_TRACK=1
         let mesh_node = |name: &str| Node {
             name: name.to_owned(),
             active: true,
-            kind: NodeKind::Mesh(triangle_mesh()),
+            kind: NodeKind::Mesh(Arc::new(triangle_mesh())),
             children: Vec::new(),
         };
         let dummy = Node {

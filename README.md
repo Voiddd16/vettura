@@ -125,6 +125,18 @@ godot --headless --path . res://gdext/kn5_probe.tscn
 细节见 [`docs/build.md`](docs/build.md)、[`docs/godot.md`](docs/godot.md)、
 [`docs/architecture.md`](docs/architecture.md)、[`docs/audio.md`](docs/audio.md)。
 
+## 加载性能探针
+
+车模加载慢的定位与回归（合成本地车模，不需要 `test/` 真车资产）：
+
+```bash
+uv run scripts/load_probe.py            # 生成 66 MiB 合成车模并跑无头探针
+uv run scripts/load_probe.py --meshes 64 --vertices 1024   # 小模型快速迭代
+```
+
+输出解析 / 冷实例化 / 缓存命中 / 分帧加载四段耗时；重复实例化（同一
+`Kn5File`）走缓存通常快 3–4 倍。
+
 ## 运行
 
 1. 用 Godot 4.7 打开本目录下的 `project.godot`。

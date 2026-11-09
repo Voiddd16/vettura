@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use vettura_kn5::{Kn5, SharedBytes};
+use vettura_kn5::{Kn5, SharedBytes, synth::SynthOptions, synth::synthetic_kn5};
 
 fn main() {
     let iterations = env_usize("VETTURA_BENCH_ITERS", 20).max(1);
@@ -48,7 +48,13 @@ fn main() {
             let vertices = env_usize("VETTURA_BENCH_VERTS", 1024).clamp(3, 65_535);
             let textures = env_usize("VETTURA_BENCH_TEXTURES", 32);
             let texture_kb = env_usize("VETTURA_BENCH_TEXTURE_KB", 64);
-            let bytes = synthetic_model(meshes, vertices, textures, texture_kb);
+            let bytes = synthetic_kn5(SynthOptions {
+                meshes,
+                vertices_per_mesh: vertices,
+                textures,
+                texture_bytes: texture_kb * 1024,
+                ..SynthOptions::default()
+            });
             (
                 format!(
                     "合成模型（{meshes} 网格 × {vertices} 顶点，{textures} 贴图 × {texture_kb} KiB）"
@@ -217,144 +223,4 @@ fn env_usize(name: &str, default: usize) -> usize {
         .and_then(|value| value.parse().ok())
         .map(|parsed: usize| parsed.min(limit))
         .unwrap_or(default)
-}
-
-/// 生成一个结构合法、规模接近真实车模的 KN5。
-///
-/// 每个网格拥有 `vertices` 个顶点和 `vertices` 个三角形，因此可以直接
-/// 用三角形数量衡量解析吞吐。
-fn synthetic_model(
-    mesh_count: usize,
-    vertices_per_mesh: usize,
-    texture_count: usize,
-    texture_kb: usize,
-) -> Vec<u8> {
-    let texture_bytes = texture_count
-        .saturating_mul(texture_kb)
-        .saturating_mul(1024);
-    let geometry_bytes = mesh_count
-        .saturating_mul(vertices_per_mesh)
-        .saturating_mul(44 + 6);
-    let mut bytes = Vec::with_capacity(texture_bytes + geometry_bytes + 4096);
-
-    // 文件头：version 5 没有额外字段。
-    bytes.extend_from_slice(b"sc6969");
-    bytes.extend_from_slice(&5u32.to_le_bytes());
-
-    // 贴图表。
-    bytes.extend_from_slice(&(texture_count as u32).to_le_bytes());
-    for index in 0..texture_count {
-        bytes.extend_from_slice(&1i32.to_le_bytes());
-        push_string(&mut bytes, &format!("tex{index}.dds"));
-        bytes.extend_from_slice(&((texture_kb * 1024) as u32).to_le_bytes());
-        let new_len = bytes.len() + texture_kb * 1024;
-        bytes.resize(new_len, 0);
-    }
-
-    // 材质表：复用少量材质，避免材质数量影响解析主路径。
-    let material_count = mesh_count.clamp(1, 16);
-    bytes.extend_from_slice(&(material_count as u32).to_le_bytes());
-    for index in 0..material_count {
-        push_string(&mut bytes, &format!("mat{index}"));
-        push_string(&mut bytes, "ksPerPixelMultiMap");
-        bytes.push(0); // Opaque
-        bytes.push(0); // 非 alpha test
-        bytes.extend_from_slice(&0i32.to_le_bytes()); // Normal depth
-
-        bytes.extend_from_slice(&8u32.to_le_bytes());
-        for property in 0..8 {
-            push_string(&mut bytes, &format!("prop{property}"));
-            push_f32(&mut bytes, property as f32);
-            for value in 0..2 {
-                push_f32(&mut bytes, value as f32);
-            }
-            for value in 0..3 {
-                push_f32(&mut bytes, value as f32);
-            }
-            for value in 0..4 {
-                push_f32(&mut bytes, value as f32);
-            }
-        }
-
-        bytes.extend_from_slice(&2u32.to_le_bytes());
-        push_string(&mut bytes, "txDiffuse");
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        push_string(&mut bytes, &format!("tex{index}.dds"));
-        push_string(&mut bytes, "txNormal");
-        bytes.extend_from_slice(&1u32.to_le_bytes());
-        push_string(&mut bytes, &format!("tex{}.dds", index + 1));
-    }
-
-    // 根节点 + 若干静态网格子节点。
-    push_dummy_header(&mut bytes, "Root", mesh_count as i32);
-    for mesh in 0..mesh_count {
-        push_node_header(&mut bytes, 2, &format!("mesh{mesh}"), 0);
-        bytes.push(1); // cast shadows
-        bytes.push(1); // visible
-        bytes.push(0); // transparent
-
-        bytes.extend_from_slice(&(vertices_per_mesh as u32).to_le_bytes());
-        for vertex in 0..vertices_per_mesh {
-            let x = vertex as f32 * 0.01;
-            push_f32(&mut bytes, x);
-            push_f32(&mut bytes, 0.0);
-            push_f32(&mut bytes, 0.0);
-            push_f32(&mut bytes, 0.0);
-            push_f32(&mut bytes, 1.0);
-            push_f32(&mut bytes, 0.0);
-            push_f32(&mut bytes, 0.0);
-            push_f32(&mut bytes, 0.0);
-            push_f32(&mut bytes, 1.0);
-            push_f32(&mut bytes, 0.0);
-            push_f32(&mut bytes, 0.0);
-        }
-
-        let index_count = vertices_per_mesh.saturating_mul(3);
-        bytes.extend_from_slice(&(index_count as u32).to_le_bytes());
-        for vertex in 0..vertices_per_mesh {
-            let next = ((vertex + 1) % vertices_per_mesh) as u16;
-            let after_next = ((vertex + 2) % vertices_per_mesh) as u16;
-            bytes.extend_from_slice(&(vertex as u16).to_le_bytes());
-            bytes.extend_from_slice(&next.to_le_bytes());
-            bytes.extend_from_slice(&after_next.to_le_bytes());
-        }
-
-        bytes.extend_from_slice(&((mesh % material_count) as u32).to_le_bytes());
-        bytes.extend_from_slice(&0u32.to_le_bytes()); // layer
-        push_f32(&mut bytes, 0.0); // LOD in
-        push_f32(&mut bytes, 1.0e9); // LOD out
-        push_f32(&mut bytes, 0.0);
-        push_f32(&mut bytes, 0.0);
-        push_f32(&mut bytes, 0.0);
-        push_f32(&mut bytes, 1.0); // 包围球半径
-        bytes.push(1); // is renderable
-    }
-
-    bytes
-}
-
-fn push_string(bytes: &mut Vec<u8>, value: &str) {
-    bytes.extend_from_slice(&(value.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(value.as_bytes());
-}
-
-fn push_f32(bytes: &mut Vec<u8>, value: f32) {
-    bytes.extend_from_slice(&value.to_le_bytes());
-}
-
-fn push_node_header(bytes: &mut Vec<u8>, node_type: i32, name: &str, children: i32) {
-    bytes.extend_from_slice(&node_type.to_le_bytes());
-    push_string(bytes, name);
-    bytes.extend_from_slice(&children.to_le_bytes());
-    bytes.push(1); // active
-}
-
-fn push_dummy_header(bytes: &mut Vec<u8>, name: &str, children: i32) {
-    push_node_header(bytes, 1, name, children);
-    // 单位矩阵，行主序。
-    for row in 0..4 {
-        for column in 0..4 {
-            push_f32(bytes, if row == column { 1.0 } else { 0.0 });
-        }
-    }
 }

@@ -316,3 +316,35 @@ var car: VehicleBody = world.spawn_vehicle_from_path(
 - 扩展未加载时检查 `.gdextension` 路径和 dylib 是否存在；之前这里踩过一次坑：
   crate 目录改名后 `.gdextension` 仍指向旧路径，导致扩展静默不加载；
 - 可用 `godot --headless --path .. --editor --quit` 验证扩展注册。
+
+## 加载缓存与分帧加载
+
+车模加载的耗时集中在**重复解码**：同一台车被 `AcCar`、`Kn5File` 或多个实例引用
+时，早期实现会重新解析整份 `.kn5`、重新解压每张贴图、给每个网格节点各建一份
+材质。现在由 `gdext/src/kn5/cache.rs` 统一处理：
+
+| 缓存 | 键 | 失效时机 |
+| --- | --- | --- |
+| 解析结果 `Arc<Kn5>` | 规范化文件路径 | 没有任何对象再引用该文件 |
+| 贴图 `Gd<ImageTexture>` | KN5 贴图下标 | 同上（随条目一起释放） |
+| 材质 `Gd<StandardMaterial3D>` | KN5 材质下标 | 同上 |
+
+注册表只持 `Weak` 引用：不把贴图永久钉在显存里，也不会无限增长。线程模型是
+“主线程访问”（GDExtension 方法只会在主线程被调用），跨线程误触会被 gdext 的
+safeguards 当场报错。
+
+需要把加载摊到多帧（例如加载页进度条）时用 `Kn5SceneBuilder`：
+
+```gdscript
+var builder := Kn5SceneBuilder.new()
+if builder.start("res://cars/cim_2008_ferrari/cim_2008_ferrari.kn5"):
+    while not builder.step(Kn5SceneBuilder.STEP_BUDGET, self):
+        progress_bar.value = builder.progress()
+        await get_tree().process_frame
+    var car: Node3D = builder.root()
+```
+
+`start()` 只做“展开任务列表”（读文件 + 解析，通常几十毫秒），几何与贴图在
+`step()` 里按需生成；`scene::instantiate()` 内部的 `Build` 与 `Kn5SceneBuilder`
+是同一条代码路径，只是预算设为“一次做完”。测量脚本见
+`scripts/load_probe.py`。

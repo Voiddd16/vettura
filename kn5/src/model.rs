@@ -356,6 +356,9 @@ impl Node {
     }
 
     /// 如果是静态网格，返回其网格数据。
+    ///
+    /// 几何存在 [`Arc`] 里：解析出来的网格可以被场景构建器等上层结构共享，
+    /// 不必为了再实例化一次而复制一份顶点。
     pub fn as_mesh(&self) -> Option<&Mesh> {
         match &self.kind {
             NodeKind::Mesh(mesh) => Some(mesh),
@@ -363,12 +366,17 @@ impl Node {
         }
     }
 
-    /// 如果是蒙皮网格，返回其网格数据。
-    pub fn as_skinned_mesh(&self) -> Option<&SkinnedMesh> {
+    /// 蒙皮网格的同名访问器；网格句柄便于把骨骼数据转交 Godot `Skeleton3D`。
+    pub fn as_skinned_mesh_handle(&self) -> Option<&Arc<SkinnedMesh>> {
         match &self.kind {
             NodeKind::SkinnedMesh(mesh) => Some(mesh),
             _ => None,
         }
+    }
+
+    /// 如果是蒙皮网格，返回其网格数据。
+    pub fn as_skinned_mesh(&self) -> Option<&SkinnedMesh> {
+        self.as_skinned_mesh_handle().map(Arc::as_ref)
     }
 }
 
@@ -379,8 +387,8 @@ pub enum NodeKind {
         /// 文件中按原样存储的行主序局部变换。
         transform: Transform,
     },
-    Mesh(Mesh),
-    SkinnedMesh(SkinnedMesh),
+    Mesh(Arc<Mesh>),
+    SkinnedMesh(Arc<SkinnedMesh>),
 }
 
 /// 几何数据之前连续存储的三个渲染标志。

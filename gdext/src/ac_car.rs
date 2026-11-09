@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use godot::classes::{Node, Node3D, Resource};
 use godot::prelude::*;
 use vettura_assets::CarFolder;
 use vettura_physics::VehicleSpec;
 
-use crate::kn5::scene::{self, SceneOptions};
+use crate::kn5::scene::SceneOptions;
 
 /// Assetto Corsa 车辆目录资源。
 ///
@@ -202,16 +204,21 @@ impl AcCar {
     ) -> Option<Gd<Node3D>> {
         let path = self.car.as_ref().and_then(CarFolder::main_model_path)?;
 
-        let kn5 = match vettura_kn5::Kn5::from_path(&path) {
-            Ok(kn5) => kn5,
-            Err(err) => {
-                godot_error!("AC car model load failed for '{}': {}", path.display(), err);
-                return None;
-            }
-        };
+        // 与 `Kn5File` 共用同一份按文件路径的缓存：同一台车被多个对象引用时
+        // 只解析一次、每张贴图只解码一次。
+        let resources =
+            crate::kn5::cache::acquire(&path, || {
+                match vettura_kn5::Kn5::parse_owned(std::fs::read(&path).ok()?) {
+                    Ok(model) => Some(Arc::new(model)),
+                    Err(err) => {
+                        godot_error!("AC car model load failed for '{}': {}", path.display(), err);
+                        None
+                    }
+                }
+            })?;
 
         let options = SceneOptions { skip_hidden };
-        let root = scene::instantiate(&kn5, &mut parent, None, options);
+        let root = crate::kn5::scene::instantiate(&resources, &mut parent, None, options);
         if root.is_none() {
             godot_error!("AC car model produced no nodes: {}", path.display());
         }

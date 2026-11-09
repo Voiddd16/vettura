@@ -17,6 +17,8 @@ mod dds;
 mod error;
 mod model;
 mod reader;
+#[doc(hidden)]
+pub mod synth;
 
 pub use dds::{DdsError, DdsFormat, DdsInfo, DdsLayout, layout as dds_layout, strip_mip_levels};
 pub use error::{Error, Result};
@@ -238,8 +240,8 @@ fn parse_node(reader: &mut Reader<'_>, depth: usize) -> Result<Node> {
 
     let kind = match node_type {
         1 => parse_dummy(reader)?,
-        2 => NodeKind::Mesh(parse_mesh(reader)?),
-        3 => NodeKind::SkinnedMesh(parse_skinned_mesh(reader)?),
+        2 => NodeKind::Mesh(Arc::new(parse_mesh(reader)?)),
+        3 => NodeKind::SkinnedMesh(Arc::new(parse_skinned_mesh(reader)?)),
         other => return Err(Error::InvalidNodeType(other, node_type_offset)),
     };
 

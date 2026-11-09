@@ -17,14 +17,19 @@ use godot::classes::{StandardMaterial3D, base_material_3d};
 use godot::prelude::*;
 use vettura_kn5::Material as Kn5Material;
 
+use super::cache::FileResources;
 use super::convert::MaterialParams;
-use super::texture::{TextureKind, TextureLibrary};
+use super::texture::TextureKind;
 
 /// 由 KN5 材质创建 Godot 材质。
-pub fn create(material: &Kn5Material, textures: &mut TextureLibrary<'_>) -> Gd<StandardMaterial3D> {
+///
+/// 材质会经 [`FileResources::material`] 按材质下标缓存，所以同一份模型里的
+/// 所有网格节点共享一份 `StandardMaterial3D`——这正是 Godot 常规用法
+/// （导入的资源本来就是共享的），既省内存也省掉重复的属性写入。
+pub fn create(material: &Kn5Material, cache: &FileResources) -> Gd<StandardMaterial3D> {
     let params = MaterialParams::from_material(material);
     let mut godot_material = StandardMaterial3D::new_gd();
-    apply(&mut godot_material, &params, textures);
+    apply(&mut godot_material, &params, cache);
     godot_material
 }
 
@@ -32,7 +37,7 @@ pub fn create(material: &Kn5Material, textures: &mut TextureLibrary<'_>) -> Gd<S
 pub fn apply(
     godot_material: &mut Gd<StandardMaterial3D>,
     params: &MaterialParams,
-    textures: &mut TextureLibrary<'_>,
+    cache: &FileResources,
 ) {
     godot_material.set_albedo(params.albedo);
     godot_material.set_roughness(params.roughness);
@@ -52,7 +57,7 @@ pub fn apply(
         .textures
         .normal
         .as_deref()
-        .and_then(|name| textures.get(name, TextureKind::Normal))
+        .and_then(|name| cache.texture_by_name(name, TextureKind::Normal))
     {
         godot_material.set_feature(base_material_3d::Feature::NORMAL_MAPPING, true);
         godot_material.set_texture(base_material_3d::TextureParam::NORMAL, &texture);
@@ -61,7 +66,7 @@ pub fn apply(
         .textures
         .detail_normal
         .as_deref()
-        .and_then(|name| textures.get(name, TextureKind::DetailNormal))
+        .and_then(|name| cache.texture_by_name(name, TextureKind::DetailNormal))
     {
         godot_material.set_feature(base_material_3d::Feature::DETAIL, true);
         godot_material.set_texture(base_material_3d::TextureParam::DETAIL_NORMAL, &texture);
@@ -71,7 +76,7 @@ pub fn apply(
         .textures
         .diffuse
         .as_deref()
-        .and_then(|name| textures.get(name, TextureKind::Diffuse))
+        .and_then(|name| cache.texture_by_name(name, TextureKind::Diffuse))
     {
         godot_material.set_texture(base_material_3d::TextureParam::ALBEDO, &texture);
     }
@@ -79,7 +84,7 @@ pub fn apply(
         .textures
         .maps
         .as_deref()
-        .and_then(|name| textures.get(name, TextureKind::Mask))
+        .and_then(|name| cache.texture_by_name(name, TextureKind::Mask))
     {
         godot_material.set_feature(base_material_3d::Feature::AMBIENT_OCCLUSION, true);
         godot_material.set_texture(base_material_3d::TextureParam::AMBIENT_OCCLUSION, &texture);
@@ -88,7 +93,7 @@ pub fn apply(
         .textures
         .detail
         .as_deref()
-        .and_then(|name| textures.get(name, TextureKind::Detail))
+        .and_then(|name| cache.texture_by_name(name, TextureKind::Detail))
     {
         godot_material.set_feature(base_material_3d::Feature::DETAIL, true);
         godot_material.set_texture(base_material_3d::TextureParam::DETAIL_ALBEDO, &texture);

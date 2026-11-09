@@ -32,6 +32,9 @@ third_party/*
 .claude/
 skills-lock.json
 
+# CodeGraph 本地索引（自带 .gitignore，目录整体忽略）
+.codegraph/
+
 # macOS / 编辑器杂项
 .DS_Store
 *.tmp
