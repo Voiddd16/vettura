@@ -83,7 +83,7 @@ cargo build -p vettura-godot --features fmod       # 接真机 FMOD 声音
 | --- | --- |
 | 轮胎 | `DY0/DX0` 峰值摩擦、`FZ0`/`LS_EXP*` 载荷敏感、`RELAXATION_LENGTH` 松弛长度、`FRICTION_LIMIT_ANGLE`/`FALLOFF_LEVEL` → Magic Formula 滑移曲线（移植自 Project Chrono 的 Pac89 公式）、胎温/胎压/磨损/grain-blister、平点与抱死振动、联合滑移摩擦圆、动态水膜 |
 | 悬架 | 渐进弹簧 / bump & rebound stop / heave 第三弹簧 / 两级阻尼（bleeder）/ 压缩-回弹非对称、静态与动态外倾、外倾推力、侧倾中心与 anti-dive/anti-squat 的力臂修正、caster/KPI 转向轴几何、半主动/全主动执行器 |
-| 动力总成 | `power.lut` 全扭矩曲线、涡轮增压（`MAX_BOOST`/`WASTEGATE`/`REFERENCE_RPM`/`GAMMA`/`LAG_*`）、`COAST_REF` 收油制动、换挡/离合器时间、差速器限滑、软限速器（`LIMITER_HZ`）、换挡断油（`AUTO_CUTOFF_TIME`）、倒挡齿比（`GEAR_R`）、手刹扭矩 |
+| 动力总成 | `power.lut` 全扭矩曲线、涡轮增压（`MAX_BOOST`/`WASTEGATE`/`REFERENCE_RPM`/`GAMMA`/`LAG_*`）、`COAST_REF` 收油制动、换挡/离合器时间、差速器限滑、软限速器（`LIMITER_HZ`）、换挡断油（`AUTO_CUTOFF_TIME`）、降挡自动补油（rev-match，`physics::ShiftBlip`）、倒挡齿比（`GEAR_R`）、手刹扭矩 |
 | 空气动力学 | 逐翼 `LUT_AOA_CL`/`LUT_GH_CL` 攻角 × 离地表（地效与失速）、前后轴分配、侧向力与回正横摆力矩、DRS、脏空气尾流（`dirty_air`）、海拔稀薄空气 |
 | 热与环境 | 刹车双质量（摩擦面 + 转子核心热浸）、发动机水温/油温窗口、三层胎温与 `PERFORMANCE_CURVE`、负温度（冬季工况）、阳光加热路面的时间演化（阳光→路温→胎温→抓地） |
 | 车身与控制 | `car.ini INERTIA` 惯量张量、燃油载荷与油耗、ERS 部署/回收与油耗、ABS/TC 闭环、`STEER_LOCK`/`STEER_RATIO` 转向锁 |

@@ -19,7 +19,7 @@ pub mod tyre_model;
 pub use backend::VehicleBackend;
 #[cfg(feature = "chrono")]
 pub use backends::{ChronoBackend, ChronoError};
-pub use controls::Controls;
+pub use controls::{Controls, ShiftBlip};
 pub use simulation::Simulation;
 pub use spec::{
     AERO_REFERENCE_SPEED_MPS, AIR_DENSITY_KG_M3, ActiveSuspensionMode, ActiveSuspensionSpec,

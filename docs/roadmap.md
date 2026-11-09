@@ -48,7 +48,7 @@
 - [x] `power.lut` 完整扭矩曲线 + 车体惯性张量（`car.ini INERTIA`，带合理性校验）
 - [x] 涡轮/混动/能量回收
 - [x] 变速箱换挡时间、离合（`[GEARBOX]`/`[CLUTCH]`/`[AUTOCLUTCH]` → Jolt 切换/离合时间、离合器强度、转动惯量）
-- [ ] 自动补油（降挡油门跟随）
+- [x] 自动补油（降挡油门跟随）：`physics::ShiftBlip`，离合器窗口内抬油门，`clutch_on_shifts` 控制
 - [x] 差速器（power/coast/preload）
 - [x] 轮胎温度/磨损/压力 + 载荷敏感（`FZ0`/`LS_EXP*`）+ 松弛长度（`RELAXATION_LENGTH`）
 - [x] 轮胎垂直刚度（`RATE`/`PRESSURE_SPRING_GAIN`，与悬挂串联）+ 三层胎温 + `PERFORMANCE_CURVE`

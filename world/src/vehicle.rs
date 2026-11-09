@@ -20,7 +20,7 @@ use oxijolt::{
 };
 use vettura_physics::{
     AERO_REFERENCE_SPEED_MPS, ActiveSuspensionMode, BrakeSpec, Controls, DrivetrainLayout, ErsMode,
-    Pose, TyreThermalSpec, VehicleSpec, VehicleState, Wheel, WheelState, WingSpec,
+    Pose, ShiftBlip, TyreThermalSpec, VehicleSpec, VehicleState, Wheel, WheelState, WingSpec,
     series_spring_rate,
 };
 
@@ -636,6 +636,9 @@ pub(crate) struct VehicleRuntime {
     turbo_boost_bar: f32,
     /// Remaining upshift fuel cut, seconds.
     fuel_cut_s: f32,
+    /// Downshift rev-match blip state. Only armed when the gearbox allows it
+    /// (`GearboxSpec::clutch_on_shifts`) and the spec authored a window.
+    shift_blip: ShiftBlip,
     /// Phase of the soft limiter's cutting cycle, `0..1`.
     limiter_phase: f32,
     /// Last gear seen, so an upshift can be detected.
@@ -853,6 +856,7 @@ impl VehicleRuntime {
             oil_c: ambient_c,
             turbo_boost_bar: 0.0,
             fuel_cut_s: 0.0,
+            shift_blip: ShiftBlip::new(),
             limiter_phase: 0.0,
             previous_gear: 0,
             engine_max_torque_nm: engine_torque_cap,
@@ -927,6 +931,14 @@ impl VehicleRuntime {
             1.0
         };
         let mut forward = input.throttle * power * boost_scale;
+        // Downshift rev-match: inside the shift window the throttle is opened
+        // for the driver, so the clutch can re-engage without dragging the
+        // driven wheels. Only the *throttle* is affected——engine rpm itself
+        // stays whatever Jolt computes (see the Jolt boundary in
+        // `docs/physics.md`).
+        if self.shift_blip.is_active() {
+            forward = forward.max(self.shift_blip.merged(forward));
+        }
         // Upshift fuel cut: for `auto_cutoff_time` after a gear change the
         // engine is off its limiter, exactly as a real ECU does while the
         // box shifts.
@@ -974,11 +986,21 @@ impl VehicleRuntime {
     /// opens the throttle and decays over `lag_down_s` when they lift.
     /// Detect a gear change and run the fuel-cut timer.
     pub(crate) fn prepare_powertrain(&mut self, dt: f32) {
+        let gear = self.snapshot.gear;
+        let shifted_down = gear > 0 && self.previous_gear > 0 && gear < self.previous_gear;
+        if shifted_down && self.spec.gearbox.clutch_on_shifts {
+            // 用 `CHANGE_DN_TIME`（离合器接合时间）做补油窗口：离合器真正接合
+            // 之前那段油门就是补油。
+            let window_s =
+                (self.spec.gearbox.clutch_release_time * 0.001).max(ShiftBlip::DEFAULT_WINDOW_S);
+            self.shift_blip.start(window_s, ShiftBlip::DEFAULT_PEAK);
+        }
+        self.shift_blip.tick(dt);
+
         // AC documents the cut-off in milliseconds.
         let cut = self.spec.gearbox.auto_cutoff_time * 0.001;
         if cut > 0.0 {
-            let gear = self.snapshot.gear;
-            let shifting_up = gear > 0 && self.previous_gear > 0 && gear != self.previous_gear;
+            let shifting_up = gear > 0 && self.previous_gear > 0 && gear > self.previous_gear;
             if shifting_up {
                 self.fuel_cut_s = cut;
             }

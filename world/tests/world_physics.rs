@@ -14,6 +14,15 @@ use vettura_world::{
 
 const DT: f32 = 1.0 / 240.0;
 
+/// 全松开的滑行输入：油门、刹车、手刹都为 0。
+fn coast_controls() -> Controls {
+    Controls {
+        throttle: 0.0,
+        brake: 0.0,
+        ..Controls::default()
+    }
+}
+
 fn step(world: &mut World, steps: usize) {
     for _ in 0..steps {
         world.step_exact(DT).unwrap();
@@ -3045,4 +3054,81 @@ fn an_upshift_cuts_the_fuel_for_the_authored_time() {
 fn world_density_at(altitude: f32) -> f32 {
     // Same ISA model the world uses; kept local so the test does not reach in.
     1.225_f32 * (-altitude / 8_500.0).exp()
+}
+
+/// 降挡补油：序列式变速箱降挡时开一下油门，把车速“托”住。
+///
+/// Jolt 的公开 API 不让直接设定发动机转速（见 `docs/physics.md` 的已知边界），
+/// 所以补油只能以“驾驶输入抬升”的方式实现，可观测后果是**车速**而不是转速：
+/// 同样的滑行条件下，补油那一版结束时更快。固定步长世界是确定性的，两次跑
+/// 只有 `clutch_on_shifts` 一个布尔量不同，因此差值稳定可复现。
+#[test]
+fn a_downshift_blips_the_throttle_and_holds_the_speed_up() {
+    let speed_after_window = |blip: bool| -> f32 {
+        let mut spec = car();
+        spec.gearbox.clutch_on_shifts = blip;
+        // 补油窗口 = 离合器接合时间；放长到 300 ms，让效果有时间累积。
+        spec.gearbox.clutch_release_time = 300.0;
+        let mut world = World::new(SurfaceMap::new()).unwrap();
+        let car = world.add_vehicle(spec, Pose::default()).unwrap();
+        settle(&mut world, car);
+
+        world
+            .set_controls(
+                car,
+                Controls {
+                    throttle: 1.0,
+                    ..Controls::default()
+                },
+            )
+            .unwrap();
+        // 先把车拉上高挡（不追求极速，够降挡就行）。
+        let mut top_gear = 0;
+        for _ in 0..240 * 8 {
+            step(&mut world, 1);
+            top_gear = top_gear.max(world.snapshot(car).unwrap().gear);
+        }
+        assert!(top_gear >= 3, "car never reached 3rd gear: {top_gear}");
+
+        // 重刹让 Jolt 自动降挡；降挡后立刻松刹滑行，剩下只有补油在推车。
+        world
+            .set_controls(
+                car,
+                Controls {
+                    throttle: 0.0,
+                    brake: 1.0,
+                    ..Controls::default()
+                },
+            )
+            .unwrap();
+
+        let mut previous_gear = world.snapshot(car).unwrap().gear;
+        let mut window = 0usize;
+        let mut speed_at_end = 0.0f32;
+        for _ in 0..240 * 12 {
+            step(&mut world, 1);
+            let gear = world.snapshot(car).unwrap().gear;
+            if gear < previous_gear {
+                world.set_controls(car, coast_controls()).unwrap();
+                window = 72; // 0.3 s，正好覆盖整个补油窗口
+            }
+            previous_gear = gear;
+            if window > 0 {
+                window -= 1;
+                speed_at_end = world.snapshot(car).unwrap().speed_mps;
+                if window == 0 {
+                    break;
+                }
+            }
+        }
+        assert!(speed_at_end > 0.0, "no downshift happened while braking");
+        speed_at_end
+    };
+
+    let with_blip = speed_after_window(true);
+    let without_blip = speed_after_window(false);
+    assert!(
+        with_blip > without_blip,
+        "downshift blip did not hold the speed up: {with_blip} vs {without_blip}"
+    );
 }
