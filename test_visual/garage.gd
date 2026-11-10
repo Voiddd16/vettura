@@ -177,8 +177,24 @@ func _ensure_stats(car: GarageCar) -> void:
 			entry = scanning.get_next()
 		scanning.list_dir_end()
 
-## 导入：目录直接复制进来；zip 解压到导入根目录。
+## 「导入」：桌面用内置文件对话框（会调起系统原生面板）；Android 用系统
+## 文件选择器（SAF）。
+##
+## 为什么 Android 不能直接用内置 `FileDialog`：
+## - Android 11+ 分区存储下应用没有全盘扫描权限，`ACCESS_FILESYSTEM`
+##   列不出 `/storage/emulated/0`，点开也是空列表；
+## - 内置对话框是个内嵌 `Window`，在部分安卓设备/引擎版本上不渲染（表现为
+##   点了按钮没反应）。
+## 系统 `file_dialog_show` 由引擎封装：用户选完后，引擎把选中的文件/目录
+## 拷进应用缓存目录并回传真实路径，不需要申请存储权限。
 func _on_import_pressed() -> void:
+	if OS.has_feature("android"):
+		_import_via_system_dialog()
+	else:
+		_import_via_embedded_dialog()
+
+
+func _import_via_embedded_dialog() -> void:
 	var picker := FileDialog.new()
 	picker.file_mode = FileDialog.FILE_MODE_OPEN_ANY
 	picker.access = FileDialog.ACCESS_FILESYSTEM
@@ -189,9 +205,37 @@ func _on_import_pressed() -> void:
 	add_child(picker)
 	picker.popup_centered_ratio(0.7)
 
+
+## Android 系统文件选择器：目录（整包车模）与文件（.zip）都允许选。
+## 4.7 签名：`(title, current_directory, filename, show_hidden, mode,
+## filters: PackedStringArray, callback, parent_window_id = 0)`。
+func _import_via_system_dialog() -> void:
+	var error := DisplayServer.file_dialog_show(
+			"选择车模目录或 zip",
+			ProjectSettings.globalize_path(IMPORT_ROOT),
+			"",                                  # 初始文件名：不预选
+			true,                                # show hidden
+			DisplayServer.FILE_DIALOG_MODE_OPEN_ANY,
+			PackedStringArray(),                 # filters：空 = 不筛类型
+			_on_system_dialog_result)
+	if error != OK:
+		push_warning("[garage] 系统文件选择器不可用（错误码 %d），回落内置对话框" % error)
+		_import_via_embedded_dialog()
+
+
+## `file_dialog_show` 回调：`(status, 选中路径, 过滤器下标)`。
+func _on_system_dialog_result(status: bool, paths: PackedStringArray,
+		_filter_index: int) -> void:
+	if not status or paths.is_empty():
+		print("[garage] 导入已取消")
+		return
+	_import_from(paths[0], null)
+
 ## 把外部路径复制/解压成 `user://imported_cars/<名字>/`，然后刷新列表。
-func _import_from(source: String, picker: FileDialog) -> void:
-	picker.queue_free()
+## `picker` 只在桌面分支有值（用于关闭对话框）；Android 回调进来时是 null。
+func _import_from(source: String, picker: FileDialog = null) -> void:
+	if picker != null:
+		picker.queue_free()
 	var name: String = source.get_file().get_basename()
 	var target := ProjectSettings.globalize_path(IMPORT_ROOT.path_join(name))
 
