@@ -6,6 +6,9 @@
 
 | 脚本 | 职责 |
 | --- | --- |
+| `build.py` | 一键编译链：`host`（宿主 debug/release 库）、`android`（两个 ABI 的 .so）、`apk`（导出 APK）、`all` 全链，另有 `check`（check+clippy）与 `test`。Android 细节内部转发 `android.py` |
+| `clean.py` | 清理构建产物与缓存：`quick`（增量缓存等）/ `rust`（整个 target/）/ `godot`（导入缓存+模板下载缓存）/ `artifacts`（build/）/ `all`，默认预览，`--run` 才真删 |
+| `android.py` | 移动端初始化与导出全流程：配置诊断、下载模板、写入 SDK 设置、装 NDK、编译 Android .so、导出 APK，每步幂等可单独执行 |
 | `fetch_fmod.py` | 从 fmod.com 下载 FMOD Engine SDK 2.02.22，解压到本地 `.cache/`，并编译 AC/mod bank 可能依赖的 `FMOD Distance Filter` DSP 插件 |
 | `pack_fmod.py` | 把 FMOD 运行期动态库拷进 Godot 导出目录（发行包必需）；缓存缺失时自动下载，支持跨平台与 `--arch` |
 | `load_probe.py` | 生成合成车模（`.kn5` + 合法 DXT1 DDS）并跑 Godot 无头加载探针，输出解析 / 冷实例化 / 缓存命中 / 分帧加载四段耗时。纯标准库，无需 uv 依赖 |
@@ -31,6 +34,19 @@ uv run fetch_fmod.py --extract-only
 python3 scripts/load_probe.py                 # 默认 66 MiB 合成车模
 python3 scripts/load_probe.py --meshes 64     # 小模型快速迭代
 python3 scripts/load_probe.py --godot /path/to/Godot
+```
+
+## 编译与清理
+
+```bash
+python3 scripts/build.py                     # 宿主 debug 库（编辑器/无头用）
+python3 scripts/build.py host --release      # 宿主 release 库（例如 macOS 导出包）
+python3 scripts/build.py android             # arm64-v8a + x86_64 .so（转发 android.py lib）
+python3 scripts/build.py apk                 # 导出 build/android/Vettura.apk（转发 export）
+python3 scripts/build.py all --check         # check+clippy 过了再 host+android+apk 全链
+python3 scripts/clean.py                     # 预览各项缓存大小（默认 dry-run）
+python3 scripts/clean.py quick --run         # 只清增量缓存/探针产物（日常最常用）
+python3 scripts/clean.py all --run           # 全清（下次编译全量重编，记得重编 android 库）
 ```
 
 凭证从仓库根目录的 `.fmod.env` 读取（已加入 `.gitignore`，禁止提交）：

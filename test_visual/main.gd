@@ -11,6 +11,10 @@ extends Node3D
 
 const DEFAULT_CAR_DIR := "res://test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
 
+## 车模库存放目录（`user://` 可写；res:// 在运行时是只读的）。由
+## `test_visual/garage.gd` 的车模库面板管理：导入 / 选择 / 重命名 / 删除 / 搜索。
+const IMPORT_ROOT := "user://imported_cars/"
+
 ## 模型基准点不在地面上时，用这个高度把整车托起来。
 const FLOAT_HEIGHT := 1.2
 ## 浮空展示时的自转速度（rad/s）。
@@ -32,10 +36,14 @@ const ORBIT_SPEED := 0.6
 
 const MODE_TEXTS := ["视角：车后", "视角：驾驶位", "视角：绕车", "视角：前机盖"]
 
+const SafeArea := preload("res://test_visual/safe_area.gd")
+
 @onready var _car_pivot: Node3D = $CarPivot
 @onready var _camera: Camera3D = $Camera3D
-@onready var _mode_button: Button = $HUD/ModeButton
-@onready var _info_label: Label = $HUD/InfoLabel
+@onready var _mode_button: Button = $HUD/Panel/Columns/ModeButton
+@onready var _info_label: Label = $HUD/Panel/Columns/Column/InfoLabel
+@onready var _import_button: Button = $HUD/Panel/Columns/Column/ImportButton
+@onready var _hud_panel: MarginContainer = $HUD/Panel
 
 var _car_root: Node3D
 var _wheels: Array[Node3D] = []
@@ -56,6 +64,13 @@ func has_car() -> bool:
 func _ready() -> void:
 	_load_default_car()
 	_update_hud()
+	_apply_safe_area()
+	get_viewport().size_changed.connect(_apply_safe_area)
+
+## 手机旋转 / 刘海位置 / 分屏变化时都会触发；容器边距兜住安全区，
+## 控件（HUD 按钮与信息）永远不会被屏幕边框或挖孔挡住。
+func _apply_safe_area() -> void:
+	SafeArea.apply(_hud_panel)
 
 func _process(delta: float) -> void:
 	_car_pivot.rotate_y(FLOATING_TURN_SPEED * delta)
@@ -70,7 +85,7 @@ func _load_default_car() -> void:
 	# 工程级命令都不该因为一台没下载的车把控制台刷成一片 ERROR。
 	if not DirAccess.dir_exists_absolute(DEFAULT_CAR_DIR):
 		push_warning("[visual] 默认车目录不存在，跳过模型加载：%s\n" % DEFAULT_CAR_DIR
-				+ "（放置教程见 README「本地测试资源」）")
+				+ "（放置教程见 README「本地测试资源」，或用左上角「导入车模」直接选一个）")
 		_update_hud()
 		return
 
@@ -80,19 +95,28 @@ func _load_default_car() -> void:
 		_update_hud()
 		return
 
-	var car := AcCar.new()
-	if not car.open(DEFAULT_CAR_DIR):
-		push_error("[visual] AcCar.open failed: %s" % DEFAULT_CAR_DIR)
-		return
+	_load_car(DEFAULT_CAR_DIR)
 
-	_car_name = car.display_name()
+## 从任意路径加载车模（`res://` 之外的绝对路径也可以）。
+func _load_car(path: String) -> bool:
+	var car := AcCar.new()
+	if not car.open(path):
+		push_error("[visual] AcCar.open failed: %s" % path)
+		return false
+
 	var root := car.instantiate(_car_pivot)
 	if root == null:
-		push_error("[visual] AcCar.instantiate failed: %s" % DEFAULT_CAR_DIR)
-		return
+		push_error("[visual] AcCar.instantiate failed: %s" % path)
+		return false
 
+	# 换车：先把上一台清干净，否则多个车模会叠在同一个 pivot 下。
+	if _car_root != null:
+		_car_root.queue_free()
 	_car_root = root
+	_car_name = car.display_name()
 	_car_pivot.position.y = FLOAT_HEIGHT
+	_wheels.clear()
+	_wheel_spin = 0.0
 
 	# KN5 的 `WHEEL_*` dummy 在 `AcCar.instantiate()` 后仍按原名保留。
 	var wheel_names := ["WHEEL_LF", "WHEEL_RF", "WHEEL_LR", "WHEEL_RR"]
@@ -105,6 +129,34 @@ func _load_default_car() -> void:
 
 	print("[visual] car loaded: ", _car_name, " wheels=", _wheels.size(),
 			" children=", _car_root.get_child_count())
+	_update_hud()
+	return true
+
+## 「导入车模」按钮：打开车模库面板（导入 / 选择 / 重命名 / 删除 / 搜索）。
+func _on_import_button_pressed() -> void:
+	var garage_scene: PackedScene = load("res://test_visual/garage.tscn")
+	var garage := garage_scene.instantiate() as Control
+	garage.set_anchors_preset(Control.PRESET_FULL_RECT, true)
+	garage.car_selected.connect(_on_garage_car_selected)
+	add_child(garage)
+	_import_button.disabled = true
+
+## 车模库里选了一台车：加载并关掉面板。
+func _on_garage_car_selected(car_path: String) -> void:
+	if not _load_car(car_path):
+		_warn_import("加载失败：%s" % car_path)
+		return
+	_close_garage()
+
+## 关掉车模库（不管有没有选车），并恢复按钮可用。
+func _close_garage() -> void:
+	for child in get_children():
+		if child is Control and child.scene_file_path.ends_with("garage.tscn"):
+			child.queue_free()
+	_import_button.disabled = false
+
+func _warn_import(message: String) -> void:
+	push_warning("[visual] " + message)
 
 ## 油门/刹车 → 车轮角速度。浮空预览不做悬挂/打滑，只用来确认输入可达。
 func _update_wheels(delta: float) -> void:

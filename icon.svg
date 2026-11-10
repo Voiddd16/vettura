@@ -1,0 +1,8 @@
+<svg height="128" viewBox="0 0 128 128" width="128" xmlns="http://www.w3.org/2000/svg">
+  <!-- Vettura 项目图标：底稿用一个俯视的赛车轮廓，纯 SVG 无需二进制资源。 -->
+  <rect width="128" height="128" rx="20" fill="#10131a"/>
+  <path d="M64 18c14 0 26 10 28 24l3 22c1 8-4 14-11 16l-4 26h-4l-2-16H52l-2 16h-4l-4-26c-7-2-12-8-11-16l3-22C38 28 50 18 64 18z" fill="#e8443a"/>
+  <rect x="56" y="44" width="16" height="24" rx="6" fill="#10131a"/>
+  <rect x="24" y="72" width="18" height="10" rx="4" fill="#161b24"/>
+  <rect x="86" y="72" width="18" height="10" rx="4" fill="#161b24"/>
+</svg>

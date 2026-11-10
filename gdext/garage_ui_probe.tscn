@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://bvetturagarageuiprobe"]
+
+[ext_resource type="Script" path="res://gdext/garage_ui_probe.gd" id="1"]
+
+[node name="GarageUiProbe" type="Node3D"]
+script = ExtResource("1")

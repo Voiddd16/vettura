@@ -11,6 +11,7 @@ config_version=5
 [application]
 
 config/name="Vettura"
+config/icon="res://icon.svg"
 config/version="0.0.1"
 config/features=PackedStringArray("4.7", "Mobile")
 run/main_scene="res://test_visual/main.tscn"
@@ -34,3 +35,5 @@ import/blender/enabled=false
 
 rendering_device/driver.windows="d3d12"
 renderer/rendering_method="mobile"
+; Android 只吃 ETC2/ASTC，导出预设会校验这一项。
+textures/vram_compression/import_etc2_astc=true

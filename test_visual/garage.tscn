@@ -1,0 +1,120 @@
+[gd_scene load_steps=3 format=3 uid="uid://bvetturagarage"]
+
+[ext_resource type="Script" path="res://test_visual/garage.gd" id="1"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.08, 0.09, 0.11, 0.96)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[node name="Garage" type="Control"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
+
+[node name="Background" type="Panel" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="Margin" type="MarginContainer" parent="."]
+unique_name_in_owner = true
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Columns" type="HBoxContainer" parent="Margin"]
+anchors_preset = 15
+theme_override_constants/separation = 20
+
+[node name="Left" type="VBoxContainer" parent="Margin/Columns"]
+custom_minimum_size = Vector2(420, 0)
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="Margin/Columns/Left"]
+theme_override_font_sizes/font_size = 28
+text = "车模库"
+
+[node name="Tools" type="HBoxContainer" parent="Margin/Columns/Left"]
+theme_override_constants/separation = 8
+
+[node name="ImportButton" type="Button" parent="Margin/Columns/Left/Tools"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 0)
+theme_override_font_sizes/font_size = 18
+text = "导入"
+
+[node name="SearchBox" type="LineEdit" parent="Margin/Columns/Left/Tools"]
+unique_name_in_owner = true
+size_flags_horizontal = 3
+placeholder_text = "搜索车模名称…"
+
+[node name="CarList" type="ItemList" parent="Margin/Columns/Left"]
+unique_name_in_owner = true
+size_flags_vertical = 3
+theme_override_font_sizes/font_size = 20
+
+[node name="Right" type="VBoxContainer" parent="Margin/Columns"]
+size_flags_horizontal = 3
+theme_override_constants/separation = 12
+
+[node name="InfoLabel" type="Label" parent="Margin/Columns/Right"]
+unique_name_in_owner = true
+size_flags_vertical = 3
+theme_override_font_sizes/font_size = 20
+autowrap_mode = 3
+text = "选择一台车模"
+
+[node name="Buttons" type="HFlowContainer" parent="Margin/Columns/Right"]
+theme_override_constants/h_separation = 8
+theme_override_constants/v_separation = 8
+
+[node name="LoadButton" type="Button" parent="Margin/Columns/Right/Buttons"]
+unique_name_in_owner = true
+disabled = true
+size_flags_vertical = 0
+custom_minimum_size = Vector2(120, 40)
+theme_override_font_sizes/font_size = 18
+text = "载入预览"
+
+[node name="RenameButton" type="Button" parent="Margin/Columns/Right/Buttons"]
+unique_name_in_owner = true
+disabled = true
+size_flags_vertical = 0
+custom_minimum_size = Vector2(96, 40)
+theme_override_font_sizes/font_size = 18
+text = "重命名"
+
+[node name="DeleteButton" type="Button" parent="Margin/Columns/Right/Buttons"]
+unique_name_in_owner = true
+disabled = true
+size_flags_vertical = 0
+custom_minimum_size = Vector2(96, 40)
+theme_override_font_sizes/font_size = 18
+text = "删除"
+
+[node name="OpenButton" type="Button" parent="Margin/Columns/Right/Buttons"]
+unique_name_in_owner = true
+disabled = true
+size_flags_vertical = 0
+custom_minimum_size = Vector2(96, 40)
+theme_override_font_sizes/font_size = 18
+text = "打开目录"
+
+[node name="CloseButton" type="Button" parent="Margin/Columns/Right/Buttons"]
+unique_name_in_owner = true
+disabled = true
+size_flags_vertical = 0
+custom_minimum_size = Vector2(96, 40)
+theme_override_font_sizes/font_size = 18
+text = "返回"

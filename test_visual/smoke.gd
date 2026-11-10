@@ -64,7 +64,7 @@ func _check_touch() -> void:
 		_fail("brake button did not drive _brake")
 
 	# 左侧刹车/右侧油门是同一个 HUD 文本域里的两个状态位，直接看文本最省事。
-	var info := _main.get_node("HUD/InfoLabel") as Label
+	var info := _main.get_node("HUD/Panel/Columns/Column/InfoLabel") as Label
 	if info.text.find("油门（右半屏）：ON") == -1 or info.text.find("刹车（左半屏）：ON") == -1:
 		_fail("HUD did not reflect touch state: %s" % info.text)
 
@@ -76,7 +76,7 @@ func _check_touch() -> void:
 		_fail("touch state did not clear on release")
 
 func _check_camera_modes() -> void:
-	var mode_button := _main.get_node("HUD/ModeButton") as Button
+	var mode_button := _main.get_node("HUD/Panel/Columns/ModeButton") as Button
 	var camera := _main.get_node("Camera3D") as Camera3D
 
 	# 页面默认从“车后”开始，按钮再点一次应该循环到“驾驶位”。

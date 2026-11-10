@@ -20,3 +20,13 @@ linux.x86_64 = "res://target/debug/libvettura_native.so"
 linux.x86_64.release = "res://target/release/libvettura_native.so"
 windows.x86_64 = "res://target/debug/vettura_native.dll"
 windows.x86_64.release = "res://target/release/vettura_native.dll"
+; Android：一个 ABI 一条，`scripts/build.py android`（内部转发
+; `scripts/android.py lib`）把 cargo 产物放到 `target/android/<abi>/`。导出包里同样需要 FMOD 运行期动态库（Android 版），
+; 由 `scripts/pack_fmod.py --android` 拷进导出目录，否则 `--features fmod`
+; 的构建会在启动时找不到 libfmod。
+android.arm64 = "res://target/android/arm64-v8a/libvettura_native.so"
+android.arm64.release = "res://target/android/arm64-v8a/libvettura_native.so"
+android.x86_64 = "res://target/android/x86_64/libvettura_native.so"
+android.x86_64.release = "res://target/android/x86_64/libvettura_native.so"
+android.arm32 = "res://target/android/armeabi-v7a/libvettura_native.so"
+android.arm32.release = "res://target/android/armeabi-v7a/libvettura_native.so"
