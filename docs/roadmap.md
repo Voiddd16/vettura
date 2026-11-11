@@ -22,9 +22,9 @@
 - [x] DDS → `Image`/`ImageTexture`（含 KN5 mip 链不完整的兜底）
 - [x] 基础材质映射（diffuse/normal/specular/AO/detail/alpha）
 - [x] AC 车目录 → 主模型 `.kn5` 选择（`lods.ini` → 最大文件）
-- [x] 冒烟测试：`godot/kn5_probe.tscn` 用真实 mod 车实例化三台车
-- [ ] `ResourceFormatLoader` 支持 `.kn5`
-- [ ] 大文件加载缓存与进度反馈
+- [x] 冒烟测试：`gdext/kn5_probe.tscn` 用真实 mod 车实例化三台车
+- [ ] `ResourceFormatLoader` 支持 `.kn5`（现状：`Kn5File` 是 Resource 类，但 `load("res://xx.kn5")` 不可用）
+- [x] 大文件加载缓存与进度反馈（0.0.1：按文件路径三级共享缓存 + `Kn5SceneBuilder` 分帧加载，见 CHANGELOG）
 
 验收：能把一台 F1 2008 mod 车完整显示在 Godot 场景中，车轮位置正确。
 （已完成：`kn5_probe` 对 F1 2008 的三台车输出 125/136/129 个 `MeshInstance3D`、
@@ -36,9 +36,9 @@
 - [x] 车轮节点按 dummy 名称自动绑定
 - [x] 输入 API 完整暴露（油门/刹车/转向/手刹/DRS/ABS/TC，`set_controls`）
 - [x] 赛道地面/车身姿态由 `WorldBody` 的 Jolt 碰撞体与轮上 `VehicleSnapshot` 驱动
-- [ ] 键盘/手柄输入映射（Godot Input Map）
-- [ ] 相机跟随/车内视角
-- [ ] 基础 HUD（速度、挡位、转速）
+- [x] 相机跟随/车内视角（`test_visual/main.tscn`：车后/驾驶位/绕车/前机盖四视角）
+- [x] 基础 HUD（`test_visual/main.tscn`：油门/刹车/车轮角速度；速度/挡位/转速仪表待补）
+- [ ] 键盘/手柄输入映射（Godot Input Map；触摸输入已由 `test_visual` 的 TouchOverlay 覆盖）
 
 验收：能沿平面直行、转向、刹车，车轮转动和转向可见；`godot/baseline.tscn`
 进一步验收“真实赛道 + 真实车能跑”，输出 `[baseline] PASS`。

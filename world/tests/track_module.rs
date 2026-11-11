@@ -18,9 +18,9 @@ use vettura_world::{
 
 fn daytona_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../vettura/test/daytona_2017")
+        .join("../../../vettura/mods/daytona_2017")
         .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from("../vettura/test/daytona_2017"))
+        .unwrap_or_else(|_| PathBuf::from("../vettura/mods/daytona_2017"))
 }
 
 #[test]

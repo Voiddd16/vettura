@@ -38,9 +38,9 @@ const GRID_SPACING_M: f32 = 8.0;
 /// ```gdscript
 /// var world := WorldBody.new()
 /// add_child(world)
-/// if world.load_track("res://test/daytona_2017", "roadcourse"):
+/// if world.load_track("res://mods/daytona_2017", "roadcourse"):
 ///     var car := world.spawn_vehicle_from_path(
-///         "res://test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
+///         "res://mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
 ///     )
 ///     car.set_controls(1.0, 0.0, 0.0, false, false, false, true, true)
 /// ```

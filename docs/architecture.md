@@ -1,34 +1,50 @@
 # 架构
 
+> AI 助手请先读仓库根的 [`AGENTS.md`](../AGENTS.md)；本文是设计层文档。
+
 ## 总览
 
 Rust workspace 就在本 Godot 工程根目录，最终产物是一个 Godot 4 GDExtension
 动态库。核心数据格式和物理求解都与 Godot 解耦，CLI 工具可以直接复用。
 
 ```
-┌──────────────────────────────┐
-│        Godot 4.7             │
-│  scene / render / input / UI │
-└──────────────▲───────────────┘
-               │ GDExtension
-┌──────────────┴───────────────┐
-│   gdext/ (cdylib)          │  Kn5File / AcCar / VehicleBody
-└───────┬──────────────┬───────┘
-        │              │
-┌───────▼──────┐  ┌────▼──────────────┐
-│ vettura-     │  │ vettura-physics   │
-│ assets       │  │  spec/state/trait │
-└───┬──────┬───┘  └────┬──────────────┘
-    │      │           │
-┌───▼───┐ ┌▼─────────┐ │
-│ kn5   │ │ acdata   │ │
-└───────┘ └──────────┘ │
-                       │  `--features chrono`（可选）
-              ┌────────▼──────────┐
-              │ third_party/      │
-              │ chrono (C++/CMake)│
-              └───────────────────┘
+┌────────────────────────────────────────────┐
+│                Godot 4.7                   │
+│     scene / render / input / UI            │
+└─────────────▲──────────────────────────────┘
+              │ GDExtension
+┌─────────────┴──────────────────────────────┐
+│ gdext/（cdylib，唯一认识 Godot 的 crate）    │
+│ Kn5File / AcCar / VehicleBody / WorldBody  │
+│ / FmodSystem                               │
+└──────┬──────────┬──────────────┬──────┬───┘
+       │          │              │      │
+┌──────▼─────┐ ┌──▼──────────┐ ┌─▼──────┴──────┐
+│ vettura-   │ │ vettura-    │ │ vettura-audio │
+│ assets     │ │ world       │ │ GUIDs + bank  │
+│ 车目录组织 +│ │ Jolt 世界：  │ │ 定位，FMOD    │
+│ spec 映射  │ │ 赛道/AI/表面/│ │ runtime 直连  │
+│            │ │ 天气/计时/橡胶│ └───────────────┘
+└──┬─────┬───┘ └──┬──────────┘
+   │     │        │ Jolt（oxijolt，cross-platform-deterministic）
+┌──▼──┐ ┌▼────────┴───────────────┐
+│ kn5 │ │ vettura-physics         │
+│     │ │ spec/state/controls +   │
+│     │ │ VehicleBackend trait +  │
+│     │ │ 固定步长 Simulation      │
+│     │ │ + Simple / Chrono 后端   │
+│     │ └───▲─────────────────────┘
+│     │     │ `--features chrono`（可选）
+│     │ ┌───┴─────────────────┐
+└─────┤ third_party/chrono   │
+┌──▼──┴──┐ (C++/CMake)         │
+│ acdata │                     │
+│ ACD/INI│                     │
+│ /LUT   │                     │
+└────────┘                     │
 ```
+
+`vettura-core`（单位/坐标转换/glam 再导出）在最底层，所有 crate 共用，图里省略。
 
 ## 目录与 crate 对应
 
@@ -45,6 +61,15 @@ workspace 根就是 Godot 工程根，每个 crate 一个顶层目录：
 | `audio/` | `vettura-audio` | `sfx/GUIDs.txt` + FMOD runtime |
 | `gdext/` | `vettura-godot` | GDExtension 桥接层与 `.gdextension` |
 | `tools/` | `kn5-inspect` / `acd-inspect` | 命令行检查工具 |
+
+**Godot 场景分工**（约定，不要混放）：
+
+| 位置 | 角色 | 场景 |
+| --- | --- | --- |
+| `gdext/*.tscn` | Rust 扩展验证探针（headless 可跑） | `baseline`（真实赛道+车）、`kn5_probe`、`fmod_probe`、`load_probe` |
+| `test_visual/*.tscn` | 游戏性预览页与回归冒烟 | `main`（主场景）、`garage`、`smoke`、`garage_smoke`、`layout_smoke` |
+
+本地 AC 资产（车模/赛道）放 `mods/`（gitignore + `.gdignore`），一律以 `res://mods/...` 引用。
 
 ## Crate 职责
 

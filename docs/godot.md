@@ -197,7 +197,7 @@ extends Node3D
 
 func _ready():
     var car := AcCar.new()
-    car.open("res://test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari")
+    car.open("res://mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari")
     $VehicleBody.setup_from_car(car)
 
 func _physics_process(_delta):
@@ -225,9 +225,9 @@ func _physics_process(_delta):
 ```gdscript
 var world := WorldBody.new()
 add_child(world)
-world.load_track("res://test/daytona_2017", "roadcourse")
+world.load_track("res://mods/daytona_2017", "roadcourse")
 var car: VehicleBody = world.spawn_vehicle_from_path(
-    "res://test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
+    "res://mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
 )
 ```
 
@@ -279,7 +279,7 @@ var car: VehicleBody = world.spawn_vehicle_from_path(
 
 有两个层次：
 
-1. **模型管线**：`godot/kn5_probe.tscn` + `kn5_probe.gd` 用 `test/` 下的真实
+1. **模型管线**：`gdext/kn5_probe.tscn` + `kn5_probe.gd` 用 `mods/` 下的真实
    F1 2008 mod 把三台车实例化进场景，打印节点/网格/材质/挂点统计：
 
    ```bash

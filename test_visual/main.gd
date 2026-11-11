@@ -9,7 +9,7 @@ extends Node3D
 ## - 右上角按钮循环切换相机视角：车后 / 驾驶位 / 绕车 / 前机盖；
 ## - 油门/刹车会体现在车轮滚动与左上角 HUD 上，方便确认输入真的进来了。
 
-const DEFAULT_CAR_DIR := "res://test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
+const DEFAULT_CAR_DIR := "res://mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
 
 ## 车模库存放目录（`user://` 可写；res:// 在运行时是只读的）。由
 ## `test_visual/garage.gd` 的车模库面板管理：导入 / 选择 / 重命名 / 删除 / 搜索。

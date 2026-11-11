@@ -3,9 +3,9 @@
 /android/
 export_presets.cfg
 
-# 本地测试资源（车模、第三方工具）体积过大，不纳入版本库
-# 参见 README.md 的「本地测试资源」章节
-/test/
+# 本地车模/赛道资产（体积过大，不纳入版本库）
+# 参见 README.md 的「本地资源」章节
+/mods/
 
 # FMOD 凭证与 SDK 缓存：账号、installer、so/dylib 均禁止入库
 .fmod.env

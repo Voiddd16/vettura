@@ -26,18 +26,18 @@ vettura/
 ├── audio/                     # vettura-audio：AC sfx 发现 + FMOD runtime 直达
 ├── gdext/                     # vettura-godot：GDExtension 桥接层（Kn5File/AcCar/VehicleBody/WorldBody/FmodSystem）
 │   ├── vettura_native.gdextension
-│   └── baseline.tscn / fmod_probe.tscn / kn5_probe.tscn   # 无头冒烟场景
+│   └── baseline.tscn / fmod_probe.tscn / kn5_probe.tscn / load_probe.tscn  # Rust 验证探针
 ├── tools/                     # kn5-inspect / acd-inspect 命令行工具
-├── scripts/                   # Python（uv）工程脚本：FMOD 下载与打包
-├── docs/                      # 架构、构建、Godot 集成、音频、物理文档
+├── scripts/                   # Python（uv）工程脚本：构建 / Android 导出 / FMOD 下载与打包
+├── docs/                      # 架构、构建、Godot 集成、音频、物理文档 + plans/（方案文档）
 ├── test_visual/               # 测试性开发页面：默认车模浮空预览 + 触摸 + 多视角
 ├── addons/
 │   └── godot_mcp/             # Godot MCP 编辑器插件，供 AI/CLI 操作场景与脚本
-├── test/                      # 本地测试资源（不纳入版本库，见下文）
+├── mods/                      # 本地 AC 资源（车模/赛道，不纳入版本库，见下文）
 └── target/                    # cargo 构建产物（.gdignore，Godot 不导入）
 ```
 
-`.godot/` 为编辑器导入缓存，`test/` 为本地大体积资源，二者均被 `.gitignore` 排除。
+`.godot/` 为编辑器导入缓存，`mods/` 为本地大体积资源，二者均被 `.gitignore` 排除。
 
 ## Rust / native 部分
 
@@ -102,7 +102,7 @@ cargo build -p vettura-godot --features fmod       # 接真机 FMOD 声音
 
 设计取舍与 Chrono 移植边界见 `docs/physics.md` 与 `third_party/README.md`。
 
-跑真实资产验证（Daytona 赛道 + F1 2008 车；需本地 `test/` 资源在位）：
+跑真实资产验证（Daytona 赛道 + F1 2008 车；需本地 `mods/` 资源在位）：
 
 ```bash
 cargo test -p vettura-world --test track_module -- --ignored   # 赛道/AI/计时/发车格
@@ -127,7 +127,7 @@ godot --headless --path . res://gdext/kn5_probe.tscn
 
 ## 加载性能探针
 
-车模加载慢的定位与回归（合成本地车模，不需要 `test/` 真车资产）：
+车模加载慢的定位与回归（合成本地车模，不需要 `mods/` 真车资产）：
 
 ```bash
 uv run scripts/load_probe.py            # 生成 66 MiB 合成车模并跑无头探针
@@ -160,13 +160,14 @@ godot --headless --path . res://test_visual/smoke.tscn
 
 `addons/godot_mcp` 提供 MCP 服务，让外部工具（AI 助手、CLI）可以直接查询节点树、读写脚本、修改场景。插件默认在编辑器启动时加载，配置项位于 编辑器 → 项目设置 → `godot_mcp`。使用说明见 `addons/godot_mcp/README.zh.md`。
 
-## 本地测试资源
+## 本地资源（`mods/`）
 
-`test/` 目录用于存放导入验证用的 Assetto Corsa 内容，体积达数 GB（含多个 100 MB+ 的 `.kn5` / `.psd`），超出 GitHub 的仓库与 LFS 配额，因此 **不提交到版本库**。需要复现测试时，请在本地按下列结构放置：
+`mods/` 目录用于存放导入验证用的 Assetto Corsa 内容，体积达数 GB（含多个 100 MB+ 的 `.kn5` / `.psd`），超出 GitHub 的仓库与 LFS 配额，因此 **不提交到版本库**。需要复现测试时，请在本地按下列结构放置：
 
 ```
-test/
+mods/
 ├── F1 2008 by Cimmerian_Iter/   # 测试用车模（KN5 + 纹理 + data.acd）
+├── daytona_2017/                # 测试用赛道（models*.ini / surfaces.ini / AI 线）
 └── actools/                     # KN5/ACD 解析参考实现（第三方仓库克隆）
 ```
 

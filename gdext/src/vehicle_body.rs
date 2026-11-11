@@ -83,7 +83,7 @@ enum VehicleMode {
 ///
 /// ```gdscript
 /// var car := AcCar.new()
-/// car.open("res://test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari")
+/// car.open("res://mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari")
 /// var body := VehicleBody.new()
 /// add_child(body)
 /// body.setup_from_car(car)
@@ -95,7 +95,7 @@ enum VehicleMode {
 /// ```gdscript
 /// var world := WorldBody.new()
 /// add_child(world)
-/// world.load_track("res://test/daytona_2017", "roadcourse")
+/// world.load_track("res://mods/daytona_2017", "roadcourse")
 /// var body := world.spawn_vehicle_from_path("res://path/to/car")
 /// ```
 ///

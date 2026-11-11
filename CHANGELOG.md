@@ -79,4 +79,21 @@ adb logcat -c && adb shell am start -W -n com.vettura.game/com.godot.game.GodotA
 adb logcat -d | grep -E " E godot"               # 引擎错误（应为空/仅已知项）
 adb exec-out screencap -p > /tmp/s.png
 ```
-- Android 导出链路尚未验证（见 README「环境要求」）。
+
+## 仓库整理（未定版，2026-11-12）
+
+在不改任何 crate 包名 / Rust imports / 构建产物的前提下，把代码树理顺（人类友好 + AI 友好）：
+
+- **`test/` → `mods/`**：目录里放的本来就是本地 AC 车模/赛道资产（gitignore + `.gdignore`），
+  原名"test"与测试代码严重混淆。同步更新所有引用：`.gitignore`、
+  `test_visual/main.gd` 的 `DEFAULT_CAR_DIR`、`world/assets/audio` 三个真实资产测试的路径、
+  gdext 文档注释、README、docs/godot.md、docs/kn5-format.md。
+- **新增根级 `AGENTS.md`**：AI 助手仓库导航——目录是什么/不是什么、场景分工约定
+  （`gdext/` 探针 vs `test_visual/` 游戏页）、命令速查、提交约定、已知坑清单
+  （MCP 导出摘除、`-lc++_shared`、FMOD 不进 APK、`--quit-after` 单位等）。
+- **方案文档归档**：`主项目方案.md`（拟真赛车模拟器 v1.0 设计定稿，未入库）移入
+  `docs/plans/`；其"自研 sim-* 物理核心"与 roadmap「非目标：不自研完整轮胎模型」
+  是当前最大待决策分歧，先整理现状、后议物理路线。
+- **docs 刷新**：`architecture.md` 总览图补上 `world/` / `audio/`（原图缺失）并增加
+  场景分工表；`roadmap.md` 对齐 0.0.1 实际进度（加载缓存/分帧加载已勾、探针路径
+  `godot/`→`gdext/`、相机与 HUD 在 test_visual 已落地）。

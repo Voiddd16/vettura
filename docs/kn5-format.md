@@ -2,7 +2,7 @@
 
 本文记录 `vettura-kn5` 实际解析的布局。字段顺序以 AcTools 的
 `AcTools/Kn5File/Kn5Basic.cs`（`Kn5Reader`）、`Kn5Node.cs`、
-`Kn5Material.cs` 为准，并用 `test/` 下的真实车模交叉验证。
+`Kn5Material.cs` 为准，并用 `mods/` 下的真实车模交叉验证。
 
 所有整数/浮点均为小端。
 

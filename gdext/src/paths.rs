@@ -45,6 +45,6 @@ mod tests {
         }
         assert!(!is_virtual("file:///foo"));
         assert!(!is_virtual("/tmp/foo"));
-        assert!(!is_virtual("../vettura/test/daytona_2017"));
+        assert!(!is_virtual("../vettura/mods/daytona_2017"));
     }
 }

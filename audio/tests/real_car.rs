@@ -11,11 +11,11 @@ use vettura_audio::SoundManifest;
 
 fn ferrari_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../vettura/test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari")
+        .join("../../../vettura/mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari")
         .canonicalize()
         .unwrap_or_else(|_| {
             PathBuf::from(
-                "../vettura/test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari",
+                "../vettura/mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari",
             )
         })
 }

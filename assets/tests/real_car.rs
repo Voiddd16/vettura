@@ -12,11 +12,11 @@ use vettura_physics::VehicleSpec;
 
 fn force_india_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../vettura/test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_forceindia")
+        .join("../../../vettura/mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_forceindia")
         .canonicalize()
         .unwrap_or_else(|_| {
             PathBuf::from(
-                "../vettura/test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_forceindia",
+                "../vettura/mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_forceindia",
             )
         })
 }
