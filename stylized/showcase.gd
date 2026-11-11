@@ -22,12 +22,10 @@ const TOON_RAMP := preload("res://stylized/lighting/toon_ramp.gdshader")
 const FAKE_REFLECTION := preload("res://stylized/lighting/fake_reflection.gdshader")
 const VIGNETTE := preload("res://stylized/post/vignette.gdshader")
 const COLOR_GRADE := preload("res://stylized/post/color_grade.gdshader")
-const SPEED_LINES := preload("res://stylized/post/speed_lines.gdshader")
 
 var _time := 0.0
 var _paint_mat: ShaderMaterial
 var _gauge_mat: ShaderMaterial
-var _speed_mat: ShaderMaterial
 var _outline_mat: ShaderMaterial
 
 func _ready() -> void:
@@ -43,8 +41,6 @@ func _process(delta: float) -> void:
 		_paint_mat.set_shader_parameter("hue_shift", 0.5 * sin(_time * 0.4))
 	if _gauge_mat:
 		_gauge_mat.set_shader_parameter("fill_ratio", 0.5 + 0.45 * sin(_time * 0.8))
-	if _speed_mat:
-		_speed_mat.set_shader_parameter("speed", 0.5 + 0.5 * sin(_time * 0.5))
 	if _outline_mat:
 		_outline_mat.set_shader_parameter("width", 0.02 + 0.012 * sin(_time * 2.0))
 
@@ -207,4 +203,3 @@ func _setup_post() -> void:
 	add_child(fx)
 	fx.push(COLOR_GRADE, {"saturation": 1.15, "warmth": 0.10})
 	fx.push(VIGNETTE, {"strength": 0.30})
-	_speed_mat = fx.push(SPEED_LINES, {"strength": 0.6}).material as ShaderMaterial

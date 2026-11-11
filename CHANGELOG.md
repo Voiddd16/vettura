@@ -117,5 +117,6 @@ adb exec-out screencap -p > /tmp/s.png
 spatial 侧读屏幕纹理，移动端 `mobile` 渲染器安全。
 
 `showcase.tscn` 展示页：六类效果各一个展台 + HUD + 滤镜链，纯合成几何不依赖
-`mods/`。验证：headless 冒烟 + 桌面窗口实跑 300 帧零 shader 错误
+`mods/`。展示页默认滤镜链只挂调色 + 暗角（速度线按需 `FxLayer.push` 启用）。
+验证：headless 冒烟 + 桌面窗口实跑 300 帧零 shader 错误
 （修正一处：Godot 4 无 `CLEARCOAT_GLOSS` 内建）。
