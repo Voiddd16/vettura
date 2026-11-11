@@ -72,7 +72,7 @@
 ### 复现/验证命令
 
 ```sh
-adb devices -l                                   # 需要先开机 Kali 的 USB 安装开关
+adb devices -l                                   # MIUI 需先打开「通过 USB 安装」
 python3 scripts/build.py apk
 adb install -r -d build/android/Vettura.apk
 adb logcat -c && adb shell am start -W -n com.vettura.game/com.godot.game.GodotAppLauncher
