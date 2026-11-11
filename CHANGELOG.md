@@ -38,4 +38,45 @@
 
 - 冷路径首帧仍要解码全部贴图；把 DDS 解码搬进 Rust（BC1/BC3）以并行化/后台化，
   是下一个版本的首要候选。
+
+## 真机验证记录（未定版，2026-11-11）
+
+设备：Xiaomi 2211133C（HyperOS，Android 16 / API 36，arm64-v8a，1080x2400，
+440dpi，Adreno 740，Vulkan Forward Mobile）。APK = `build/android/Vettura.apk`，
+通过 `python3 scripts/build.py apk` 导出后用 `adb install -r -d` 安装。
+
+### 已修（真机 logcat 里逐条对应）
+
+- `dlopen failed: cannot locate symbol "__cxa_pure_virtual"` —— GDExtension 整个
+  加载失败。原因是 Rust 侧没写 `libc++_shared.so` 的 DT_NEEDED；已由
+  `.cargo/config.toml` 的 `-C link-arg=-lc++_shared` 修掉。
+- `Unrecognized UID: "uid://bsg12huaf1u5i"` —— godot_mcp 写的 `MCPRuntimeProbe`
+  autoload 指向被 `exclude_filter` 排除的 addons 脚本；已由导出期间临时摘除
+  autoload + 插件项修掉。
+- 车库面板被 HUD/TouchOverlay 盖住（CanvasLayer 层级问题）、按「返回」后导入
+  按钮永久禁用——已修，真机复测面板正常显示、HUD 正确隐藏。
+
+### 仍待处理
+
+- `Feature register-docs is enabled in an exported (non-editor) build`：
+  `god.setdefault` 的 `register-docs` 应改为仅桌面/开发构型启用（会减小包体）。
+- 外部 Activity（系统文件选择器）打断后 Vulkan surface 丢失：
+  `VK_ERROR_SURFACE_LOST_KHR` → 画面全黑；随后冷启动会
+  `Couldn't create Android Surface (VK_ERROR_NATIVE_WINDOW_IN_USE_ANDROID)`，
+  需要重启设备才恢复。真机旋转方向被锁死 + 息屏后 adb 无法唤醒，导致这条没能
+  进一步定位。
+- 大 zip 在主线程同步解压，无进度提示（既有待办）。
+- MIUI「应用锁」会拦在系统文件选择器前面（设备配置问题，非代码缺陷）；
+  导入回调本身正常（取消时能收到 `[garage] 导入已取消`）。
+
+### 复现/验证命令
+
+```sh
+adb devices -l                                   # 需要先开机 Kali 的 USB 安装开关
+python3 scripts/build.py apk
+adb install -r -d build/android/Vettura.apk
+adb logcat -c && adb shell am start -W -n com.vettura.game/com.godot.game.GodotAppLauncher
+adb logcat -d | grep -E " E godot"               # 引擎错误（应为空/仅已知项）
+adb exec-out screencap -p > /tmp/s.png
+```
 - Android 导出链路尚未验证（见 README「环境要求」）。
