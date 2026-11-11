@@ -38,6 +38,8 @@ vettura/
 ```
 
 `.godot/` 为编辑器导入缓存，`mods/` 为本地大体积资源，二者均被 `.gitignore` 排除。
+每个 crate 目录内有自己的 `README.md`（模块地图 / 关键入口 / 边界 / 验证命令）；
+AI 助手的仓库导航见根目录 [`AGENTS.md`](AGENTS.md)。
 
 ## Rust / native 部分
 

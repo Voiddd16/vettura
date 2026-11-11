@@ -11,6 +11,9 @@ FMOD 音频直连；GDScript 只做 UI/流程。加载时直读 AC 原格式，�
 
 ## 仓库地图（每个目录是什么 / 不是什么）
 
+> 每个 crate 目录内都有 `README.md`（模块地图、关键入口、边界、验证命令）；
+> 下表只给取舍概览，进入 crate 先读它的 README。
+
 | 目录 | 是什么 | 不是什么 |
 | --- | --- | --- |
 | `core/` | `vettura-core`：SI 单位约定、AC↔Godot 坐标转换、glam 再导出 | 不含格式解析、物理、Godot 类型 |
