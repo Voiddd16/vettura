@@ -25,6 +25,7 @@ FMOD 音频直连；GDScript 只做 UI/流程。加载时直读 AC 原格式，�
 | `audio/` | `vettura-audio`：`sfx/GUIDs.txt` 事件表 + bank 定位 + **FMOD Studio runtime 直连** | 不解析 bank/FSB（FMOD 负责） |
 | `gdext/` | `vettura-godot`：GDExtension 桥（cdylib）+ 4 个 Rust 验证探针场景 | 不是游戏 UI |
 | `test_visual/` | 游戏性预览页与冒烟（GDScript）：车库/触摸/多视角/布局 | 不是 Rust 冒烟 |
+| `stylized/` | 风格化渲染子项目：玻璃/HUD/颜色/形状/光照/滤镜 shader 框架（纯 shader+GDScript，见其 README） | 不放游戏逻辑/物理/Rust |
 | `tools/` | `kn5-inspect` / `acd-inspect` CLI（格式逆向排查用） | — |
 | `scripts/` | Python(uv) 构建脚本：`build.py`（host/android/apk/check/test）、`android.py`、`clean.py`、`fetch_fmod.py`、`load_probe.py` | 不是游戏代码 |
 | `docs/` | 设计文档 + `plans/`（方案文档，如主项目方案评审稿） | — |
@@ -41,7 +42,9 @@ FMOD 音频直连；GDScript 只做 UI/流程。加载时直读 AC 原格式，�
 - **`test_visual/*.tscn` = 游戏性预览页**：`main`（默认浮空车+触摸+多视角+HUD，也是
   `project.godot` 主场景）、`garage`（车模库）、`smoke` / `garage_smoke` / `layout_smoke`
   （回归冒烟）。
-- 新增页面/控件实验放 `test_visual/`；不要往 `gdext/` 里加游戏 UI。
+- **`stylized/showcase.tscn` = 风格化效果展示页**：六大类 shader 各一个展台（纯合成几何，
+  不依赖 `mods/`），桌面窗口运行看效果。
+- 新增页面/控件实验放 `test_visual/`；shader 效果放 `stylized/`；不要往 `gdext/` 里加游戏 UI。
 
 ## 常用命令
 

@@ -97,3 +97,25 @@ adb exec-out screencap -p > /tmp/s.png
 - **docs 刷新**：`architecture.md` 总览图补上 `world/` / `audio/`（原图缺失）并增加
   场景分工表；`roadmap.md` 对齐 0.0.1 实际进度（加载缓存/分帧加载已勾、探针路径
   `godot/`→`gdext/`、相机与 HUD 在 test_visual 已落地）。
+
+## 风格化渲染子项目 stylized/（未定版，2026-11-12）
+
+新增画面风格增强子项目：**纯 `.gdshader` + GDScript，不依赖 Rust 构建**，
+按用途分类六类 + 公共工具：
+
+- `glass/`：赛车玻璃（透射+菲涅尔+边缘辉光）、护栏玻璃（网格线）；
+- `hud/`：圆角面板发光描边、270° 圆环仪表（超阈值变警告色）、扫描线/故障叠层；
+- `color/`：HSV 车漆换色（带清漆）、遮罩分区涂装换色；
+- `shape/`：反壳轮廓描边（推荐 next_pass）、植被风摆（世界空间顶点位移）；
+- `lighting/`：边缘光叠层、卡通分档光照、流光假反射车漆（无 cubemap）；
+- `post/`：暗角/调色/速度线/热浪/色差五个全屏滤镜 + `FxLayer` 滤镜链挂载器
+  （后推的滤镜采样前面的输出，链式生效）；
+- `common/`：noise / HSV / 菲涅尔三个 `.gdshaderinc`（函数统一 `vfx_` 前缀）。
+
+四种集成方式按成本排序：`next_pass` 叠加（不动 KN5 材质）→ `material_override`
+整件替换 → `Control.material`（HUD）→ `FxLayer` 全屏滤镜。全部 shader 规避了
+spatial 侧读屏幕纹理，移动端 `mobile` 渲染器安全。
+
+`showcase.tscn` 展示页：六类效果各一个展台 + HUD + 滤镜链，纯合成几何不依赖
+`mods/`。验证：headless 冒烟 + 桌面窗口实跑 300 帧零 shader 错误
+（修正一处：Godot 4 无 `CLEARCOAT_GLOSS` 内建）。

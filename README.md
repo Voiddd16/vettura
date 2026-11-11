@@ -31,6 +31,7 @@ vettura/
 ├── scripts/                   # Python（uv）工程脚本：构建 / Android 导出 / FMOD 下载与打包
 ├── docs/                      # 架构、构建、Godot 集成、音频、物理文档 + plans/（方案文档）
 ├── test_visual/               # 测试性开发页面：默认车模浮空预览 + 触摸 + 多视角
+├── stylized/                  # 风格化渲染子项目：玻璃/HUD/颜色/形状/光照/滤镜 shader 框架
 ├── addons/
 │   └── godot_mcp/             # Godot MCP 编辑器插件，供 AI/CLI 操作场景与脚本
 ├── mods/                      # 本地 AC 资源（车模/赛道，不纳入版本库，见下文）
