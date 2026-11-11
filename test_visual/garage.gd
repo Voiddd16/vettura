@@ -28,6 +28,8 @@ class GarageCar:
 
 ## 选择了一台车（"载入预览"）：把目录路径交出去。
 signal car_selected(car_path: String)
+## 面板自己关掉了（「返回」）：宿主用来恢复被它藏起来的 HUD 等 UI。
+signal closed
 ## 需要刷新列表（导入/删除/重命名后）。
 signal library_changed
 
@@ -400,6 +402,8 @@ func _on_open_pressed() -> void:
 	OS.shell_open(car.path)
 
 func _close() -> void:
+	# 先发信号再销毁：宿主（main.gd）要恢复 HUD / 触摸层。
+	closed.emit()
 	queue_free()
 
 func _selected() -> GarageCar:

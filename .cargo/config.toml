@@ -1,0 +1,21 @@
+# 平台相关的 cargo 配置（主机构建不受影响）。
+#
+# Android 必须显式写上 libc++ 依赖：Godot 的 Android 导出模板自带
+# libc++_shared.so，但 Rust 的 linker wrapper 默认不会把 DT_NEEDED 补上，
+# 于是 .so 里一堆 libc++abi 符号（__cxa_pure_virtual、__cxa_guard_* …）
+# 处于"未解析但不声明依赖"的状态。GDExtension 在引擎初始化早期被 dlopen 时，
+# 链接器不会为它加载 libc++_shared.so，直接：
+#
+#   ERROR: Can't open dynamic library: .../libvettura_native.so.
+#   Error: dlopen failed: cannot locate symbol "__cxa_pure_virtual" ...
+#
+# 加 `-lc++_shared` 是为了让 DT_NEEDED 出现，dlopen 时自动加载模板里那份，
+# 与 Godot 主库共用同一份 libc++（避免静态链两份导致 ODR/符号冲突）。
+[target.aarch64-linux-android]
+rustflags = ["-C", "link-arg=-lc++_shared"]
+
+[target.armv7-linux-androideabi]
+rustflags = ["-C", "link-arg=-lc++_shared"]
+
+[target.x86_64-linux-android]
+rustflags = ["-C", "link-arg=-lc++_shared"]

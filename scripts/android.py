@@ -39,6 +39,8 @@ ALL_ABIS = {
     "armeabi-v7a": ("armv7-linux-androideabi", "armv7a-linux-androideabi"),
     "x86_64": ("x86_64-linux-android", "x86_64-linux-android"),
 }
+# strip_mcp_autoload() 出手前保存的 project.godot 原文，导出结束后原样恢复。
+ORIGINAL_PROJECT_GODOT = ""
 ABIS = {
     abi: triple for abi, triple in ALL_ABIS.items()
     if abi != "armeabi-v7a"
@@ -369,6 +371,73 @@ def step_lib(args: argparse.Namespace) -> None:
             print(f"  已拷贝 -> {destination / source.name}")
 
 
+MCP_AUTOLOAD_RE = re.compile(
+    r"\[autoload\]\n\nMCPRuntimeProbe=[^\n]*\n\n", re.MULTILINE
+)
+
+
+def strip_mcp_autoload() -> tuple[bool, str]:
+    """导出前临时摘掉 godot_mcp 插件在编辑器里注册的 autoload 与插件开关。
+
+    该插件在编辑器启动时会：
+      1. 用 `add_autoload_singleton` 把运行期探针写进 `[autoload]`；
+      2. 自己在 `[editor_plugins]` 里启用（否则插件根本不会跑）。
+    而 Android preset 的 exclude_filter 排除了 `addons/*`，探针的 UID 在包里
+    不存在，真机启动就刷一条：
+        ERROR: Unrecognized UID: "uid://bsg12huaf1u5i"
+    关键是：只摘 autoload 没用——导出用的又是 `--editor`，插件会当场把它写回来。
+    所以导出期间把 `[editor_plugins]` 里的 godot_mcp 条目一并摘掉，导完再原样恢复。
+    返回 (是否改动, 原文) 供恢复用。
+    """
+    path = ROOT / "project.godot"
+    original = path.read_text(encoding="utf-8")
+    stripped = MCP_AUTOLOAD_RE.sub("", original, count=1)
+    stripped, plugin_removed = _drop_editor_plugin(stripped, "res://addons/godot_mcp/plugin.cfg")
+    if stripped == original and not plugin_removed:
+        return False, original
+    path.write_text(stripped, encoding="utf-8")
+    global ORIGINAL_PROJECT_GODOT
+    ORIGINAL_PROJECT_GODOT = original
+    return True, original
+
+
+def _drop_editor_plugin(text: str, plugin_cfg: str) -> tuple[str, bool]:
+    """从 `[editor_plugins] enabled` 数组里删掉一个插件；删空则连 section 一起删。"""
+    marker = "enabled=PackedStringArray("
+    cursor = text.find(marker)
+    while cursor != -1:
+        end = text.find(")", cursor)
+        if end == -1:
+            break
+        body = text[cursor + len(marker):end]
+        items = [chunk.strip() for chunk in re.split(r",\s*(?=\")", body) if chunk.strip()]
+        kept = [item for item in items if plugin_cfg not in item]
+        if len(kept) != len(items):
+            if kept:
+                text = text[: cursor + len(marker)] + ", ".join(kept) + ")" + text[end + 1:]
+                return text, True
+            section = text.rfind("[editor_plugins]", 0, cursor)
+            line_end = text.find("\n", end)
+            next_line = text.find("\n", line_end + 1)
+            if section != -1 and next_line != -1:
+                return text[:section] + text[next_line + 1:], True
+            return text[: section] + text[line_end + 1:], True
+        cursor = text.find(marker, end)
+    return text, False
+
+
+def restore_project_godot() -> bool:
+    """把 strip_mcp_autoload 改动的 project.godot 原样写回。"""
+    original = ORIGINAL_PROJECT_GODOT
+    if not original:
+        return False
+    path = ROOT / "project.godot"
+    if path.read_text(encoding="utf-8") == original:
+        return True
+    path.write_text(original, encoding="utf-8")
+    return True
+
+
 def step_export(args: argparse.Namespace) -> None:
     godot = Path(args.godot)
     if not (ROOT / "export_presets.cfg").exists():
@@ -378,13 +447,22 @@ def step_export(args: argparse.Namespace) -> None:
         "--install-android-build-template",
         "--export-debug", PRESET_NAME, str(ROOT / APK_PATH),
     ]
-    with Step("导出 APK"):
-        (ROOT / APK_PATH).parent.mkdir(parents=True, exist_ok=True)
-        run(command)
+    changed, _ = strip_mcp_autoload()
+    if changed:
+        print("  已临时移除 MCPRuntimeProbe autoload 与 godot_mcp 编辑器插件"
+              "（addons 不随包导出，插件启动还会把 autoload 写回来）")
+    try:
+        with Step("导出 APK"):
+            (ROOT / APK_PATH).parent.mkdir(parents=True, exist_ok=True)
+            run(command)
         apk = ROOT / APK_PATH
         if not apk.exists():
             raise RuntimeError("导出命令成功但 APK 不存在")
         print(f"APK: {apk} ({apk.stat().st_size / 1e6:.1f} MB)")
+    finally:
+        if changed:
+            restore = restore_project_godot()
+            print(f"  已恢复 project.godot MCPRuntimeProbe autoload：{restore}")
 
 
 STEPS = {

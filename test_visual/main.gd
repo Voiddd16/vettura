@@ -36,6 +36,10 @@ const ORBIT_SPEED := 0.6
 
 const MODE_TEXTS := ["视角：车后", "视角：驾驶位", "视角：绕车", "视角：前机盖"]
 
+## 车库面板的 CanvasLayer 层级：HUD / TouchOverlay 各占一层（默认 1），
+## 车库要盖在它们上面，所以单独给 2。
+const GARAGE_LAYER := 2
+
 const SafeArea := preload("res://test_visual/safe_area.gd")
 
 @onready var _car_pivot: Node3D = $CarPivot
@@ -44,6 +48,11 @@ const SafeArea := preload("res://test_visual/safe_area.gd")
 @onready var _info_label: Label = $HUD/Panel/Columns/Column/InfoLabel
 @onready var _import_button: Button = $HUD/Panel/Columns/Column/ImportButton
 @onready var _hud_panel: MarginContainer = $HUD/Panel
+@onready var _hud: CanvasLayer = $HUD
+@onready var _touch_overlay: Control = $CanvasLayer/TouchOverlay
+
+## 打开中的车模库（连着它的 CanvasLayer），null = 没开。
+var _garage_layer: CanvasLayer = null
 
 var _car_root: Node3D
 var _wheels: Array[Node3D] = []
@@ -134,11 +143,23 @@ func _load_car(path: String) -> bool:
 
 ## 「导入车模」按钮：打开车模库面板（导入 / 选择 / 重命名 / 删除 / 搜索）。
 func _on_import_button_pressed() -> void:
+	if _garage_layer != null:
+		return
 	var garage_scene: PackedScene = load("res://test_visual/garage.tscn")
 	var garage := garage_scene.instantiate() as Control
 	garage.set_anchors_preset(Control.PRESET_FULL_RECT, true)
 	garage.car_selected.connect(_on_garage_car_selected)
-	add_child(garage)
+	garage.closed.connect(_close_garage)
+	# 车库必须住在自己的 CanvasLayer 里：HUD / TouchOverlay 也是 CanvasLayer，
+	# 直接 add_child 到场景根节点的 Control 只会落在默认画布层，会被 HUD 盖住
+	# （真机上表现为 HUD 文字压在车库面板上，面板里的按钮还抢不到点击）。
+	var layer := CanvasLayer.new()
+	layer.layer = GARAGE_LAYER
+	layer.add_child(garage)
+	add_child(layer)
+	_garage_layer = layer
+	_hud.visible = false
+	_touch_overlay.visible = false
 	_import_button.disabled = true
 
 ## 车模库里选了一台车：加载并关掉面板。
@@ -148,11 +169,17 @@ func _on_garage_car_selected(car_path: String) -> void:
 		return
 	_close_garage()
 
-## 关掉车模库（不管有没有选车），并恢复按钮可用。
+## 关掉车模库（选车 / 按「返回」都走这里），并恢复按钮与 HUD。
 func _close_garage() -> void:
-	for child in get_children():
-		if child is Control and child.scene_file_path.ends_with("garage.tscn"):
-			child.queue_free()
+	if _garage_layer != null:
+		_garage_layer.queue_free()
+		_garage_layer = null
+	else:
+		for child in get_children():
+			if child is Control and child.scene_file_path.ends_with("garage.tscn"):
+				child.queue_free()
+	_hud.visible = true
+	_touch_overlay.visible = true
 	_import_button.disabled = false
 
 func _warn_import(message: String) -> void:
