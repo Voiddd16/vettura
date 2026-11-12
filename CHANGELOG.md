@@ -29,6 +29,11 @@
 - **`WorldBody.ai_controls(index)`**：把 `AiDriver`（`fast_lane.ai` 追踪控制器）
   桥接给 GDScript，返回 `[油门, 刹车, 转向]`；赛道没有 AI 线时降级为空数组。
 - 预览页支持桌面键盘：`W`/`↑` 油门、`S`/`↓` 刹车、`C` 循环视角。
+- **赛道真实视觉模型**（`gdext/src/world/track_models.rs`）：渲染侧按 `models.ini`
+  逐个实例化非 collision 的 KN5（复用车模的按文件缓存与 `scene::instantiate`
+  管线），放置变换与物理共用 `TrackModule` 的 Godot 帧矩阵；全部失败才回退
+  原来的碰撞低模，缺失文件 warning 跳过不中断（Daytona 实测 6 模型 0.6 s
+  加载，路面标线/看台/维修区/灯柱齐全）。
 - `world` 新增真车回归测试 `real_car_gearbox`（`--ignored`，需 `mods/`）：
   全油门 12 s 必须正常升挡加速，静止满刹车不得倒车。
 
@@ -50,7 +55,16 @@
   目标 0.12，全油门永远升不了挡。`TC_SLIP_TARGET` 降到 0.08，`TC_MIN_FACTOR`
   降到 0——引擎惯性极小（AC `INERTIA=0.012`），两成油门就够把引擎钉死在
   限制器上持续烧胎。
-- 静止刹停后被 coast 推力缓慢倒车：负 forward 只在前进速度 > 0.5 m/s 时施加。
+- **重刹时 gear=-1、转速顶限制器**：Jolt 自动变速箱把负油门解释为“换倒挡”
+  请求（`forward × gear < 0` 立即换向），而 `[COAST_REF]` 收油制动此前以负
+  forward 发送——重刹立刻切倒挡，rpm 被拖到 19000，降挡补油/限速器再与倒挡
+  互斗。现在油门永远 ≥ 0，coast 改为额外刹车踏板比例（`coast(rpm) × 挡位
+  齿比 × 尾速比 ÷ 刹车总容量`），加在 ABS 与刹车衰减之后；空挡不注入。
+- **DDS 孤儿 pitch 值**：部分导出器写出的头 flags 未声明 `PITCH`/`LINEARSIZE`
+  却在 `dwPitchOrLinearSize` 留了非零值，Godot 整张贴图拒绝（Daytona 274 张
+  贴图 42 张中招，看台/人群全黑）。`vettura-kn5::fix_orphan_pitch_value` 把
+  孤儿值清零使头自洽，`decode()` 入口先修头（实测 67 条 ERROR → 0，313 张
+  赛道+车模贴图 0 丢失）。
 - ABS/TC 增加 < 2 m/s 低速护栏：静止抱死与爬行时滑移率虚高，辅助判定没有意义。
 - `test_visual/main.tscn` 的 `TouchOverlay` 没有铺满屏幕（塌缩到原点）：触摸
   区域实际不可用，按钮文字从左上角画出叠在 HUD 信息上。
@@ -61,9 +75,9 @@
 
 - 冷路径首帧仍要解码全部贴图；把 DDS 解码搬进 Rust（BC1/BC3）以并行化/后台化，
   是下一个版本的首要候选。
-- 重刹中 Jolt 自动变速箱会切进倒挡（遥测显示 gear=-1、rpm 顶限制器）：只是
-  显示瑕疵，静止 hold 已保证车不会倒走；显式倒挡输入属于后续工作。
-- 赛道视觉是 `world` 内建的低模路面网格，暂无材质贴图，呈深褐色平面。
+- 显式倒挡输入属于后续工作（当前倒挡只能由 Jolt 在静止松油门时自动切入）。
+- 少数贴图的 mip 链截断会让 Godot 打印 `Expected Image data size` 但仍返回
+  可用图（赛道+车模模拟 decode 313/313 成功），属无害噪音，未处理。
 
 ## 真机验证记录（未定版，2026-11-11）
 
