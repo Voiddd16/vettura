@@ -643,8 +643,6 @@ pub(crate) struct VehicleRuntime {
     limiter_phase: f32,
     /// Last gear seen, so an upshift can be detected.
     previous_gear: i32,
-    /// Maximum crank torque Jolt's engine was built with, N·m.
-    engine_max_torque_nm: f32,
     /// Water film carried by each tyre, mm.
     water_film_mm: [f32; 4],
     /// Suspension length at the previous force update, used for actuator damping.
@@ -840,7 +838,6 @@ impl VehicleRuntime {
         };
         let ers_capacity_j = spec.ers.capacity_j.max(0.0);
 
-        let engine_torque_cap = engine_max_torque_nm(&spec, &tuning);
         Ok(Self {
             handle,
             body,
@@ -875,7 +872,6 @@ impl VehicleRuntime {
             shift_blip: ShiftBlip::new(),
             limiter_phase: 0.0,
             previous_gear: 0,
-            engine_max_torque_nm: engine_torque_cap,
             water_film_mm: [0.0; 4],
             previous_suspension_lengths: [0.0; 4],
             suspension_force_n: [0.0; 4],
@@ -972,21 +968,36 @@ impl VehicleRuntime {
                 forward = 0.0;
             }
         }
-        // Lifting off: the engine's pumping and friction losses become the
-        // braking torque. Jolt scales its torque by this input, so a small
-        // negative value reproduces `[COAST_REF]` exactly. Only apply at zero
-        // throttle: a negative throttle still means "reverse".
+        // 收油制动（`[COAST_REF]`）以**额外刹车踏板**的形式注入轮边，油门
+        // 永远不发负值。原因：Jolt 的自动变速箱把负油门当作“换倒挡”请求
+        // （`VehicleTransmission::Update`：`forward × gear < 0` 立即换向），
+        // 负 forward 会让重刹/收油时挡位跳到 -1、转速被倒挡拖到红线——桌面
+        // 探针实测 gear=-1、rpm 顶 19000，换挡事件还被污染（降挡补油误触发）。
         //
-        // 只在车真的向前滚时施加负值：Jolt 里"负 forward"既是引擎制动也是
-        // 倒挡油门——刹停后若继续送负值，变速箱立刻切进倒挡，倒挡扭矩会
-        // 顶着刹车把车推走（桌面探针实测刹停 4 s 后倒车加速到 28 km/h）。
-        // 静止时 forward 保持 0，刹车稳稳 hold 住；倒车驾驶需要显式的
-        // 倒挡输入，属于后续工作。
+        // 换算：曲轴阻力矩 coast(rpm) 经当前挡齿比与尾速比放大到轮边，再除以
+        // 刹车系统总容量（四轮 `max_brake_torque` 之和 = 2×峰值×brake_scale）
+        // 得到踏板比例。空挡/倒挡时没有引擎制动，物理上也正确。这个“踏板”
+        // 加在 ABS 与刹车衰减之后：引擎制动不消耗刹车片，ABS 也不该在收油时
+        // 介入；只在油门松开且车真的向前滚时注入，静止时刹车稳稳 hold 住。
+        let mut brake = input.brake;
         if input.throttle.abs() < 1.0e-3 && self.snapshot.forward_speed_mps > 0.5 {
             let coast = self.spec.engine.coast_torque_at(self.snapshot.engine_rpm);
-            if coast > 0.0 {
-                let fraction = (coast / self.engine_max_torque_nm.max(1.0e-3)).clamp(0.0, 1.0);
-                forward = forward.min(-fraction);
+            let ratio = if self.snapshot.gear > 0 {
+                self.spec
+                    .engine
+                    .gear_ratios
+                    .get(self.snapshot.gear as usize - 1)
+                    .copied()
+                    .unwrap_or(0.0)
+                    * self.spec.engine.final_drive
+            } else {
+                0.0
+            };
+            let capacity = 2.0
+                * self.spec.brakes.max_torque_nm.max(0.0)
+                * self.tuning.brake_scale.clamp(0.0, 4.0);
+            if coast > 0.0 && ratio > 0.0 && capacity > 1.0e-3 {
+                brake = (brake + coast * ratio / capacity).clamp(0.0, 1.0);
             }
         }
         physics
@@ -994,7 +1005,7 @@ impl VehicleRuntime {
             .set_driver_input(DriverInput {
                 forward,
                 right: -input.steering,
-                brake: input.brake,
+                brake,
                 hand_brake: if input.handbrake { 1.0 } else { 0.0 },
             })?;
         Ok(())
