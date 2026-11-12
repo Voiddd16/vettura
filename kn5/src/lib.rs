@@ -20,7 +20,10 @@ mod reader;
 #[doc(hidden)]
 pub mod synth;
 
-pub use dds::{DdsError, DdsFormat, DdsInfo, DdsLayout, layout as dds_layout, strip_mip_levels};
+pub use dds::{
+    DdsError, DdsFormat, DdsInfo, DdsLayout, fix_orphan_pitch_value, layout as dds_layout,
+    strip_mip_levels,
+};
 pub use error::{Error, Result};
 pub use model::{
     BlendMode, Bone, DepthMode, Kn5, Material, MaterialProperty, Mesh, MeshFlags, Node, NodeKind,

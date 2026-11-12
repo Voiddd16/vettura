@@ -3,9 +3,11 @@
 //! 这里刻意不解码像素：Godot 层可以把原始 DDS 字节交给
 //! `Image::load_dds_from_buffer`，检查工具也只需要尺寸和格式元数据。
 //!
-//! 另外提供一个“修正 mip 级数”的工具（[`strip_mip_levels`]）：**KN5 的 DDS
-//! 写到底 2x2 为止**，但 DDS 规范（以及严格的加载器，例如 Godot）期望完整的
-//! 1x1 链。直接喂给 Godot 会报 “Expected Image data size … got … instead”。
+//! 另外提供两个“让严格的加载器（Godot）接受”的头部修正工具：
+//! [`strip_mip_levels`] 处理**KN5 的 DDS 写到底 2x2 为止**但规范期望完整 1x1
+//! 链的情况（否则报 “Expected Image data size … got … instead”）；
+//! [`fix_orphan_pitch_value`] 处理 flags 没声明 PITCH/LINEARSIZE 却写了非零
+//! 值的自相矛盾头（否则报 “DDS header flags specify that no linear size …”）。
 
 use thiserror::Error;
 
@@ -232,6 +234,38 @@ pub fn strip_mip_levels(data: &[u8]) -> Option<Vec<u8>> {
     Some(patched)
 }
 
+/// 修正“flags 没声明 `DDSD_PITCH` / `DDSD_LINEARSIZE`，但 `dwPitchOrLinearSize`
+/// 却是非零值”的自相矛盾 DDS 头。
+///
+/// **为什么需要**：部分导出器写出的头只有 `CAPS|HEIGHT|WIDTH|PIXELFORMAT|
+/// MIPMAPCOUNT`（`0x21007`），既没有 PITCH 也没有 LINEARSIZE，却在第 20 字节
+/// 留了个值。Godot 的 DDS 加载器对这种不一致直接拒绝——“DDS header flags
+/// specify that no linear size will be given … but a non-zero linear size value
+/// is present”——整张贴图拿不到（Daytona 赛道 274 张贴图里有 42 张这样，
+/// 看台/人群因此全黑）。把字段清零即可让头自洽；实测清零后 Godot 能正常
+/// 加载、解压并重建 mip。本来就没有该 flag 或值为 0 的文件返回 `None`。
+///
+/// 需要改写时返回补丁后的字节（只动头部这 4 个字节，像素原样保留）。
+pub fn fix_orphan_pitch_value(data: &[u8]) -> Option<Vec<u8>> {
+    const DDSD_PITCH: u32 = 0x8;
+    const DDSD_LINEARSIZE: u32 = 0x80000;
+    if data.len() < 128 {
+        return None;
+    }
+    let flags = u32::from_le_bytes(data[8..12].try_into().ok()?);
+    if flags & (DDSD_PITCH | DDSD_LINEARSIZE) != 0 {
+        return None;
+    }
+    let pitch = u32::from_le_bytes(data[20..24].try_into().ok()?);
+    if pitch == 0 {
+        return None;
+    }
+
+    let mut patched = data.to_vec();
+    patched[20..24].copy_from_slice(&0u32.to_le_bytes());
+    Some(patched)
+}
+
 /// DDS 头部检查失败的原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DdsError {
@@ -408,6 +442,39 @@ mod tests {
     fn strip_mip_levels_rejects_zero_dimensions() {
         let bytes = dds_header(0, 32, 5, b"DXT5");
         assert!(strip_mip_levels(&bytes).is_none());
+    }
+
+    #[test]
+    fn fix_orphan_pitch_value_clears_inconsistent_field() {
+        // Daytona 的 raceday 贴图：flags 只有 0x21007，值却是 4096。
+        let mut bytes = dds_header(2048, 2048, 1, b"DXT1");
+        bytes[8..12].copy_from_slice(&0x21007u32.to_le_bytes());
+        bytes[20..24].copy_from_slice(&4096u32.to_le_bytes());
+
+        let fixed = fix_orphan_pitch_value(&bytes).expect("自相矛盾的头应当被修正");
+        assert_eq!(u32::from_le_bytes(fixed[20..24].try_into().unwrap()), 0);
+        // 只动这 4 个字节，其余原样。
+        assert_eq!(fixed[..20], bytes[..20]);
+        assert_eq!(fixed[24..], bytes[24..]);
+        // 修正后不再需要二次修正（幂等）。
+        assert!(fix_orphan_pitch_value(&fixed).is_none());
+    }
+
+    #[test]
+    fn fix_orphan_pitch_value_leaves_consistent_headers_alone() {
+        // 声明了 LINEARSIZE（正常写法）→ 不动。
+        let mut linear = dds_header(64, 64, 1, b"DXT1");
+        linear[8..12].copy_from_slice(&0x80000u32.to_le_bytes());
+        linear[20..24].copy_from_slice(&2048u32.to_le_bytes());
+        assert!(fix_orphan_pitch_value(&linear).is_none());
+
+        // 没有 flag 但值本来就是 0 → 与 Godot 不冲突，不动。
+        let mut zero = dds_header(64, 64, 1, b"DXT1");
+        zero[8..12].copy_from_slice(&0x21007u32.to_le_bytes());
+        assert!(fix_orphan_pitch_value(&zero).is_none());
+
+        // 太短的输入直接拒绝，不越界。
+        assert!(fix_orphan_pitch_value(b"DDS ").is_none());
     }
 
     #[test]

@@ -8,7 +8,9 @@
 //!
 //! 这里分两步走：
 //!
-//! 1. 先按原样加载——完整链的贴图（尤其是大尺寸 diffuse）可以直接保留压缩格式
+//! 0. 先做头部自洽性修正（[`vettura_kn5::fix_orphan_pitch_value`]）：部分导出器
+//!    写的 flags 没声明 PITCH/LINEARSIZE、值却非零，Godot 会直接拒绝整张贴图；
+//! 1. 再按原样加载——完整链的贴图（尤其是大尺寸 diffuse）可以直接保留压缩格式
 //!    与原有 mip，省显存；
 //! 2. 失败（或拿到空图）时把头部改成“只有基础层”（[`strip_mip_levels`]），再
 //!    解压缩并让 Godot 重新生成 mip；法线类贴图会开启 `renormalize`，避免逐级
@@ -47,6 +49,12 @@ pub(crate) fn decode(name: &str, bytes: &[u8], kind: TextureKind) -> Option<Gd<I
         godot_warn!("embedded KN5 texture has no data");
         return None;
     }
+
+    // KN5 的导出器经常写出“flags 没声明 PITCH/LINEARSIZE、值却非零”的头，
+    // Godot 会直接拒绝（Daytona 赛道 42/274 张贴图中招，看台全黑）。先修头，
+    // 后续无论原样加载还是“砍 mip 再加载”都用修正后的字节。
+    let fixed = vettura_kn5::fix_orphan_pitch_value(bytes);
+    let bytes = fixed.as_deref().unwrap_or(bytes);
 
     // KN5 的压缩贴图经常少了最小的几级 mip，Godot 会整张贴图拒绝。这里先看头部
     // 判断，直接走“只有基础层”的路径，省掉一次注定失败的调用（它还会往 stderr
