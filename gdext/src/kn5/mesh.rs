@@ -1,10 +1,12 @@
 //! KN5 网格 → Godot `ArrayMesh`。
 //!
-//! 顶点数据保持 KN5 原样（AC 帧），坐标转换统一在节点变换上做
-//! （[`super::convert::kn5_transform_to_godot`]）。这样做的好处是 dummy 挂点
-//! （`WHEEL_LF`、`SUSP_LF`…）与网格共用同一条转换路径，物理层拿到的位置与渲染
-//! 结果严格一致；因为 AC 帧 → Godot 帧等价于绕 Y 旋转 180°，三角形绕序不需要
-//! 像 Content Manager 那样额外倒转。
+//! 轴镜像 `S`（`(x,y,z) → (-x,y,-z)`）分两半做：节点局部变换走
+//! `S·M·S`（[`super::convert::kn5_transform_to_godot`]），顶点分量
+//! （位置/法线/切线）乘 `S`（[`vertex_vec3`]）。链式复合后整体是
+//! `S·T·v`，网格与 dummy 挂点（`WHEEL_LF`、`SUSP_LF`…）共用同一条转换
+//! 路径，物理层拿到的位置与渲染结果严格一致。`S` 行列式 `+1`（绕 Y 转
+//! 180°），轴镜像不影响三角形绕序；KN5 原始绕序与 Godot 正面相反是另一
+//! 回事，见 [`set_indices`]。
 //!
 //! 参考：Content Manager 的 `Kn5RenderableObject`（顶点布局 `PNTG`）和
 //! `Kn5SkinnedObject`（`PNTGW4B`）。
@@ -37,10 +39,11 @@ pub fn static_array_mesh(mesh: &Mesh, name: &str) -> Option<Gd<ArrayMesh>> {
     let mut uvs = Vec::with_capacity(mesh.vertices.len());
     let mut tangents = Vec::with_capacity(mesh.vertices.len() * 4);
     for vertex in &mesh.vertices {
-        positions.push(vec3(vertex.position));
-        normals.push(vec3(vertex.normal));
+        positions.push(vertex_vec3(vertex.position));
+        normals.push(vertex_vec3(vertex.normal));
         uvs.push(super::convert::uv_to_godot(vertex.uv));
-        tangents.extend_from_slice(&[vertex.tangent[0], vertex.tangent[1], vertex.tangent[2], 1.0]);
+        let tangent = vertex_vec3(vertex.tangent);
+        tangents.extend_from_slice(&[tangent.x, tangent.y, tangent.z, 1.0]);
     }
 
     let mut arrays = empty_surface_arrays();
@@ -83,10 +86,11 @@ pub fn skinned_array_mesh(mesh: &SkinnedMesh, name: &str) -> Option<Gd<ArrayMesh
     let mut bones = Vec::with_capacity(mesh.vertices.len() * 4);
     let mut weights = Vec::with_capacity(mesh.vertices.len() * 4);
     for vertex in &mesh.vertices {
-        positions.push(vec3(vertex.position));
-        normals.push(vec3(vertex.normal));
+        positions.push(vertex_vec3(vertex.position));
+        normals.push(vertex_vec3(vertex.normal));
         uvs.push(Vector2::new(vertex.uv[0], vertex.uv[1]));
-        tangents.extend_from_slice(&[vertex.tangent[0], vertex.tangent[1], vertex.tangent[2], 1.0]);
+        let tangent = vertex_vec3(vertex.tangent);
+        tangents.extend_from_slice(&[tangent.x, tangent.y, tangent.z, 1.0]);
 
         // KN5 的骨骼索引是 f32，`-1` 表示未绑定；Godot 需要固定 4 个 i32。
         let mut mapped = [0i32; 4];
@@ -271,12 +275,32 @@ pub(crate) fn set<T: godot::meta::ToGodot>(arrays: &mut Array<Variant>, slot: Ar
 }
 
 fn set_indices(arrays: &mut Array<Variant>, indices: &[u16]) {
-    let converted: PackedInt32Array = indices.iter().map(|&index| index as i32).collect();
-    arrays.set(ArrayType::INDEX.ord() as usize, &converted.to_variant());
+    // KN5 原始绕序与 Godot 的正面方向相反。实测症状：从车外看到的是内壁
+    // （车身发黑，内饰碳纤维），从驾驶位看穿车身、赞助商文字呈镜像。
+    // 交换每个三角形后两个索引把正面翻回外侧；法线仍按 KN5 原值（朝外），
+    // 光照不受影响。静态与蒙皮网格都经过这里，单点修复。
+    let mut converted: Vec<i32> = Vec::with_capacity(indices.len());
+    let mut chunks = indices.chunks_exact(3);
+    for tri in &mut chunks {
+        converted.push(tri[0] as i32);
+        converted.push(tri[2] as i32);
+        converted.push(tri[1] as i32);
+    }
+    for &index in chunks.remainder() {
+        converted.push(index as i32);
+    }
+    arrays.set(
+        ArrayType::INDEX.ord() as usize,
+        &PackedInt32Array::from(converted).to_variant(),
+    );
 }
 
-fn vec3(value: [f32; 3]) -> Vector3 {
-    Vector3::new(value[0], value[1], value[2])
+/// KN5 顶点分量（位置/法线/切线）→ Godot 空间。
+///
+/// 顶点按 AC 帧存放，这里乘与节点变换同一个轴镜像 `S`；转发给
+/// [`super::convert::ac_to_godot_point`]，与物理侧的点转换共用一处定义。
+fn vertex_vec3(value: [f32; 3]) -> Vector3 {
+    super::convert::ac_to_godot_point(value[0], value[1], value[2])
 }
 
 /// 按节点名生成 `ArrayMesh`（`Kn5File.build_array_mesh` 用）。

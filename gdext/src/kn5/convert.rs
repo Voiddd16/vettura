@@ -16,9 +16,9 @@ use vettura_kn5::{BlendMode, DepthMode, Material, Transform, transform_to_mat4};
 
 /// AC 帧 → Godot 帧的轴镜像：`(x, y, z) → (-x, y, -z)`。
 ///
-/// 等价于绕 Y 轴旋转 180°，是**正常旋转**（行列式 `+1`），因此三角形的绕序、
-/// 法线方向、切线方向都不需要额外翻转；和 `vettura_core::coords::ac_to_godot`
-/// 对 vec3 的定义保持一致。
+/// 等价于绕 Y 轴旋转 180°，是**正常旋转**（行列式 `+1`）：对顶点/法线/切线
+/// 只需乘这一个 `S`（见 [`super::mesh`]），不需要翻转绕序或手性；和
+/// `vettura_core::coords::ac_to_godot` 对 vec3 的定义保持一致。
 ///
 /// 注意这与 AcTools 的做法不同：Content Manager 渲染 KN5 时把 DirectX 的
 /// 左手空间当作目标，只镜像 X（行列式 `-1`），所以必须用 `ToIndicesFixX()`

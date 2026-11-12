@@ -248,11 +248,14 @@ var car: VehicleBody = world.spawn_vehicle_from_path(
    - 索引 `u16` → `PackedInt32Array`。
 
 2. **坐标**
-   - 顶点数据保持 KN5 原样；坐标转换只发生在**节点变换**上
-     （`kn5::convert::kn5_transform_to_godot`）；
-   - AC 帧 → Godot 帧等价于绕 Y 转 180°（行列式 `+1`），所以三角形绕序、法线
-     方向都不用额外翻转——这与 Content Manager 的做法不同（它只镜像 X，必须用
-     `ToIndicesFixX()` 倒转绕序）。
+   - 轴镜像 `S`（`(x,y,z) → (-x,y,-z)`）分两半做：节点局部变换做 `S·M·S`
+     （`kn5::convert::kn5_transform_to_godot`），顶点分量（位置/法线/切线）
+     乘 `S`（`mesh.rs` 的 `vertex_vec3`）；链式复合后整体是 `S·T·v`，网格与
+     物理 dummy 挂点走同一条转换，位置严格一致；
+   - `S` 行列式 `+1`（绕 Y 转 180°），轴镜像不影响三角形绕序与手性。KN5 原始
+     绕序与 Godot 正面相反（D3D 顺时针 vs GL 逆时针），在 `set_indices` 里统一
+     翻转；这与 Content Manager 的做法不同（它只镜像 X，用 `ToIndicesFixX()`
+     倒转绕序）。
 
 3. **贴图**
    - 内嵌 DDS 原样交给 `Image::load_dds_from_buffer`；
