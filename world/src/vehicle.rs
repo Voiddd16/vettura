@@ -695,11 +695,21 @@ pub(crate) fn steer_lock_deg(spec: &VehicleSpec, tuning: &VehicleTuning) -> f32 
 /// Slip ratio the anti-lock brake controller aims for.
 const ABS_SLIP_TARGET: f32 = 0.14;
 /// Slip ratio the traction controller aims for.
-const TC_SLIP_TARGET: f32 = 0.12;
+///
+/// 必须低于 Jolt 自己的升挡门槛：`WheeledVehicleController` 在任何驱动轮
+/// `mLongitudinalSlip > 0.1` 时禁止升挡（can_shift_up）。若 TC 把滑移率
+/// 压在 0.12 附近抖动，全油门起步阶段升挡会被永久封锁——车只能卡在
+/// 1 挡、rpm 顶限制器。目标 0.08 给门槛留出抖动余量。
+const TC_SLIP_TARGET: f32 = 0.08;
 /// Lowest fraction of the requested brake the ABS ever applies.
 const ABS_MIN_FACTOR: f32 = 0.25;
 /// Lowest fraction of the requested throttle the TC ever applies.
-const TC_MIN_FACTOR: f32 = 0.2;
+///
+/// 必须允许到接近 0：引擎惯性很小（AC `INERTIA=0.012`），两成油门就足以把
+/// 引擎钉在限制器上，粘性离合便持续把能量灌进烧胎——滑移率永远压不下来，
+/// Jolt 的升挡门槛（驱动轮 slip > 0.1 禁止升挡）也永远打不开。真牵引力
+/// 控制断油就是完全切断，让引擎转速掉回轮速，滑移才能收敛。
+const TC_MIN_FACTOR: f32 = 0.0;
 
 /// Worst absolute slip ratio of the wheels that are touching the ground.
 fn worst_slip(spec: &VehicleSpec, snapshot: &VehicleSnapshot, driven_only: bool) -> f32 {
@@ -724,6 +734,12 @@ fn worst_slip(spec: &VehicleSpec, snapshot: &VehicleSnapshot, driven_only: bool)
 /// car, so the ABS scales that input instead of pulsing a single wheel; the
 /// effect on the wheel slip is the same.
 fn apply_driver_aids(spec: &VehicleSpec, input: &mut DriveInput, snapshot: &VehicleSnapshot) {
+    // 滑移率以地面速度为分母，静止或爬行时数值虚高（轮子没转就是"满滑移"）。
+    // 低速下 ABS/TC 的判定没有意义：刹停时车轮抱死是正常的，不能因此松刹车。
+    if snapshot.speed_mps < 2.0 {
+        input.abs = false;
+        input.tc = false;
+    }
     if input.abs && input.brake > 1.0e-3 {
         let worst = worst_slip(spec, snapshot, false);
         if worst > ABS_SLIP_TARGET {
@@ -960,7 +976,13 @@ impl VehicleRuntime {
         // braking torque. Jolt scales its torque by this input, so a small
         // negative value reproduces `[COAST_REF]` exactly. Only apply at zero
         // throttle: a negative throttle still means "reverse".
-        if input.throttle.abs() < 1.0e-3 {
+        //
+        // 只在车真的向前滚时施加负值：Jolt 里"负 forward"既是引擎制动也是
+        // 倒挡油门——刹停后若继续送负值，变速箱立刻切进倒挡，倒挡扭矩会
+        // 顶着刹车把车推走（桌面探针实测刹停 4 s 后倒车加速到 28 km/h）。
+        // 静止时 forward 保持 0，刹车稳稳 hold 住；倒车驾驶需要显式的
+        // 倒挡输入，属于后续工作。
+        if input.throttle.abs() < 1.0e-3 && self.snapshot.forward_speed_mps > 0.5 {
             let coast = self.spec.engine.coast_torque_at(self.snapshot.engine_rpm);
             if coast > 0.0 {
                 let fraction = (coast / self.engine_max_torque_nm.max(1.0e-3)).clamp(0.0, 1.0);
@@ -3114,6 +3136,9 @@ mod tests {
     fn driver_aids_release_brake_and_throttle_before_a_lockup() {
         let spec = VehicleSpec::default();
         let mut snapshot = VehicleSnapshot::default();
+        // 低速护栏会在 <2 m/s 时整体关掉辅助（静止抱死/虚高滑移没有意义），
+        // 这里是"高速滑动"场景，得给一个真实车速。
+        snapshot.speed_mps = 30.0;
         for (index, wheel) in snapshot.wheels.iter_mut().enumerate() {
             wheel.contact = true;
             wheel.load_n = 3_000.0;
@@ -3142,7 +3167,8 @@ mod tests {
         };
         apply_driver_aids(&spec, &mut input, &snapshot);
         assert_eq!(input.brake, ABS_MIN_FACTOR);
-        assert_eq!(input.throttle, TC_MIN_FACTOR);
+        // TC 按比例释放：目标滑移 0.08 / 实际 0.8 = 0.1（下限 0 只是不封底）。
+        assert!((input.throttle - TC_SLIP_TARGET / 0.8).abs() < 1.0e-6);
 
         // With the wheels in their window neither system touches the input.
         for wheel in &mut snapshot.wheels {

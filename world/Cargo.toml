@@ -22,3 +22,7 @@ vettura-acdata.workspace = true
 # floating-point settings so the same inputs replay bit-identically across
 # platforms (within the limits documented by oxijolt).
 oxijolt = { version = "1.5.0", features = ["cross-platform-deterministic"] }
+
+[dev-dependencies]
+# 复现真实车辆物理问题时直接读 mods/ 下的 AC 车目录。
+vettura-assets.workspace = true
