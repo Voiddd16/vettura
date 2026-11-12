@@ -6,8 +6,9 @@
 //! 碰撞三角网，本身就是一张足够在开发 baseline 里辨认赛道的低模路面。
 //!
 //! 这里把碰撞网直接转成一张 `ArrayMesh`：物理与渲染共用同一份几何，加载时间和
-//! 显存都由 `TrackModule` 的规格决定，不引入第二个解析器。等视觉 LOD / 流式加载
-//! 就绪后，再换成真正的 `*mesh*.kn5`。
+//! 显存都由 `TrackModule` 的规格决定，不引入第二个解析器。这是**回退方案**：
+//! 正常路径优先加载真实视觉 KN5（见 [`super::track_models`]），只有视觉模型
+//! 全部缺失/损坏时才落到这里。
 
 use godot::classes::mesh::{ArrayType, PrimitiveType};
 use godot::classes::{ArrayMesh, MeshInstance3D, StandardMaterial3D};

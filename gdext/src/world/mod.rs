@@ -3,8 +3,9 @@
 //! 它做四件事，别的什么都不做：
 //!
 //! 1. **加载赛道**：`models*.ini` / `surfaces.ini` / `ai/fast_lane.ai` /
-//!    `data/sections.ini` / `groove.ini`，把碰撞体装进 Jolt 静态网格，并把同一份
-//!    几何转成一张低模 `MeshInstance3D`（见 [`track_mesh`]）；
+//!    `data/sections.ini` / `groove.ini`，把碰撞体装进 Jolt 静态网格，渲染侧
+//!    优先实例化 `models.ini` 里的真实视觉 KN5（见 [`track_models`]），
+//!    失败才退回同一份碰撞几何的低模 `MeshInstance3D`（见 [`track_mesh`]）；
 //! 2. **生成车辆**：从 [`AcCar`](crate::ac_car::AcCar) 拿真实 `VehicleSpec`，
 //!    落到 `start_pose` 或发车格上，把车模实例化到 [`VehicleBody`] 下并绑轮；
 //! 3. **统一步进**：在自己的 `_physics_process` 里按固定步长推进 Jolt，再把
@@ -26,6 +27,7 @@ use crate::paths::native_path;
 use crate::vehicle_body::VehicleBody;
 
 mod track_mesh;
+mod track_models;
 
 /// 发车格长度（米）。`TrackModule` 自己会做坡度、净空、路面检查，这里只是告诉它
 /// 想要几排。
@@ -51,6 +53,9 @@ pub struct WorldBody {
     world: Option<World>,
     track: Option<TrackModule>,
     track_mesh: Option<Gd<MeshInstance3D>>,
+    /// 赛道真实视觉模型的容器节点（`models.ini` 里的 `*mesh*.kn5`）。
+    /// 可视时替代 `track_mesh` 的低模，两者不会同时存在。
+    track_models: Option<Gd<Node3D>>,
     lap_timer: Option<LapTimer>,
     /// 赛车的 AI 线：`fast_lane.ai` 存在时才有。`ai_controls` 每帧从这里求输入。
     ai: Option<AiDriver>,
@@ -175,9 +180,19 @@ impl WorldBody {
             .unwrap_or_default();
 
         if build_visual_mesh {
-            self.track_mesh = track_mesh::collider_mesh_instance(&track);
-            if self.track_mesh.is_none() {
-                godot_warn!("WorldBody: track has no collider mesh to draw");
+            // 先试真实视觉模型（`models.ini` 的 KN5）；一个都没加载成功才退回
+            // 碰撞低模——两条路都有 warning，不会静默。
+            let models = {
+                let mut host = self.base().clone().upcast::<Node>();
+                track_models::visual_models_instance(&track, &mut host)
+            };
+            if let Some(models) = models {
+                self.track_models = Some(models);
+            } else {
+                self.track_mesh = track_mesh::collider_mesh_instance(&track);
+                if self.track_mesh.is_none() {
+                    godot_warn!("WorldBody: track has no collider mesh to draw");
+                }
             }
         }
 
@@ -294,11 +309,14 @@ impl WorldBody {
         }
     }
 
-    /// 低模路面网格的显隐（不影响物理）。
+    /// 赛道视觉网格的显隐（真实模型或回退低模，不影响物理）。
     #[func]
     pub fn set_track_mesh_visible(&mut self, visible: bool) {
         if let Some(mesh) = self.track_mesh.as_mut() {
             mesh.set_visible(visible);
+        }
+        if let Some(models) = self.track_models.as_mut() {
+            models.set_visible(visible);
         }
     }
 
@@ -487,6 +505,11 @@ impl WorldBody {
         if let Some(mesh) = self.track_mesh.take() {
             self.base_mut().remove_child(&mesh.clone().upcast::<Node>());
             mesh.free();
+        }
+        if let Some(models) = self.track_models.take() {
+            self.base_mut()
+                .remove_child(&models.clone().upcast::<Node>());
+            models.free();
         }
 
         self.world = None;
