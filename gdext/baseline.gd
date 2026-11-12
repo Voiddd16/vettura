@@ -16,8 +16,8 @@ extends Node3D
 ## 期望：控制台输出 `[baseline] ...` 前缀的行，最后一行 `[baseline] PASS`，
 ## 退出码 `0`。任一步失败都会 `push_error` + `quit(1)`。
 
-const CAR_DIR := "res://test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
-const TRACK_DIR := "res://test/daytona_2017"
+const CAR_DIR := "res://mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
+const TRACK_DIR := "res://mods/daytona_2017"
 const TRACK_LAYOUT := "roadcourse"
 
 ## 跑多少秒后收工。F1 从静止起步，20 秒足够拉开数百米；本场景不追求整圈。

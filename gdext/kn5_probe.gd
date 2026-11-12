@@ -11,7 +11,7 @@ extends Node3D
 ## 打开 test/ 下的真实 F1 2008 mod，把车模实例化到场景里，然后打印
 ## 节点/网格/材质/挂点信息。全部信息用 `[probe]` 前缀，便于 grep。
 
-var car_root := "res://test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/"
+var car_root := "res://mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/"
 
 func _ready() -> void:
 	var car_dir := ProjectSettings.globalize_path(car_root.path_join("cim_2008_ferrari"))

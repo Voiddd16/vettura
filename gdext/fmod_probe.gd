@@ -15,7 +15,7 @@ extends Node3D
 ##
 ## 没有 SDK 或 bank 不兼容时返回非 0，用来把“环境问题”和“代码问题”分开。
 
-const CAR_DIR := "res://test/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
+const CAR_DIR := "res://mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
 
 var _audio: FmodSystem
 var _ok := true
