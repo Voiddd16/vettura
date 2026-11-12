@@ -19,7 +19,7 @@
 use godot::classes::{INode3D, MeshInstance3D, Node, Node3D};
 use godot::prelude::*;
 use vettura_physics::Pose;
-use vettura_world::{LapTimer, TrackModule, VehicleHandle, World};
+use vettura_world::{AiDriver, LapTimer, TrackModule, VehicleHandle, World};
 
 use crate::ac_car::AcCar;
 use crate::paths::native_path;
@@ -52,6 +52,8 @@ pub struct WorldBody {
     track: Option<TrackModule>,
     track_mesh: Option<Gd<MeshInstance3D>>,
     lap_timer: Option<LapTimer>,
+    /// 赛车的 AI 线：`fast_lane.ai` 存在时才有。`ai_controls` 每帧从这里求输入。
+    ai: Option<AiDriver>,
     start_pose: Option<Pose>,
     grid_poses: Vec<Pose>,
     vehicles: Vec<Gd<VehicleBody>>,
@@ -158,6 +160,15 @@ impl WorldBody {
         };
 
         let lap_timer = track.lap_timer().ok().flatten();
+        // AI 线是可选的：赛道没有 `fast_lane.ai` 时只是没有 AI 输入源，
+        // 赛道本身照常可用；解析失败则是数据损坏，必须让人看见。
+        let ai = match track.ai_driver() {
+            Ok(driver) => driver,
+            Err(err) => {
+                godot_warn!("WorldBody.load_track: AI line unusable: {}", err);
+                None
+            }
+        };
         let start_pose = track.start_pose().ok().flatten();
         let grid_poses = track
             .spawn_poses(GRID_SLOTS, GRID_SPACING_M)
@@ -173,6 +184,7 @@ impl WorldBody {
         self.world = Some(world);
         self.track = Some(track);
         self.lap_timer = lap_timer;
+        self.ai = ai;
         self.start_pose = start_pose;
         self.grid_poses = grid_poses;
 
@@ -288,6 +300,33 @@ impl WorldBody {
         if let Some(mesh) = self.track_mesh.as_mut() {
             mesh.set_visible(visible);
         }
+    }
+
+    /// 让 AI 沿赛道线驾驶第 `index` 辆车，返回 `[油门, 刹车, 转向]`。
+    ///
+    /// - 返回空数组表示这条赛道没有 `fast_lane.ai`、车辆不存在或还没接上物理；
+    /// - `AiDriver` 是有状态的纯追踪控制器：每次调用都以上一帧结束时的车辆位置
+    ///   为准，所以调用顺序就是时间顺序，每帧调用一次即可；
+    /// - 转向为 `-1..=1`，正数向左。
+    #[func]
+    pub fn ai_controls(&mut self, index: i64) -> PackedFloat32Array {
+        let Some(world) = self.world.as_ref() else {
+            return PackedFloat32Array::new();
+        };
+        let Some(driver) = self.ai.as_mut() else {
+            return PackedFloat32Array::new();
+        };
+        let Some(vehicle) = self.vehicles.get(index.max(0) as usize) else {
+            return PackedFloat32Array::new();
+        };
+        let Some(handle) = vehicle.bind().handle() else {
+            return PackedFloat32Array::new();
+        };
+        let Some(view) = world.vehicle(handle) else {
+            return PackedFloat32Array::new();
+        };
+        let input = driver.update_view(view);
+        PackedFloat32Array::from(vec![input.throttle, input.brake, input.steering])
     }
 
     /// 当前进行中的圈速，秒。起点线尚未越过时为 `0`。
@@ -453,6 +492,7 @@ impl WorldBody {
         self.world = None;
         self.track = None;
         self.lap_timer = None;
+        self.ai = None;
         self.start_pose = None;
         self.grid_poses.clear();
         self.primary = None;
