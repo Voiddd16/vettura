@@ -6,6 +6,7 @@ extends Node3D
 ## - `AcCar` 打开默认 AC 车目录并实例化主模型（`vettura-native` 负责）；
 ## - 模型挂在 `CarPivot` 下、抬高，形成“浮空状态”，并缓慢自转方便观察；
 ## - 左半屏触摸 = 刹车，右半屏触摸 = 油门（真实多点触摸；桌面上点击/拖拽也生效）；
+## - 桌面键盘：`W`/`↑` 油门、`S`/`↓` 刹车、`C` 循环切换视角；
 ## - 右上角按钮循环切换相机视角：车后 / 驾驶位 / 绕车 / 前机盖；
 ## - 油门/刹车会体现在车轮滚动与左上角 HUD 上，方便确认输入真的进来了。
 
@@ -229,8 +230,9 @@ func _update_hud() -> void:
 	_mode_button.text = MODE_TEXTS[_camera_mode]
 	_info_label.text = (
 		"车辆：%s\n"
-		+ "油门（右半屏）：%s\n"
-		+ "刹车（左半屏）：%s\n"
+		+ "油门（右半屏 / W）：%s\n"
+		+ "刹车（左半屏 / S）：%s\n"
+		+ "视角切换：按钮 / C\n"
 		+ "车轮角速度：%.1f rad/s"
 	) % [
 		_car_name,
@@ -238,6 +240,23 @@ func _update_hud() -> void:
 		"ON" if _brake else "off",
 		_wheel_spin,
 	]
+
+## 桌面键盘输入：`W`/`↑` 油门、`S`/`↓` 刹车（按住生效，与触摸一致）、
+## `C` 循环视角。只处理按键，不拦触摸/鼠标（`_unhandled_input` 兜底）。
+func _unhandled_input(event: InputEvent) -> void:
+	var key := event as InputEventKey
+	if key == null or key.echo:
+		return
+	match key.physical_keycode:
+		KEY_W, KEY_UP:
+			_throttle = key.pressed
+			_update_hud()
+		KEY_S, KEY_DOWN:
+			_brake = key.pressed
+			_update_hud()
+		KEY_C:
+			if key.pressed:
+				_on_camera_button_pressed()
 
 ## 右上角视角按钮：车后 → 驾驶位 → 绕车 → 前机盖。
 func _on_camera_button_pressed() -> void:
