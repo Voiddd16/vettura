@@ -12,7 +12,10 @@
 //!    `VehicleSnapshot` 推给每个 `VehicleBody`——子节点的 `_physics_process`
 //!    不会重复步进物理；
 //! 4. **计时**：用 `AiSpline` + `sections.ini` 驱动 `LapTimer`，对外只暴露
-//!    圈速 / 分段 / 有效性这些标量。
+//!    圈速 / 分段 / 有效性这些标量；
+//! 5. **遥测**：读 `user://telemetry.cfg`，每帧（按 `rate_hz` 节流）把车辆 /
+//!    赛道 / 计时数据打成 JSON，经 UDP / TCP 发到配置的地址（见
+//!    [`vettura_world::TelemetrySink`]）。
 //!
 //! 之所以放在 `vettura-godot` 而不是 `vettura-world`，是因为它需要依赖节点树与
 //! `ProjectSettings`；`vettura-world` 保持 headless，仍可被 CLI 与测试直接复用。
@@ -20,7 +23,10 @@
 use godot::classes::{INode3D, MeshInstance3D, Node, Node3D};
 use godot::prelude::*;
 use vettura_physics::Pose;
-use vettura_world::{AiDriver, LapTimer, TrackModule, VehicleHandle, World};
+use vettura_world::{
+    AiDriver, LapTimer, TELEMETRY_CONFIG_PATH, TelemetryConfig, TelemetryProtocol, TelemetrySample,
+    TelemetryScope, TelemetrySink, TrackModule, VehicleHandle, VehicleSample, World,
+};
 
 use crate::ac_car::AcCar;
 use crate::paths::native_path;
@@ -34,6 +40,9 @@ mod track_models;
 const GRID_SLOTS: usize = 16;
 /// 发车间隔（米）。
 const GRID_SPACING_M: f32 = 8.0;
+/// 遥测配置文件的轮询间隔（秒）：`user://telemetry.cfg` 可以在运行中被改写，
+/// 每隔这么久比一次 mtime，变了就热加载。
+const TELEMETRY_POLL_S: f32 = 0.5;
 
 /// 赛车世界节点。
 ///
@@ -64,10 +73,25 @@ pub struct WorldBody {
     vehicles: Vec<Gd<VehicleBody>>,
     primary: Option<VehicleHandle>,
     elapsed_s: f32,
+    /// 遥测输出端点（`user://telemetry.cfg` 驱动；默认整体禁用）。
+    telemetry: TelemetrySink,
+    /// 配置文件上次的 mtime，用于检测运行中改写（热更新）。
+    telemetry_cfg_mtime: Option<std::time::SystemTime>,
+    /// 配置文件轮询的计时器。
+    telemetry_poll_s: f32,
+    /// 上次遥测采样时刻（秒），按 `rate_hz` 节流；`None` = 还没采过（首帧立即发）。
+    telemetry_last_sample_s: Option<f32>,
+    /// `World::impacts()` 累积缓冲的已发送游标（该缓冲从不 drain）。
+    telemetry_impact_cursor: usize,
 }
 
 #[godot_api]
 impl INode3D for WorldBody {
+    /// 节点就绪时读一次遥测配置。文件缺失 = 静默禁用（默认状态）。
+    fn ready(&mut self) {
+        self.load_telemetry_config(false);
+    }
+
     /// Godot 物理回调：把所有车的输入推进世界，再统一同步渲染。
     fn physics_process(&mut self, delta: f64) {
         let Some(world) = self.world.as_mut() else {
@@ -109,6 +133,10 @@ impl INode3D for WorldBody {
         {
             timer.update(snapshot.reference_position, self.elapsed_s);
         }
+
+        // 遥测在物理步进与计时之后采样（`world` 的借用到此结束，下面重新独占 self）。
+        self.poll_telemetry_config(delta as f32);
+        self.emit_telemetry();
     }
 }
 
@@ -423,6 +451,29 @@ impl WorldBody {
             timer.reset();
         }
     }
+
+    /// 重新读取 `user://telemetry.cfg` 并立即生效（文件缺失则整体禁用）。
+    ///
+    /// 配置文件通常会被自动热更新（见 `physics_process` 里的 mtime 轮询），
+    /// 这个方法给 GDScript 一个手动强制重载的入口。
+    #[func]
+    pub fn reload_telemetry_config(&mut self) {
+        self.load_telemetry_config(true);
+    }
+
+    /// 运行时直接开关遥测（不改配置文件；下次热更新会以文件内容为准）。
+    #[func]
+    pub fn set_telemetry_enabled(&mut self, enabled: bool) {
+        let mut config = self.telemetry.config().clone();
+        config.enabled = enabled;
+        self.telemetry.reconfigure(config);
+    }
+
+    /// 遥测当前是否启用（读的是生效中的配置）。
+    #[func]
+    pub fn is_telemetry_enabled(&self) -> bool {
+        self.telemetry.config().enabled
+    }
 }
 
 impl WorldBody {
@@ -520,6 +571,149 @@ impl WorldBody {
         self.grid_poses.clear();
         self.primary = None;
         self.elapsed_s = 0.0;
+        // 世界换了，遥测的采样节流与碰撞游标都要清零；输出配置本身保留
+        // （换赛道不应关掉遥测）。
+        self.telemetry_last_sample_s = None;
+        self.telemetry_impact_cursor = 0;
+    }
+
+    /// 读取 `user://telemetry.cfg` 并套用到输出端点。
+    ///
+    /// - `missing_is_warning = false`：首次启动文件不存在是正常状态，静默禁用；
+    /// - `missing_is_warning = true`：手动重载 / 热更新时文件没了，要让人看见。
+    fn load_telemetry_config(&mut self, missing_is_warning: bool) {
+        let path = native_path(&GString::from(TELEMETRY_CONFIG_PATH));
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                if missing_is_warning {
+                    godot_warn!(
+                        "WorldBody: telemetry config {} not found, telemetry disabled",
+                        TELEMETRY_CONFIG_PATH
+                    );
+                }
+                self.telemetry.reconfigure(TelemetryConfig::default());
+                self.telemetry_cfg_mtime = None;
+                return;
+            }
+            Err(err) => {
+                godot_warn!(
+                    "WorldBody: cannot read {}: {} (keeping previous telemetry config)",
+                    TELEMETRY_CONFIG_PATH,
+                    err
+                );
+                return;
+            }
+        };
+
+        self.telemetry_cfg_mtime = std::fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+
+        let config = TelemetryConfig::parse(&text);
+        if config.enabled && config.any_section_enabled() {
+            godot_print!(
+                "WorldBody: telemetry enabled -> {} {}:{} @ {} Hz, scope {:?}",
+                match config.protocol {
+                    TelemetryProtocol::Udp => "udp",
+                    TelemetryProtocol::Tcp => "tcp",
+                },
+                config.host,
+                config.port,
+                config.rate_hz,
+                config.scope
+            );
+        }
+        self.telemetry.reconfigure(config);
+    }
+
+    /// 每 0.5 秒比一次配置文件 mtime，变了就热加载。
+    fn poll_telemetry_config(&mut self, delta: f32) {
+        self.telemetry_poll_s += delta;
+        if self.telemetry_poll_s < TELEMETRY_POLL_S {
+            return;
+        }
+        self.telemetry_poll_s = 0.0;
+
+        let path = native_path(&GString::from(TELEMETRY_CONFIG_PATH));
+        let mtime = std::fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        if mtime != self.telemetry_cfg_mtime {
+            self.load_telemetry_config(true);
+        }
+    }
+
+    /// 按配置采样一帧并发出去（UDP 数据报 / TCP 流）。
+    ///
+    /// 必须在 `step` 与 `LapTimer::update` 之后调用：帧里装的是本帧最终状态。
+    fn emit_telemetry(&mut self) {
+        let config = self.telemetry.config().clone();
+        if !config.enabled || !config.any_section_enabled() {
+            return;
+        }
+        if !config.should_sample(self.elapsed_s, &mut self.telemetry_last_sample_s) {
+            return;
+        }
+        let Some(world) = self.world.as_ref() else {
+            return;
+        };
+
+        // `World::impacts()` 是累积缓冲且本 crate 从不 drain：这里只取游标之后的
+        // 新增段，然后推进游标（与是否发送无关，避免以后打开时回灌历史）。
+        if world.impacts().len() < self.telemetry_impact_cursor {
+            self.telemetry_impact_cursor = 0;
+        }
+        let impacts = &world.impacts()[self.telemetry_impact_cursor..];
+        self.telemetry_impact_cursor = world.impacts().len();
+
+        let primary = self.primary;
+        let mut samples = Vec::new();
+        if config.vehicle.enabled {
+            for (index, vehicle) in self.vehicles.iter().enumerate() {
+                let Some(handle) = vehicle.bind().handle() else {
+                    continue;
+                };
+                let in_scope = match &config.scope {
+                    TelemetryScope::Ego => Some(handle) == primary,
+                    TelemetryScope::All => true,
+                    TelemetryScope::Indices(list) => list.contains(&index),
+                };
+                if !in_scope {
+                    continue;
+                }
+                let snapshot = world.snapshot(handle);
+                let groove = snapshot
+                    .filter(|_| config.track.groove)
+                    .map(|s| world.groove_progress_at(s.reference_position));
+                samples.push(VehicleSample {
+                    handle: handle.raw(),
+                    index,
+                    primary: Some(handle) == primary,
+                    snapshot,
+                    controls: Some(vehicle.bind().controls()),
+                    groove,
+                });
+            }
+        }
+
+        let sample = TelemetrySample {
+            time_s: self.elapsed_s,
+            vehicles: samples,
+            weather: if config.track.enabled && config.track.weather {
+                Some(world.weather())
+            } else {
+                None
+            },
+            impacts,
+            timing: if config.timing.enabled {
+                self.lap_timer.as_ref()
+            } else {
+                None
+            },
+            primary: primary.map(|handle| handle.raw()),
+        };
+        self.telemetry.send(&sample);
     }
 }
 

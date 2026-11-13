@@ -6,6 +6,7 @@ mod debris;
 mod frame;
 mod groove;
 mod surface;
+mod telemetry;
 mod timing;
 mod track;
 mod vehicle;
@@ -22,6 +23,10 @@ pub use groove::{DEFAULT_GROOVE_CELL_M, GrooveDef, GrooveMap, GrooveSettings, pa
 pub use surface::{
     SurfaceId, SurfaceKind, SurfaceMap, SurfaceProperties, SurfaceSample, SurfaceShape,
     SurfaceTable,
+};
+pub use telemetry::{
+    TELEMETRY_CONFIG_PATH, TelemetryConfig, TelemetryProtocol, TelemetrySample, TelemetryScope,
+    TelemetrySink, TimingTelemetry, TrackTelemetry, VehicleSample, VehicleTelemetry,
 };
 pub use timing::{BACKWARD_TOLERANCE_M, DEFAULT_MAX_LATERAL_M, LapTimer, LapUpdate};
 pub use track::{

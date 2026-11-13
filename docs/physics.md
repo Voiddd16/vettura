@@ -491,6 +491,10 @@ Jolt 只有整车刹车/油门通道，所以 ABS 缩放整车压力而不是脉
 `turbo_boost_bar`、`water_film_mm`、`flat_spot`、`suspension_force_n`、
 `active_suspension_force_n`、`heave_force_n`，以及同名 `World` getter。
 
+对外实时输出走**遥测系统**（`world/src/telemetry.rs` + `WorldBody`，配置
+`user://telemetry.cfg`，UDP/TCP 发 JSON）：这些字段按 `vehicle` 方向的子开关
+逐帧发出，见 [telemetry.md](telemetry.md)。
+
 ## Chrono::Vehicle 接入
 
 ### 构建

@@ -112,6 +112,7 @@ cargo test -p vettura-assets --test real_car     -- --ignored   # 真车数据�
 | [`docs/godot.md`](docs/godot.md) | Godot 集成：扩展类、场景探针、冒烟层次 |
 | [`docs/build.md`](docs/build.md) | 构建、环境、导出细节 |
 | [`docs/audio.md`](docs/audio.md) | FMOD 版本/兼容规则、GUID 事件表 |
+| [`docs/telemetry.md`](docs/telemetry.md) | 实时遥测：`telemetry.cfg` 配置全表、JSON 帧格式、UDP/TCP 输出 |
 | [`docs/kn5-format.md`](docs/kn5-format.md) / [`docs/ac-data.md`](docs/ac-data.md) | 格式逆向记录 |
 | [`docs/roadmap.md`](docs/roadmap.md) | 阶段进度（Phase 0–8）与非目标 |
 | [`docs/plans/`](docs/plans/) | 方案文档（主项目方案 v1.0 等） |

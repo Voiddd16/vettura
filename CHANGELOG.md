@@ -160,3 +160,22 @@ spatial 侧读屏幕纹理，移动端 `mobile` 渲染器安全。
 `mods/`。展示页默认滤镜链只挂调色 + 暗角（速度线按需 `FxLayer.push` 启用）。
 验证：headless 冒烟 + 桌面窗口实跑 300 帧零 shader 错误
 （修正一处：Godot 4 无 `CLEARCOAT_GLOSS` 内建）。
+
+## 实时遥测（未定版，2026-11-13）
+
+新增网络遥测链路：`user://telemetry.cfg`（`ConfigFile`/INI）配置 →
+`WorldBody` 逐帧采样 → 一行 JSON 经 **UDP / TCP** 发出，约 0.5 秒热更新。
+
+- **核心 `world/src/telemetry.rs`**（headless，不依赖 godot-rust）：配置解析、
+  三方向帧组装（`serde_json`）、`TelemetrySink`（UDP 数据报 / TCP 流 + 断线
+  重连 + 指数退避）。workspace 新增 `serde_json` 依赖。
+- **三个方向 + 细粒度子开关**：`vehicle`（pose/controls/powertrain/wheels/tyres/
+  brakes/fuel）、`track`（weather/groove/impacts + `max_impacts`）、
+  `timing`（laps/sectors/last_lap），各自 `enabled` 总开关。
+- **采集范围 `scope`**：`ego`（主车）/ `all`（全场）/ `indices`（发车顺序下标列表），
+  采样率 `rate_hz` 节流（首帧立即发）。
+- **接线 `gdext` `WorldBody`**：`ready()` 读配置（缺失 = 静默禁用）、
+  `physics_process` 末尾（step + `LapTimer::update` 之后）采样发送；碰撞用只读
+  游标消费累积缓冲，不 `drain`；暴露 `reload_telemetry_config()` /
+  `set_telemetry_enabled()` / `is_telemetry_enabled()` 给 GDScript。
+- 文档：`docs/telemetry.md`（配置全表、帧格式、行为约定）。

@@ -57,6 +57,7 @@ clap = { version = "4", features = ["derive"] }
 glam = { version = "0.34", features = ["serde"] }
 godot = { version = "0.5.5", features = ["api-4-7", "register-docs"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

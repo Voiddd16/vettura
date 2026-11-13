@@ -10,6 +10,8 @@ description = "Jolt-based world physics for Vettura: surfaces, weather, car-car 
 
 [dependencies]
 glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 vettura-core.workspace = true
