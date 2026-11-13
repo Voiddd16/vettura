@@ -11,11 +11,11 @@
 //! overrides (pit lane, wet patches, test fixtures); the mesh supplies the
 //! per-triangle surface everywhere else.
 
+use std::collections::HashMap;
+
 use std::sync::Arc;
 
 use glam::Vec3;
-
-use crate::track::MeshSurfaceIndex;
 
 fn finite_clamp(value: f32, min: f32, max: f32, fallback: f32) -> f32 {
     if value.is_finite() {
@@ -518,6 +518,212 @@ impl Default for SurfaceMap {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// One collision triangle in the physics frame, tagged with its AC surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColliderTriangle {
+    pub vertices: [Vec3; 3],
+    pub surface: SurfaceId,
+}
+
+impl ColliderTriangle {
+    pub fn normal(&self) -> Vec3 {
+        let [a, b, c] = self.vertices;
+        (b - a).cross(c - a)
+    }
+
+    pub fn centroid(&self) -> Vec3 {
+        (self.vertices[0] + self.vertices[1] + self.vertices[2]) / 3.0
+    }
+
+    pub fn area(&self) -> f32 {
+        0.5 * self.normal().length()
+    }
+}
+
+/// A 2-D acceleration structure over the collision triangles.
+///
+/// [`SurfaceMap`] uses it to answer "what surface is under this wheel?" without
+/// iterating all track triangles every step. Triangles that are nearly vertical
+/// (walls, barriers) are kept for collision but omitted from surface lookup.
+#[derive(Clone, Debug, Default)]
+pub struct MeshSurfaceIndex {
+    triangles: Vec<IndexedTriangle>,
+    cells: HashMap<(i32, i32), Vec<u32>>,
+    cell_size: f32,
+    skipped: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct IndexedTriangle {
+    vertices: [Vec3; 3],
+    surface: SurfaceId,
+}
+
+impl MeshSurfaceIndex {
+    /// Default uniform-grid cell size, metres.
+    pub const DEFAULT_CELL_SIZE: f32 = 10.0;
+
+    pub fn new(triangles: &[ColliderTriangle]) -> Self {
+        Self::with_cell_size(triangles, Self::DEFAULT_CELL_SIZE)
+    }
+
+    pub fn with_cell_size(triangles: &[ColliderTriangle], cell_size: f32) -> Self {
+        let cell_size = if cell_size.is_finite() && cell_size > 0.1 {
+            cell_size
+        } else {
+            Self::DEFAULT_CELL_SIZE
+        };
+        let mut index = Self {
+            triangles: Vec::new(),
+            cells: HashMap::new(),
+            cell_size,
+            skipped: 0,
+        };
+
+        for triangle in triangles {
+            let [a, b, c] = triangle.vertices;
+            let normal = (b - a).cross(c - a);
+            let length_squared = normal.length_squared();
+            if length_squared <= 1.0e-12 || !length_squared.is_finite() {
+                index.skipped += 1;
+                continue;
+            }
+            let normal = normal / length_squared.sqrt();
+            // Only near-horizontal triangles can be a surface under a wheel.
+            if normal.y.abs() < 0.15 {
+                index.skipped += 1;
+                continue;
+            }
+
+            let id = index.triangles.len() as u32;
+            index.triangles.push(IndexedTriangle {
+                vertices: triangle.vertices,
+                surface: triangle.surface,
+            });
+
+            let (min_x, max_x) = min_max(a.x, b.x, c.x);
+            let (min_z, max_z) = min_max(a.z, b.z, c.z);
+            if !(min_x.is_finite() && max_x.is_finite() && min_z.is_finite() && max_z.is_finite()) {
+                continue;
+            }
+            let x0 = (min_x / cell_size).floor() as i32;
+            let x1 = (max_x / cell_size).floor() as i32;
+            let z0 = (min_z / cell_size).floor() as i32;
+            let z1 = (max_z / cell_size).floor() as i32;
+            let cell_count = (x1 as i64 - x0 as i64 + 1) * (z1 as i64 - z0 as i64 + 1);
+            if cell_count <= 0 || cell_count > 4096 {
+                // Degenerate or enormous projected area: put it in the cell of
+                // its centroid so it can still be found, without exploding the
+                // grid. Real track triangles are far below this cap.
+                let centroid = (a + b + c) / 3.0;
+                index
+                    .cells
+                    .entry(cell_key(centroid.x, centroid.z, cell_size))
+                    .or_default()
+                    .push(id);
+                continue;
+            }
+            for cell_x in x0..=x1 {
+                for cell_z in z0..=z1 {
+                    index.cells.entry((cell_x, cell_z)).or_default().push(id);
+                }
+            }
+        }
+
+        index
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.triangles.is_empty()
+    }
+
+    /// Number of triangles usable for surface lookup.
+    pub fn len(&self) -> usize {
+        self.triangles.len()
+    }
+
+    /// Number of triangles skipped because they were vertical or degenerate.
+    pub fn skipped(&self) -> usize {
+        self.skipped
+    }
+
+    pub fn cell_size(&self) -> f32 {
+        self.cell_size
+    }
+
+    /// Sample the surface under `position`.
+    ///
+    /// Uses the highest triangle at or slightly below `position.y`, which
+    /// handles bridges and banked sections. If every candidate is above the
+    /// query, the closest candidate is returned so an airborne wheel still
+    /// reports the surface it is about to land on.
+    pub fn sample(&self, position: Vec3) -> Option<SurfaceId> {
+        self.sample_entry(position).map(|(_, surface)| surface)
+    }
+
+    /// Interpolated height of the surface under `position`.
+    ///
+    /// This uses the same triangle selection as [`Self::sample`], so callers
+    /// can obtain a matching height and surface for spawn or debug queries.
+    pub fn sample_height(&self, position: Vec3) -> Option<f32> {
+        self.sample_entry(position).map(|(height, _)| height)
+    }
+
+    fn sample_entry(&self, position: Vec3) -> Option<(f32, SurfaceId)> {
+        if self.triangles.is_empty() || !position.is_finite() {
+            return None;
+        }
+        let key = cell_key(position.x, position.z, self.cell_size);
+        let candidates = self.cells.get(&key)?;
+
+        let mut best_below: Option<(f32, SurfaceId)> = None;
+        let mut closest: Option<(f32, f32, SurfaceId)> = None;
+
+        for &id in candidates {
+            let triangle = &self.triangles[id as usize];
+            let Some(height) = triangle_height(triangle.vertices, position.x, position.z) else {
+                continue;
+            };
+            let delta = height - position.y;
+            let distance = delta.abs();
+            if closest.is_none_or(|(best, _, _)| distance < best) {
+                closest = Some((distance, height, triangle.surface));
+            }
+            if delta <= 0.35 && best_below.is_none_or(|(best, _)| height > best) {
+                best_below = Some((height, triangle.surface));
+            }
+        }
+
+        best_below.or_else(|| closest.map(|(_, height, surface)| (height, surface)))
+    }
+}
+
+pub fn triangle_height(vertices: [Vec3; 3], x: f32, z: f32) -> Option<f32> {
+    let [a, b, c] = vertices;
+    let denominator = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+    if denominator.abs() < 1.0e-8 {
+        return None;
+    }
+    let wa = ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / denominator;
+    let wb = ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / denominator;
+    let wc = 1.0 - wa - wb;
+    if wa < -1.0e-4 || wb < -1.0e-4 || wc < -1.0e-4 {
+        return None;
+    }
+    Some(wa * a.y + wb * b.y + wc * c.y)
+}
+
+fn cell_key(x: f32, z: f32, cell_size: f32) -> (i32, i32) {
+    (
+        (x / cell_size).floor() as i32,
+        (z / cell_size).floor() as i32,
+    )
+}
+
+fn min_max(a: f32, b: f32, c: f32) -> (f32, f32) {
+    (a.min(b).min(c), a.max(b).max(c))
 }
 
 #[cfg(test)]

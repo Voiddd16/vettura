@@ -54,8 +54,6 @@ pub enum WorldError {
     },
     #[error("invalid track data: {0}")]
     TrackFormat(String),
-    #[error("KN5 error: {0}")]
-    Kn5(#[from] vettura_kn5::Error),
 }
 
 /// Result alias for this crate.

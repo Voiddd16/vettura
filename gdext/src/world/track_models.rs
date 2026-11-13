@@ -6,7 +6,7 @@
 //! 引用不存在的灯效模型（如 Daytona 的 `daytonalightson.kn5`）很常见，
 //! 不应该让整条赛道加载失败。
 //!
-//! 放置矩阵直接用 [`vettura_world::TrackModule`] 给出的 Godot 帧变换
+//! 放置矩阵直接用 [`vettura_assets::TrackModule`] 给出的 Godot 帧变换
 //! （`euler_deg_to_mat4` 已做坐标系共轭），与物理共用同一份数学，保证路面
 //! 与碰撞体贴合。一个模型失败不影响其余模型；全部失败时调用方回退到
 //! [`super::track_mesh`] 的低模路面。
@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use godot::classes::{Node, Node3D};
 use godot::prelude::*;
-use vettura_world::TrackModule;
+use vettura_assets::TrackModule;
 
 use crate::kn5::convert::matrix_to_transform3d;
 

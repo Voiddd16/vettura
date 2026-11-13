@@ -13,5 +13,7 @@ glam.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 vettura-acdata.workspace = true
+vettura-core.workspace = true
 vettura-kn5.workspace = true
 vettura-physics.workspace = true
+vettura-world.workspace = true

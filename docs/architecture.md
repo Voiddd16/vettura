@@ -44,7 +44,11 @@ Rust workspace 就在本 Godot 工程根目录，最终产物是一个 Godot 4 G
 └────────┘                     │
 ```
 
+`vettura-assets` 还依赖 `vettura-world` 与 `vettura-core`：它是主程序侧的
+**编排层**（车目录 + 赛道目录统一组装），赛道加载 `TrackModule` 住在 assets，
+把解析结果（碰撞三角网 / 表面表 / 发车格 / AI 线）交给 world 安装。
 `vettura-core`（单位/坐标转换/glam 再导出）在最底层，所有 crate 共用，图里省略。
+插件之间（kn5 / acdata / physics / audio / core）零内部依赖。
 
 ## 目录与 crate 对应
 
@@ -55,9 +59,9 @@ workspace 根就是 Godot 工程根，每个 crate 一个顶层目录：
 | `core/` | `vettura-core` | 单位、坐标系转换、共享错误 |
 | `kn5/` | `vettura-kn5` | KN5 网格 / 材质 / 贴图 |
 | `acdata/` | `vettura-acdata` | `data.acd`、INI、LUT |
-| `assets/` | `vettura-assets` | AC 车目录（前三者组合）+ 物理数据映射 |
+| `assets/` | `vettura-assets` | AC 车目录（前三者组合）+ 物理数据映射 + 赛道目录组装（`TrackModule`） |
 | `physics/` | `vettura-physics` | 车辆物理后端与 `VehicleSpec` |
-| `world/` | `vettura-world` | 多车世界、赛道、天气、AI |
+| `world/` | `vettura-world` | 多车世界、表面、天气、AI、计时（只吃纯数据，不解析资产） |
 | `audio/` | `vettura-audio` | `sfx/GUIDs.txt` + FMOD runtime |
 | `gdext/` | `vettura-godot` | GDExtension 桥接层与 `.gdextension` |
 | `tools/` | `kn5-inspect` / `acd-inspect` | 命令行检查工具 |
@@ -105,7 +109,10 @@ workspace 根就是 Godot 工程根，每个 crate 一个顶层目录：
 - `CarFolder::vehicle_spec()` 把 `car.ini`、`suspensions.ini`、
   `engine.ini`、`drivetrain.ini`、`tyres.ini`、`aero.ini` 映射到
   `vettura_physics::VehicleSpec`；
-- 加载车模 `.kn5`。
+- 加载车模 `.kn5`；
+- 赛道目录组装 `TrackModule`：读 `models*.ini` / `surfaces.ini` /
+  `sections.ini`，扫描物理节点 → 碰撞三角网 + `SurfaceMap` + 发车格 +
+  AI 线，装进 `vettura_world::World`（解析在本 crate，世界装配回传 world）。
 
 这一层是 AC 兼容性的“胶水层”，所有 AC 特有语义集中在这里。
 
@@ -145,13 +152,16 @@ stub，所以 `cargo build --features chrono` 在任意机器上都能编译。
 基于 Jolt 的世界层：
 
 - `World`：固定步长、多车、静态体、接触/冲击事件；
-- `SurfaceMap`：矩形/圆形 patch、水坑、赛道三角形索引、默认表面；
-- `TrackModule`：读取 AC 赛道目录的 `models*.ini`、`surfaces.ini`，扫描所有
-  模型中 `1` 开头的物理节点，转换成物理帧三角网并安装到 `World`；
+- `SurfaceMap`：矩形/圆形 patch、水坑、赛道三角形索引（`MeshSurfaceIndex`）、
+  默认表面；
+- `TrackSection` + `LapTimer`：`sections.ini` 分段语义与圈速计时；
 - `AiSpline`：解析 `fast_lane.ai` / `ideal_line.ai`（v7）的采样点与速度/宽度
   元数据，提供起点位姿。
 
-赛道资产的多布局目录（如 `<track>/roadcourse/ai/fast_lane.ai`）和根目录
+赛道目录的解析（`models*.ini` / `surfaces.ini` / 碰撞 KN5 → 三角网 + 表面 +
+发车格 + AI 线）已上移到 `vettura-assets::TrackModule`：world 只接受组装好的
+纯数据（`ColliderTriangle` / `SurfaceMap` / `AiSpline`），不再依赖 kn5/acdata。
+多布局目录（如 `<track>/roadcourse/ai/fast_lane.ai`）和根目录
 （`<track>/ai/fast_lane.ai`）都支持。大三角网会按 800 m 分块后交给 Jolt，
 但对外仍是一个逻辑 `TrackObjectId`。
 
@@ -186,9 +196,9 @@ Godot GDExtension：
 - `AcCar`（Resource）：打开车目录，映射 `VehicleSpec`，实例化主模型，并暴露
   `soundbank_path()` / `sound_event_names()` 等音频发现结果；
 - `VehicleBody`（Node3D）：独立模式接 `Simulation`，世界模式由 `WorldBody` 驱动；
-- `WorldBody`（Node3D）：拥有 `TrackModule` + `World`，负责赛道安装、多车调度、
-  固定步长推进、圈速计时，以及把 `VehicleSnapshot` 同步回场景树。这是主项目调用
-  Rust 侧赛车模拟的入口；
+- `WorldBody`（Node3D）：拥有 `vettura_assets::TrackModule` + `World`，负责
+  赛道安装、多车调度、固定步长推进、圈速计时，以及把 `VehicleSnapshot`
+  同步回场景树。这是主项目调用 Rust 侧赛车模拟的入口；
 - `FmodSystem`（Node3D）：每帧调用 FMOD `update`，并提供播放 / 参数 / 3D 听者接口。
 
 **下一步**：`ResourceFormatLoader`；模型缓存与 surface 合并；AI 车 / pit lane 的
@@ -212,8 +222,11 @@ CarFolder::open(car_dir)
 
 ### 加载一条 AC 赛道
 
+> 解析与组装全部在 `vettura_assets::TrackModule`（主程序侧编排层），
+> 结果回传给 `vettura_world::World` 安装。
+
 ```
-TrackModule::load_layout(track_dir, "roadcourse")
+vettura_assets::TrackModule::load_layout(track_dir, "roadcourse")
   ├── models_roadcourse.ini → TrackModelEntry[]（collision.kn5、daytonamesh.kn5…）
   ├── roadcourse/data/surfaces.ini → SurfaceDef[] → SurfaceMap 自定义表面
   ├── 所有模型 → 只保留节点名以 1 开头的物理三角网

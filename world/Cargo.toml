@@ -16,8 +16,6 @@ thiserror.workspace = true
 tracing.workspace = true
 vettura-core.workspace = true
 vettura-physics.workspace = true
-vettura-kn5.workspace = true
-vettura-acdata.workspace = true
 
 # Jolt 5.6 through the safe `oxijolt` wrapper. The prebuilt archive is used on
 # supported hosts; `cross-platform-deterministic` turns on Jolt's deterministic

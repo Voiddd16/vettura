@@ -5,16 +5,15 @@
 //! Run it with:
 //!
 //! ```bash
-//! cargo test -p vettura-world --test track_module -- --ignored
+//! cargo test -p vettura-assets --test track_module -- --ignored
 //! ```
 
 use std::path::PathBuf;
 
 use glam::{Quat, Vec3};
+use vettura_assets::{TrackModule, parse_models_ini, parse_surfaces_ini};
 use vettura_physics::{Pose, VehicleSpec};
-use vettura_world::{
-    AiDriver, SurfaceMap, SurfaceShape, TrackModule, parse_models_ini, parse_surfaces_ini,
-};
+use vettura_world::{AiDriver, SurfaceMap, SurfaceShape};
 
 fn daytona_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -268,7 +267,7 @@ fn daytona_spawn_poses_are_clear_and_settle() {
     let line_start = line.points()[0].position;
     let delta = poses[0].position - line_start;
     assert!(
-        (delta.x * delta.x + delta.z * delta.z).sqrt() <= vettura_world::SPAWN_SNAP_RADIUS_M + 0.5,
+        (delta.x * delta.x + delta.z * delta.z).sqrt() <= vettura_assets::SPAWN_SNAP_RADIUS_M + 0.5,
         "first grid slot is far from the AI-line start: {poses:?}"
     );
 

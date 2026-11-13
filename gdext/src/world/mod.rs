@@ -22,10 +22,11 @@
 
 use godot::classes::{INode3D, MeshInstance3D, Node, Node3D};
 use godot::prelude::*;
+use vettura_assets::TrackModule;
 use vettura_physics::Pose;
 use vettura_world::{
     AiDriver, LapTimer, TELEMETRY_CONFIG_PATH, TelemetryConfig, TelemetryProtocol, TelemetrySample,
-    TelemetryScope, TelemetrySink, TrackModule, VehicleHandle, VehicleSample, World,
+    TelemetryScope, TelemetrySink, VehicleHandle, VehicleSample, World,
 };
 
 use crate::ac_car::AcCar;
@@ -123,8 +124,7 @@ impl INode3D for WorldBody {
                 continue;
             };
             if let Some(snapshot) = world.snapshot(handle) {
-                let snapshot = snapshot.clone();
-                vehicle.bind_mut().sync_snapshot(&snapshot);
+                vehicle.bind_mut().sync_snapshot(snapshot);
             }
         }
 

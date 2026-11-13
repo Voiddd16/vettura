@@ -19,9 +19,9 @@ FMOD 音频直连；GDScript 只做 UI/流程。加载时直读 AC 原格式，�
 | `core/` | `vettura-core`：SI 单位约定、AC↔Godot 坐标转换、glam 再导出 | 不含格式解析、物理、Godot 类型 |
 | `kn5/` | `vettura-kn5`：KN5 二进制解析（节点树/网格/材质/内嵌 DDS 解码/合成车模） | 不做 Godot 资源转换 |
 | `acdata/` | `vettura-acdata`：`.acd` 解密 + INI/LUT 解析 | 不管车目录结构 |
-| `assets/` | **代码 crate** `vettura-assets`：AC 车目录组织 + AC 参数→`VehicleSpec` 映射 | **不是资产文件目录！** 资产在 `mods/` |
+| `assets/` | **代码 crate** `vettura-assets`：AC 车目录组织 + AC 参数→`VehicleSpec` 映射 + 赛道目录组装（`TrackModule`） | **不是资产文件目录！** 资产在 `mods/` |
 | `physics/` | `vettura-physics`：`VehicleSpec/State/Controls` + `VehicleBackend` trait + 固定步长 `Simulation`（默认 600 Hz）+ Simple/Chrono 后端 | 不含赛道碰撞（那是 world/） |
-| `world/` | `vettura-world`：Jolt 世界——赛道三角网、表面摩擦、橡胶进化、AI、天气、计时、碎片 | 不做渲染 |
+| `world/` | `vettura-world`：Jolt 世界——碰撞三角网安装、表面摩擦、橡胶进化、AI、天气、计时、碎片（**只吃纯数据，不解析资产**） | 不做渲染 |
 | `audio/` | `vettura-audio`：`sfx/GUIDs.txt` 事件表 + bank 定位 + **FMOD Studio runtime 直连** | 不解析 bank/FSB（FMOD 负责） |
 | `gdext/` | `vettura-godot`：GDExtension 桥（cdylib）+ 4 个 Rust 验证探针场景 | 不是游戏 UI |
 | `test_visual/` | 游戏性预览页与冒烟（GDScript）：车库/触摸/多视角/布局 | 不是 Rust 冒烟 |
@@ -66,7 +66,7 @@ uv run scripts/load_probe.py                        # 合成车模加载性能�
 真机资产测试（需本地 `mods/` 在位）：
 
 ```bash
-cargo test -p vettura-world  --test track_module -- --ignored   # 赛道/AI/计时
+cargo test -p vettura-assets --test track_module -- --ignored   # 真赛道（TrackModule/解析在 assets）
 cargo test -p vettura-assets --test real_car     -- --ignored   # 真车数据映射
 ```
 
@@ -76,6 +76,8 @@ cargo test -p vettura-assets --test real_car     -- --ignored   # 真车数据�
 - **位置**：GDScript 场景→`test_visual/`；Python 脚本→`scripts/`；新 crate→顶层新目录
   （workspace 根就是 Godot 工程根，`Cargo.toml` 在 `project.godot` 旁边）。
 - **crate 边界**：格式解析/物理不依赖 godot-rust；只有 `gdext/` 认识 Godot。
+  插件（`kn5`/`acdata`/`physics`/`audio`/`core`）之间零依赖，编排只在
+  `gdext`/`assets`；`world` 只吃组装好的纯数据（NumPy 模式：插件算完回传）。
   宁可加 feature，不开新空 crate（Chrono 适配器只是 physics 的 feature，前车之鉴）。
 - **提交**：中文 commit message，一事一提交，写清动机；推送方式
   `git push origin release/0.0.1:main`。

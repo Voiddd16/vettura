@@ -13,7 +13,7 @@
 use godot::classes::mesh::{ArrayType, PrimitiveType};
 use godot::classes::{ArrayMesh, MeshInstance3D, StandardMaterial3D};
 use godot::prelude::*;
-use vettura_world::TrackModule;
+use vettura_assets::TrackModule;
 
 use crate::kn5::mesh;
 

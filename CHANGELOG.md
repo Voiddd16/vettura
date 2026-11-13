@@ -179,3 +179,31 @@ spatial 侧读屏幕纹理，移动端 `mobile` 渲染器安全。
   游标消费累积缓冲，不 `drain`；暴露 `reload_telemetry_config()` /
   `set_telemetry_enabled()` / `is_telemetry_enabled()` 给 GDScript。
 - 文档：`docs/telemetry.md`（配置全表、帧格式、行为约定）。
+
+## 依赖重构：赛道加载搬入 assets（未定版，2026-11-13）
+
+按"插件只管算、结果回传主程序"的 NumPy 模式收紧编译期依赖图：全仓唯一一处
+插件越级依赖（`world → kn5/acdata`）被断开。
+
+- **`TrackModule` 及全部赛道解析**（`models*.ini` / `surfaces.ini` /
+  `sections.ini` / 碰撞 KN5 → 三角网）从 `world/src/track.rs` 搬到
+  `assets/src/track.rs`；`assets` 定位为 AC 资产编排层（车目录 + 赛道目录），
+  新增依赖 `vettura-world` / `vettura-core`。
+- **拆分中的类型归属**：`ColliderTriangle` / `MeshSurfaceIndex` /
+  `triangle_height` → `world/src/surface.rs`（surface 反向依赖它）；
+  `TrackSection` → `world/src/timing.rs`（`LapTimer` 用它）——否则成环。
+- **新错误类型 `TrackError` / `TrackResult`**（`assets`）替代原
+  `WorldError::TrackIo/TrackFormat` 在赛道路径上的使用；`WorldError::Kn5`
+  变体删除，`world` 不再认识 kn5。
+- **测试搬迁**：`world/tests/track_module.rs` → `assets/tests/track_module.rs`
+  （命令改 `cargo test -p vettura-assets --test track_module -- --ignored`）；
+  `world` 对 `assets` 仅保留 dev 依赖（`real_car_gearbox`），cargo 允许的
+  dev-cycle，编译时已验证。
+- **收益后的依赖图**：叶子插件（kn5/acdata/physics/audio/core）零内部依赖；
+  `world → physics/core`；编排层 `assets → 全部解析插件 + world`、
+  `gdext → 全部`。插件之间零边。
+- **顺手优化**：删除 `gdext` 每帧每车多余的 `VehicleSnapshot::clone()`
+  （33 字段，改传引用）。
+- 文档同步：`docs/architecture.md`（crate 图、职责、赛道数据流）、
+  `world/README.md`、`assets/README.md`、`AGENTS.md`（仓库地图、测试命令、
+  crate 边界规则）。

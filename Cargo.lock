@@ -691,8 +691,10 @@ dependencies = [
  "thiserror",
  "tracing",
  "vettura-acdata",
+ "vettura-core",
  "vettura-kn5",
  "vettura-physics",
+ "vettura-world",
 ]
 
 [[package]]
@@ -752,10 +754,8 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tracing",
- "vettura-acdata",
  "vettura-assets",
  "vettura-core",
- "vettura-kn5",
  "vettura-physics",
 ]
 

@@ -9,8 +9,8 @@
 //! [`TrackModule::load`] turns that directory structure into
 //!
 //! - the placed [`TrackModelEntry`] list (visual models stay in the renderer),
-//! - a [`SurfaceMap`] whose mesh index samples the collision triangles,
-//! - one compact triangle mesh that [`World`] can turn into static Jolt bodies.
+//! - a [`vettura_world::SurfaceMap`] whose mesh index samples the collision triangles,
+//! - one compact triangle mesh that [`vettura_world::World`] can turn into static Jolt bodies.
 //!
 //! The AC authoring frame is `+X` left / `+Y` up / `+Z` forward. Everything
 //! returned by this module is already converted to the Vettura physics frame
@@ -20,18 +20,35 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
+use thiserror::Error;
 use vettura_acdata::ini::Ini;
 use vettura_core::coords::ac_to_godot;
-
-use crate::groove::{DEFAULT_GROOVE_CELL_M, GrooveMap, GrooveSettings, parse_groove_ini};
-use crate::timing::LapTimer;
-
 use vettura_kn5::{Kn5, Node, NodeKind, transform_to_mat4};
 use vettura_physics::Pose;
+use vettura_world::{
+    AiDriver, AiSpline, ColliderTriangle, DEFAULT_GROOVE_CELL_M, GrooveMap, GrooveSettings,
+    LapTimer, MeshSurfaceIndex, SPAWN_CLEARANCE_M, SurfaceId, SurfaceKind, SurfaceMap,
+    SurfaceProperties, TrackObjectId, TrackSection, World, parse_groove_ini, triangle_height,
+};
 
-use crate::ai::{AiDriver, AiSpline, SPAWN_CLEARANCE_M};
-use crate::surface::{SurfaceId, SurfaceKind, SurfaceMap, SurfaceProperties};
-use crate::world::{TrackObjectId, World, WorldError, WorldResult};
+/// 赛道加载错误：文件 / INI / KN5 解析，以及底层世界装配。
+#[derive(Debug, Error)]
+pub enum TrackError {
+    #[error("track i/o error at {path}: {source}")]
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("invalid track data: {0}")]
+    Format(String),
+    #[error("KN5 error: {0}")]
+    Kn5(#[from] vettura_kn5::Error),
+    #[error(transparent)]
+    World(#[from] vettura_world::WorldError),
+}
+
+/// 赛道加载结果别名。
+pub type TrackResult<T> = std::result::Result<T, TrackError>;
 
 /// Horizontal radius of the cylinder used to check spawn clearance, metres.
 pub const SPAWN_CLEARANCE_RADIUS_M: f32 = 2.2;
@@ -284,37 +301,10 @@ pub fn parse_surfaces_ini(text: &str) -> Vec<SurfaceDef> {
     surfaces
 }
 
-/// One timed sector of an AC `sections.ini`.
-///
-/// AC stores section boundaries as fractions of the lap length, measured from
-/// the first point of `fast_lane.ai`. `IN` is where the sector starts and
-/// `OUT` where it ends; crossing `OUT` completes the sector for timing.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TrackSection {
-    /// Authored name, for example `Bus Stop`.
-    pub name: String,
-    /// Normalised lap position where the sector starts, `0..=1`.
-    pub in_fraction: f32,
-    /// Normalised lap position where the sector ends, `0..=1`.
-    pub out_fraction: f32,
-}
-
-impl TrackSection {
-    /// Sector length for a lap of `lap_length_m` metres.
-    pub fn length_m(&self, lap_length_m: f32) -> f32 {
-        if !lap_length_m.is_finite() {
-            return 0.0;
-        }
-        (self.out_fraction - self.in_fraction).max(0.0) * lap_length_m
-    }
-
-    /// Whether a normalised lap position falls inside this sector.
-    pub fn contains(&self, fraction: f32) -> bool {
-        fraction >= self.in_fraction && fraction <= self.out_fraction
-    }
-}
-
 /// Parse all `[SECTION_n]` sections of an AC `sections.ini`.
+///
+/// The [`TrackSection`] type itself lives in `vettura_world` (the timing
+/// plugin owns sector semantics); this module only parses it out of the INI.
 ///
 /// Sections without usable `IN`/`OUT` values are skipped; the result is sorted
 /// by `IN` so the caller always gets the sectors in lap order.
@@ -355,28 +345,6 @@ pub fn parse_sections_ini(text: &str) -> Vec<TrackSection> {
 
     sections.sort_by(|a, b| a.in_fraction.total_cmp(&b.in_fraction));
     sections
-}
-
-/// One collision triangle in the physics frame, tagged with its AC surface.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ColliderTriangle {
-    pub vertices: [Vec3; 3],
-    pub surface: SurfaceId,
-}
-
-impl ColliderTriangle {
-    pub fn normal(&self) -> Vec3 {
-        let [a, b, c] = self.vertices;
-        (b - a).cross(c - a)
-    }
-
-    pub fn centroid(&self) -> Vec3 {
-        (self.vertices[0] + self.vertices[1] + self.vertices[2]) / 3.0
-    }
-
-    pub fn area(&self) -> f32 {
-        0.5 * self.normal().length()
-    }
 }
 
 /// Flatten every collidable static mesh under `kn5.root` into physics-frame
@@ -478,164 +446,6 @@ fn physics_transform(ac: Mat4) -> Mat4 {
     c * ac * c
 }
 
-/// A 2-D acceleration structure over the collision triangles.
-///
-/// [`SurfaceMap`] uses it to answer "what surface is under this wheel?" without
-/// iterating all track triangles every step. Triangles that are nearly vertical
-/// (walls, barriers) are kept for collision but omitted from surface lookup.
-#[derive(Clone, Debug, Default)]
-pub struct MeshSurfaceIndex {
-    triangles: Vec<IndexedTriangle>,
-    cells: HashMap<(i32, i32), Vec<u32>>,
-    cell_size: f32,
-    skipped: usize,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct IndexedTriangle {
-    vertices: [Vec3; 3],
-    surface: SurfaceId,
-}
-
-impl MeshSurfaceIndex {
-    /// Default uniform-grid cell size, metres.
-    pub const DEFAULT_CELL_SIZE: f32 = 10.0;
-
-    pub fn new(triangles: &[ColliderTriangle]) -> Self {
-        Self::with_cell_size(triangles, Self::DEFAULT_CELL_SIZE)
-    }
-
-    pub fn with_cell_size(triangles: &[ColliderTriangle], cell_size: f32) -> Self {
-        let cell_size = if cell_size.is_finite() && cell_size > 0.1 {
-            cell_size
-        } else {
-            Self::DEFAULT_CELL_SIZE
-        };
-        let mut index = Self {
-            triangles: Vec::new(),
-            cells: HashMap::new(),
-            cell_size,
-            skipped: 0,
-        };
-
-        for triangle in triangles {
-            let [a, b, c] = triangle.vertices;
-            let normal = (b - a).cross(c - a);
-            let length_squared = normal.length_squared();
-            if length_squared <= 1.0e-12 || !length_squared.is_finite() {
-                index.skipped += 1;
-                continue;
-            }
-            let normal = normal / length_squared.sqrt();
-            // Only near-horizontal triangles can be a surface under a wheel.
-            if normal.y.abs() < 0.15 {
-                index.skipped += 1;
-                continue;
-            }
-
-            let id = index.triangles.len() as u32;
-            index.triangles.push(IndexedTriangle {
-                vertices: triangle.vertices,
-                surface: triangle.surface,
-            });
-
-            let (min_x, max_x) = min_max(a.x, b.x, c.x);
-            let (min_z, max_z) = min_max(a.z, b.z, c.z);
-            if !(min_x.is_finite() && max_x.is_finite() && min_z.is_finite() && max_z.is_finite()) {
-                continue;
-            }
-            let x0 = (min_x / cell_size).floor() as i32;
-            let x1 = (max_x / cell_size).floor() as i32;
-            let z0 = (min_z / cell_size).floor() as i32;
-            let z1 = (max_z / cell_size).floor() as i32;
-            let cell_count = (x1 as i64 - x0 as i64 + 1) * (z1 as i64 - z0 as i64 + 1);
-            if cell_count <= 0 || cell_count > 4096 {
-                // Degenerate or enormous projected area: put it in the cell of
-                // its centroid so it can still be found, without exploding the
-                // grid. Real track triangles are far below this cap.
-                let centroid = (a + b + c) / 3.0;
-                index
-                    .cells
-                    .entry(cell_key(centroid.x, centroid.z, cell_size))
-                    .or_default()
-                    .push(id);
-                continue;
-            }
-            for cell_x in x0..=x1 {
-                for cell_z in z0..=z1 {
-                    index.cells.entry((cell_x, cell_z)).or_default().push(id);
-                }
-            }
-        }
-
-        index
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.triangles.is_empty()
-    }
-
-    /// Number of triangles usable for surface lookup.
-    pub fn len(&self) -> usize {
-        self.triangles.len()
-    }
-
-    /// Number of triangles skipped because they were vertical or degenerate.
-    pub fn skipped(&self) -> usize {
-        self.skipped
-    }
-
-    pub fn cell_size(&self) -> f32 {
-        self.cell_size
-    }
-
-    /// Sample the surface under `position`.
-    ///
-    /// Uses the highest triangle at or slightly below `position.y`, which
-    /// handles bridges and banked sections. If every candidate is above the
-    /// query, the closest candidate is returned so an airborne wheel still
-    /// reports the surface it is about to land on.
-    pub fn sample(&self, position: Vec3) -> Option<SurfaceId> {
-        self.sample_entry(position).map(|(_, surface)| surface)
-    }
-
-    /// Interpolated height of the surface under `position`.
-    ///
-    /// This uses the same triangle selection as [`Self::sample`], so callers
-    /// can obtain a matching height and surface for spawn or debug queries.
-    pub fn sample_height(&self, position: Vec3) -> Option<f32> {
-        self.sample_entry(position).map(|(height, _)| height)
-    }
-
-    fn sample_entry(&self, position: Vec3) -> Option<(f32, SurfaceId)> {
-        if self.triangles.is_empty() || !position.is_finite() {
-            return None;
-        }
-        let key = cell_key(position.x, position.z, self.cell_size);
-        let candidates = self.cells.get(&key)?;
-
-        let mut best_below: Option<(f32, SurfaceId)> = None;
-        let mut closest: Option<(f32, f32, SurfaceId)> = None;
-
-        for &id in candidates {
-            let triangle = &self.triangles[id as usize];
-            let Some(height) = triangle_height(triangle.vertices, position.x, position.z) else {
-                continue;
-            };
-            let delta = height - position.y;
-            let distance = delta.abs();
-            if closest.is_none_or(|(best, _, _)| distance < best) {
-                closest = Some((distance, height, triangle.surface));
-            }
-            if delta <= 0.35 && best_below.is_none_or(|(best, _)| height > best) {
-                best_below = Some((height, triangle.surface));
-            }
-        }
-
-        best_below.or_else(|| closest.map(|(_, height, surface)| (height, surface)))
-    }
-}
-
 /// A loaded AC track: placed models, surfaces, and physics collider.
 #[derive(Clone, Debug)]
 pub struct TrackModule {
@@ -720,10 +530,10 @@ impl TrackCollider {
 impl TrackModule {
     /// Load a track directory, using `models.ini` when present or the first
     /// `models_*.ini` (alphabetically) otherwise.
-    pub fn load(root: impl AsRef<Path>) -> WorldResult<Self> {
+    pub fn load(root: impl AsRef<Path>) -> TrackResult<Self> {
         let root = root.as_ref();
         let models_path = find_models_ini(root).ok_or_else(|| {
-            WorldError::TrackFormat(format!(
+            TrackError::Format(format!(
                 "no models.ini or models_*.ini in {}",
                 root.display()
             ))
@@ -738,7 +548,7 @@ impl TrackModule {
     }
 
     /// Load a specific layout (`roadcourse` for `models_roadcourse.ini`).
-    pub fn load_layout(root: impl AsRef<Path>, layout: &str) -> WorldResult<Self> {
+    pub fn load_layout(root: impl AsRef<Path>, layout: &str) -> TrackResult<Self> {
         let root = root.as_ref();
         let layout = layout
             .trim()
@@ -751,7 +561,7 @@ impl TrackModule {
         };
         let models_path = root.join(name);
         if !models_path.is_file() {
-            return Err(WorldError::TrackIo {
+            return Err(TrackError::Io {
                 path: models_path,
                 source: std::io::Error::new(
                     std::io::ErrorKind::NotFound,
@@ -767,7 +577,7 @@ impl TrackModule {
         )
     }
 
-    fn load_files(root: &Path, models_path: &Path, layout: Option<String>) -> WorldResult<Self> {
+    fn load_files(root: &Path, models_path: &Path, layout: Option<String>) -> TrackResult<Self> {
         let models_text = read_text(models_path)?;
         let models = parse_models_ini(&models_text);
 
@@ -975,14 +785,17 @@ impl TrackModule {
     /// AI data is optional, so a track without the file returns `Ok(None)`.
     /// Parse errors still propagate: a corrupt AI line should be visible to
     /// the caller instead of silently disabling the racing line.
-    pub fn load_fast_lane(&self) -> WorldResult<Option<AiSpline>> {
-        self.fast_lane_path().map(AiSpline::from_path).transpose()
+    pub fn load_fast_lane(&self) -> TrackResult<Option<AiSpline>> {
+        self.fast_lane_path()
+            .map(AiSpline::from_path)
+            .transpose()
+            .map_err(TrackError::World)
     }
 
     /// Create a pure-pursuit AI driver for this track's `fast_lane.ai`.
     ///
     /// Returns `Ok(None)` when the track has no AI line.
-    pub fn ai_driver(&self) -> WorldResult<Option<AiDriver>> {
+    pub fn ai_driver(&self) -> TrackResult<Option<AiDriver>> {
         Ok(self.load_fast_lane()?.map(AiDriver::new))
     }
 
@@ -1001,19 +814,22 @@ impl TrackModule {
     /// The pit lane uses the same v7 spline format as `fast_lane.ai`, so the
     /// returned [`AiSpline`] drives through [`AiDriver`] and spawns through
     /// [`Self::spawn_poses_on_line`] exactly like the racing line.
-    pub fn load_pit_lane(&self) -> WorldResult<Option<AiSpline>> {
-        self.pit_lane_path().map(AiSpline::from_path).transpose()
+    pub fn load_pit_lane(&self) -> TrackResult<Option<AiSpline>> {
+        self.pit_lane_path()
+            .map(AiSpline::from_path)
+            .transpose()
+            .map_err(TrackError::World)
     }
 
     /// A driver that follows the pit lane instead of the racing line.
-    pub fn pit_lane_driver(&self) -> WorldResult<Option<AiDriver>> {
+    pub fn pit_lane_driver(&self) -> TrackResult<Option<AiDriver>> {
         Ok(self.load_pit_lane()?.map(AiDriver::new))
     }
 
     /// Timed sectors of this layout, in lap order.
     ///
     /// Empty when the track has no `sections.ini`, which makes a lap a single
-    /// untimed sector (see [`crate::LapTimer`]).
+    /// untimed sector (see [`vettura_world::LapTimer`]).
     pub fn sections(&self) -> &[TrackSection] {
         &self.sections
     }
@@ -1021,7 +837,7 @@ impl TrackModule {
     /// Lap and sector timer for the racing line of this track.
     ///
     /// Returns `Ok(None)` when the track has no `fast_lane.ai`.
-    pub fn lap_timer(&self) -> WorldResult<Option<LapTimer>> {
+    pub fn lap_timer(&self) -> TrackResult<Option<LapTimer>> {
         Ok(self
             .load_fast_lane()?
             .map(|line| LapTimer::new(line, &self.sections)))
@@ -1030,8 +846,8 @@ impl TrackModule {
     /// Spawn pose at the start of `fast_lane.ai`.
     ///
     /// The pose already uses the physics frame and is lifted by
-    /// [`SPAWN_CLEARANCE_M`](crate::SPAWN_CLEARANCE_M) above the line.
-    pub fn start_pose(&self) -> WorldResult<Option<Pose>> {
+    /// [`SPAWN_CLEARANCE_M`](vettura_world::SPAWN_CLEARANCE_M) above the line.
+    pub fn start_pose(&self) -> TrackResult<Option<Pose>> {
         Ok(self.load_fast_lane()?.and_then(|line| line.start_pose()))
     }
 
@@ -1049,9 +865,9 @@ impl TrackModule {
     /// This avoids the common AC pit-lane/gantry case where the raw AI-line
     /// start sits under overhead geometry. The returned poses are physics-frame
     /// poses with their position lifted by
-    /// [`SPAWN_CLEARANCE_M`](crate::SPAWN_CLEARANCE_M). Fewer than `count`
+    /// [`SPAWN_CLEARANCE_M`](vettura_world::SPAWN_CLEARANCE_M). Fewer than `count`
     /// poses may be returned when the available line has no clear slots.
-    pub fn spawn_poses(&self, count: usize, spacing_m: f32) -> WorldResult<Vec<Pose>> {
+    pub fn spawn_poses(&self, count: usize, spacing_m: f32) -> TrackResult<Vec<Pose>> {
         let Some(line) = self.load_fast_lane()? else {
             return Ok(Vec::new());
         };
@@ -1252,7 +1068,7 @@ impl TrackModule {
         Some(GrooveMap::new(vertices, settings, DEFAULT_GROOVE_CELL_M))
     }
 
-    pub fn add_to_world(&self, world: &mut World) -> WorldResult<Option<TrackObjectId>> {
+    pub fn add_to_world(&self, world: &mut World) -> TrackResult<Option<TrackObjectId>> {
         if let Some(groove) = self.groove_map() {
             world.set_groove_map(groove);
         }
@@ -1266,6 +1082,7 @@ impl TrackModule {
         world
             .add_static_mesh(&collider.vertices, &collider.triangles, 1.0, 0.0)
             .map(Some)
+            .map_err(TrackError::World)
     }
 
     /// Convenience: create a world with a safety ground and this track's
@@ -1274,7 +1091,7 @@ impl TrackModule {
     /// The safety ground catches cars that leave the collider. Use
     /// [`Self::create_world_without_ground`] when the track has geometry below
     /// `y = 0` or when a fall should not be silently caught.
-    pub fn create_world(&self) -> WorldResult<World> {
+    pub fn create_world(&self) -> TrackResult<World> {
         let mut world = World::new(self.surface_map.clone())?;
         self.add_to_world(&mut world)?;
         Ok(world)
@@ -1282,7 +1099,7 @@ impl TrackModule {
 
     /// Convenience: create a world whose only static ground is the track
     /// collider.
-    pub fn create_world_without_ground(&self) -> WorldResult<World> {
+    pub fn create_world_without_ground(&self) -> TrackResult<World> {
         let mut world = World::without_ground(self.surface_map.clone())?;
         self.add_to_world(&mut world)?;
         Ok(world)
@@ -1467,34 +1284,8 @@ fn compact_mesh(
     }
 }
 
-fn triangle_height(vertices: [Vec3; 3], x: f32, z: f32) -> Option<f32> {
-    let [a, b, c] = vertices;
-    let denominator = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
-    if denominator.abs() < 1.0e-8 {
-        return None;
-    }
-    let wa = ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / denominator;
-    let wb = ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / denominator;
-    let wc = 1.0 - wa - wb;
-    if wa < -1.0e-4 || wb < -1.0e-4 || wc < -1.0e-4 {
-        return None;
-    }
-    Some(wa * a.y + wb * b.y + wc * c.y)
-}
-
-fn cell_key(x: f32, z: f32, cell_size: f32) -> (i32, i32) {
-    (
-        (x / cell_size).floor() as i32,
-        (z / cell_size).floor() as i32,
-    )
-}
-
-fn min_max(a: f32, b: f32, c: f32) -> (f32, f32) {
-    (a.min(b).min(c), a.max(b).max(c))
-}
-
-fn read_text(path: &Path) -> WorldResult<String> {
-    std::fs::read_to_string(path).map_err(|source| WorldError::TrackIo {
+fn read_text(path: &Path) -> TrackResult<String> {
+    std::fs::read_to_string(path).map_err(|source| TrackError::Io {
         path: path.to_owned(),
         source,
     })
