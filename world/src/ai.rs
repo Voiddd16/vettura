@@ -506,6 +506,64 @@ const TRAFFIC_CAR_HALF_WIDTH_M: f32 = 0.95;
 /// Target spacing between traffic samples along the lookahead corridor.
 const TRAFFIC_SAMPLE_SPACING_M: f32 = 3.0;
 
+/// Spacing of the speed-planning samples along the braking corridor, metres.
+/// 4 m keeps a 250 m horizon at 62 samples per call — trivial against the
+/// spline's binary search, yet fine enough to catch a hairpin entry.
+const PLAN_SPACING_M: f32 = 4.0;
+
+/// Hard cap of the speed-planning horizon, metres. `v²/2a` at 90 m/s with
+/// 35 m/s² planning deceleration is 116 m; the cap only guards degenerate
+/// specs (tiny deceleration would otherwise ask for kilometres of lookahead).
+const PLAN_MAX_HORIZON_M: f32 = 250.0;
+
+/// Floor of the speed-planning deceleration, m/s². Below this a car brakes so
+/// badly that planning cannot help; keep braking like a road car at least.
+const PLAN_DECEL_MIN_MPS2: f32 = 6.0;
+
+/// Ceiling of the speed-planning deceleration, m/s². Cap independent of how
+/// strong a mod's brakes are: the planning must stay conservative. Real
+/// braking with ABS cycling and combined-slip understeer delivers far less
+/// than the torque limit suggests — measured ~5–8 m/s² on this F1 at
+/// 20–50 m/s — so planning at 15 m/s² makes the AI start braking early
+/// enough to actually arrive at the corner speed instead of understeering
+/// wide off the line.
+const PLAN_DECEL_MAX_MPS2: f32 = 15.0;
+
+/// Safety factor applied to the brake-torque-derived planning deceleration.
+/// Real braking gains grip from aero downforce that the planning ignores, so
+/// planning at ~80 % of the torque capacity makes the AI brake early rather
+/// than arrive hot.
+const PLAN_DECEL_SAFETY: f32 = 0.8;
+
+/// Lateral acceleration ceiling used by the curvature speed limit, m/s².
+/// ~1 g is conservative for a downforce car but achievable without aero at
+/// low speed; combined braking+cornering eats into it, which is exactly the
+/// understeer regime the limit protects against.
+const PLAN_LATERAL_MPS2: f32 = 10.0;
+
+/// Conservative braking deceleration used by speed planning, m/s².
+///
+/// Derived from the car's own brakes: every wheel receives its axle's torque
+/// (`brakes.ini` MAX_TORQUE × front/rear share), so the ground force is
+/// `Σ torque / wheel radius` and the deceleration is that over the mass. The
+/// safety factor and the floor keep the number on the cautious side: planning
+/// must never assume more braking than the car can actually deliver.
+fn planning_decel_mps2(spec: &VehicleSpec) -> f32 {
+    let peak = spec.brakes.max_torque_nm.max(0.0);
+    let share = spec.brakes.front_share.clamp(0.0, 1.0);
+    let force = spec
+        .wheels
+        .iter()
+        .enumerate()
+        .map(|(index, wheel)| {
+            let axle = if index < 2 { share } else { 1.0 - share };
+            peak * axle / wheel.radius_m.max(0.05)
+        })
+        .sum::<f32>();
+    let decel = force / spec.mass_kg.max(1.0) * PLAN_DECEL_SAFETY;
+    decel.clamp(PLAN_DECEL_MIN_MPS2, PLAN_DECEL_MAX_MPS2)
+}
+
 /// Maximum number of traffic entries a driver keeps.
 const TRAFFIC_CAPACITY: usize = 32;
 
@@ -715,13 +773,59 @@ impl AiDriver {
         if !target_speed.is_finite() || target_speed < 0.5 {
             target_speed = self.tuning.fallback_speed_mps;
         }
+        // 刹车感知速度规划：单一 lookahead 点在高速段看不见下一个慢弯——
+        // 43 m/s 的车前瞻只有 ≈39 m（`speed × lookahead_s`），等目标点掉进
+        // 弯道时已离弯心不到一个车身的刹车距离，重刹 + ABS 兜底也救不回
+        // （实测 horseshoe 双倍限速进弯、撞墙搁浅）。这里把「未来一整段
+        // 刹车距离内」的授权速度都折算回当前位置取最小：
+        // `v_allow(d)² = v_target(d)² + 2·a_plan·d`。
+        let plan_decel = planning_decel_mps2(spec);
+        let horizon = (speed * speed / (2.0 * plan_decel) + self.tuning.max_lookahead_m)
+            .min(PLAN_MAX_HORIZON_M);
+        let mut distance = PLAN_SPACING_M;
+        let mut prev_tangent: Option<Vec3> = None;
+        while distance <= horizon {
+            if let Some(sample) = self.line.sample_at_distance(projection.along_m + distance) {
+                // 曲率限速：用相邻采样点的切线变化估算曲率 κ=|Δt|/Δs，
+                // 再以横向加速度上限折算限速 v=√(a_lat_max·R)。AI 线自己的
+                // speed 在某些弯后段偏乐观（实测线速 25 m/s 处曲率需要
+                // <20 m/s），纯靠线速会让车在弯中外漂撞墙。
+                if let Some(prev) = prev_tangent {
+                    let curvature = (sample.tangent - prev).length() / PLAN_SPACING_M;
+                    if curvature > 1.0e-4 {
+                        let radius = 1.0 / curvature;
+                        let v_lat = (PLAN_LATERAL_MPS2 * radius).sqrt();
+                        let allowed = (v_lat * v_lat + 2.0 * plan_decel * distance).sqrt();
+                        target_speed = target_speed.min(allowed);
+                    }
+                }
+                prev_tangent = Some(sample.tangent);
+                if let Some(v_target) = sample
+                    .speed_mps
+                    .filter(|speed| speed.is_finite() && *speed > 0.5)
+                {
+                    let allowed = (v_target * v_target + 2.0 * plan_decel * distance).sqrt();
+                    target_speed = target_speed.min(allowed);
+                }
+            }
+            distance += PLAN_SPACING_M;
+        }
         // A car that cannot be passed is followed instead of rammed.
         if let Some(follow) = follow_speed {
             target_speed = target_speed.min(follow);
         }
+        // 偏离赛道线太远时必须低速：车偏线 30 m 以上时若仍按线上速度跑，
+        // 回线需要的转弯半径远小于当前速度下的最小转弯半径（实测 20 m/s
+        // 转弯半径 ~77 m，赛道弯 ~45 m），车会一路漂出去撞外墙。限速到
+        // fallback 的一半，让车能收窄路线回到线上。
+        let off_line_m = projection.lateral_m.abs();
+        if off_line_m > 8.0 {
+            let recovery_cap = self.tuning.fallback_speed_mps * 0.5;
+            target_speed = target_speed.min(recovery_cap);
+        }
         let target_speed = target_speed.clamp(0.0, self.tuning.max_speed_mps);
         let speed_error = target_speed - speed;
-        let (mut throttle, brake) = if speed_error > 0.5 {
+        let (mut throttle, mut brake) = if speed_error > 0.5 {
             (
                 (speed_error * self.tuning.throttle_gain + 0.1).clamp(0.0, 1.0),
                 0.0,
@@ -734,6 +838,10 @@ impl AiDriver {
         } else {
             (0.05, 0.0)
         };
+        // 转向幅度大时削减刹车：联合滑移（braking + cornering）会让前轮
+        // 纵向抓地占满、横向不足，车头直往外飘（实测刹车中转向 -0.9 时
+        // 前内轮完全卸载、偏离线 20 m）。保留一部分横向抓地给转向。
+        brake *= (1.0 - 0.6 * steering.abs()).max(0.0);
         // Ease off in corners; the AI speed already accounts for grip, and
         // this keeps a high-power car from spinning its rear tyres.
         throttle *= (1.0 - 0.35 * steering.abs()).max(0.2);
@@ -1019,6 +1127,42 @@ mod tests {
         bytes
     }
 
+    /// 直道 70 m/s 四段 + 15 m/s 两段的测试线：规划器必须在直道上就开始
+    /// 为 100 m 外的慢弯刹车，而不是等车速误差变负（旧逻辑：纯 lookahead
+    /// 点在 40 m 处看到的仍是 70 m/s，进弯速度快一倍——线上 grove 撞墙）。
+    fn braking_test_spline() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let speeds = [70.0, 70.0, 70.0, 70.0, 15.0, 15.0];
+        push_i32(&mut bytes, VERSION);
+        push_i32(&mut bytes, 6); // points
+        push_i32(&mut bytes, 0);
+        push_i32(&mut bytes, 6); // samples
+        for index in 0..6 {
+            push_vec3(&mut bytes, Vec3::new(10.0, 1.0, index as f32 * 25.0));
+            push_f32(&mut bytes, index as f32 * 25.0);
+            push_i32(&mut bytes, index as i32);
+        }
+        push_i32(&mut bytes, 6); // extras
+        for (index, speed) in speeds.iter().enumerate() {
+            push_f32(&mut bytes, *speed);
+            push_f32(&mut bytes, 0.8); // gas
+            push_f32(&mut bytes, 0.0); // brake
+            push_f32(&mut bytes, 1.2); // obsolete lat g
+            push_f32(&mut bytes, 120.0); // radius
+            push_f32(&mut bytes, 4.0); // side left
+            push_f32(&mut bytes, 5.0); // side right
+            push_f32(&mut bytes, 0.05); // camber
+            push_f32(&mut bytes, 1.0); // direction
+            push_vec3(&mut bytes, Vec3::new(0.0, 1.0, 0.0));
+            push_f32(&mut bytes, index as f32 * 25.0);
+            push_vec3(&mut bytes, Vec3::new(0.0, 0.0, 1.0));
+            push_f32(&mut bytes, 2.0);
+            push_f32(&mut bytes, 0.1);
+        }
+        push_i32(&mut bytes, 0);
+        bytes
+    }
+
     #[test]
     fn parses_v7_points_and_converts_the_frame() {
         let spline = AiSpline::parse(&synthetic_spline()).unwrap();
@@ -1112,6 +1256,44 @@ mod tests {
             driver.update(&left, &spec, tuning).steering < 0.0,
             "left-of-line car should steer right"
         );
+    }
+
+    #[test]
+    fn planner_brakes_for_a_corner_beyond_the_lookahead() {
+        let spline = AiSpline::parse(&braking_test_spline()).unwrap();
+        let mut driver = AiDriver::new(spline);
+        let spec = VehicleSpec::default();
+        let tuning = VehicleTuning::default();
+
+        // 70 m/s 线车速，距 100 m 外的 15 m/s 弯口。纯 lookahead（40 m 上限）
+        // 看到的还是直道的 70 m/s——速度误差为零，不会刹车；刹车感知规划器
+        // 必须已经收油/踩刹。
+        let fast = VehicleSnapshot {
+            reference_position: Vec3::new(-10.0, 0.35, 0.0),
+            forward_speed_mps: 70.0,
+            speed_mps: 70.0,
+            ..VehicleSnapshot::default()
+        };
+        let input = driver.update(&fast, &spec, tuning);
+        assert!(
+            input.brake > 0.1,
+            "no braking for the corner ahead: {input:?}"
+        );
+        assert!(
+            input.throttle < 0.1,
+            "still accelerating toward a 100 m corner: {input:?}"
+        );
+
+        // 同样的线上，弯已经过了（沿着线再走 125 m，仍在 15 m/s 段）：
+        // 目标速度就是当前速度，规划器不该继续施压刹车超过 0.1。
+        let slow = VehicleSnapshot {
+            reference_position: Vec3::new(-10.0, 0.35, -125.0),
+            forward_speed_mps: 15.0,
+            speed_mps: 15.0,
+            ..VehicleSnapshot::default()
+        };
+        let input = driver.update(&slow, &spec, tuning);
+        assert!(input.brake < 0.1, "braking on the slow straight: {input:?}");
     }
 
     fn synthetic_straight_spline(count: usize, spacing_m: f32, speed_mps: f32) -> Vec<u8> {

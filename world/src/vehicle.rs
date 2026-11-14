@@ -641,6 +641,9 @@ pub(crate) struct VehicleRuntime {
     shift_blip: ShiftBlip,
     /// Phase of the soft limiter's cutting cycle, `0..1`.
     limiter_phase: f32,
+    /// ABS 刹车压力调制系数 `0..=1`（跨步保留的控制器状态，见
+    /// [`apply_driver_aids`]）。
+    abs_factor: f32,
     /// Last gear seen, so an upshift can be detected.
     previous_gear: i32,
     /// Water film carried by each tyre, mm.
@@ -692,6 +695,26 @@ pub(crate) fn steer_lock_deg(spec: &VehicleSpec, tuning: &VehicleTuning) -> f32 
 
 /// Slip ratio the anti-lock brake controller aims for.
 const ABS_SLIP_TARGET: f32 = 0.14;
+/// Slip ratio below which the ABS hands brake pressure back.
+const ABS_SLIP_RELEASE: f32 = 0.08;
+/// Lowest fraction of the requested brake the ABS ever applies.
+///
+/// 必须低到能咬住「低载荷轮」：Jolt 的刹车是整车一个标量，压弯内侧轮在
+/// 坡面/重量转移下法向载荷可能只剩几百牛，其抱死扭矩（μ·N·r）远低于
+/// 全车刹车的 25%——旧下限 0.25 在数学上保证该轮永久锁死（实测 horseshoe
+/// 进弯左前轮 slip=-1 持续 1 s 以上，车滚上对角两轮后撞墙）。下限 2% 让
+/// 比例控制器真正能收敛到目标滑移率。
+const ABS_FACTOR_MIN: f32 = 0.02;
+/// Highest fraction of the requested brake the ABS applies.
+const ABS_FACTOR_MAX: f32 = 1.0;
+/// Rate at which the ABS hands brake pressure back after a release, per
+/// second. Cut fast, recover slowly: an instant return re-locks the wheel
+/// within one slip build-up (~0.2 s) and turns the controller into a hard
+/// bang-bang on the raw pedal.
+const ABS_RECOVERY_PER_S: f32 = 1.5;
+/// The physics step the ABS recovery rate is integrated on (`World`'s fixed
+/// step; `World::step` only ever calls `step_exact` with this).
+const ABS_STEP_DT_S: f32 = 1.0 / 240.0;
 /// Slip ratio the traction controller aims for.
 ///
 /// 必须低于 Jolt 自己的升挡门槛：`WheeledVehicleController` 在任何驱动轮
@@ -699,8 +722,6 @@ const ABS_SLIP_TARGET: f32 = 0.14;
 /// 压在 0.12 附近抖动，全油门起步阶段升挡会被永久封锁——车只能卡在
 /// 1 挡、rpm 顶限制器。目标 0.08 给门槛留出抖动余量。
 const TC_SLIP_TARGET: f32 = 0.08;
-/// Lowest fraction of the requested brake the ABS ever applies.
-const ABS_MIN_FACTOR: f32 = 0.25;
 /// Lowest fraction of the requested throttle the TC ever applies.
 ///
 /// 必须允许到接近 0：引擎惯性很小（AC `INERTIA=0.012`），两成油门就足以把
@@ -709,21 +730,6 @@ const ABS_MIN_FACTOR: f32 = 0.25;
 /// 控制断油就是完全切断，让引擎转速掉回轮速，滑移才能收敛。
 const TC_MIN_FACTOR: f32 = 0.0;
 
-/// Worst absolute slip ratio of the wheels that are touching the ground.
-fn worst_slip(spec: &VehicleSpec, snapshot: &VehicleSnapshot, driven_only: bool) -> f32 {
-    let mut worst = 0.0f32;
-    for (index, wheel) in snapshot.wheels.iter().enumerate() {
-        if driven_only && !spec.wheels[index].driven {
-            continue;
-        }
-        if !wheel.contact || wheel.load_n <= 0.0 {
-            continue;
-        }
-        worst = worst.max(wheel.slip_ratio.abs());
-    }
-    if worst.is_finite() { worst } else { 0.0 }
-}
-
 /// Apply the closed-loop brake and traction controllers to this step's input.
 ///
 /// Both are the car's own systems, not race rules: they watch the wheel slip
@@ -731,7 +737,18 @@ fn worst_slip(spec: &VehicleSpec, snapshot: &VehicleSnapshot, driven_only: bool)
 /// before a wheel locks or spins up. Jolt offers one brake input for the whole
 /// car, so the ABS scales that input instead of pulsing a single wheel; the
 /// effect on the wheel slip is the same.
-fn apply_driver_aids(spec: &VehicleSpec, input: &mut DriveInput, snapshot: &VehicleSnapshot) {
+///
+/// `abs_factor` is the ABS modulation kept between steps (`0..=1`): pressure
+/// cuts instantly when any touching wheel over-shoots the slip target and
+/// returns at a limited rate once the slip has clearly fallen. Without the
+/// memory the controller snaps back to the full pedal the moment slip dips
+/// and immediately re-locks the wheel.
+fn apply_driver_aids(
+    spec: &VehicleSpec,
+    input: &mut DriveInput,
+    snapshot: &VehicleSnapshot,
+    abs_factor: &mut f32,
+) {
     // 滑移率以地面速度为分母，静止或爬行时数值虚高（轮子没转就是"满滑移"）。
     // 低速下 ABS/TC 的判定没有意义：刹停时车轮抱死是正常的，不能因此松刹车。
     if snapshot.speed_mps < 2.0 {
@@ -739,18 +756,61 @@ fn apply_driver_aids(spec: &VehicleSpec, input: &mut DriveInput, snapshot: &Vehi
         input.tc = false;
     }
     if input.abs && input.brake > 1.0e-3 {
-        let worst = worst_slip(spec, snapshot, false);
-        if worst > ABS_SLIP_TARGET {
-            let factor = (ABS_SLIP_TARGET / worst).clamp(ABS_MIN_FACTOR, 1.0);
-            input.brake *= factor;
+        // 没有着地轮 = 没有测量（三轮着地弹跳/腾空），此刻压力既不加深也
+        // 不回收，保持现状——否则"无测量"会被当成"滑移率 0"而回压。
+        if let Some(worst) = worst_measured_slip(spec, snapshot, false) {
+            if worst > ABS_SLIP_TARGET {
+                // 立即减压：减压量正比于超出目标滑移率的程度。
+                *abs_factor = (ABS_SLIP_TARGET / worst).clamp(ABS_FACTOR_MIN, ABS_FACTOR_MAX);
+            } else if worst < ABS_SLIP_RELEASE {
+                // 滑移率明确回落才回压，且回压限速——切得快、回得慢。
+                *abs_factor =
+                    (*abs_factor + ABS_RECOVERY_PER_S * ABS_STEP_DT_S).min(ABS_FACTOR_MAX);
+            }
+            // 目标滑移率附近的死区（target..release 之间）保持当前压力，
+            // 既不加深也不回收，避免在目标附近来回打摆。
+            input.brake *= *abs_factor;
         }
+    } else {
+        *abs_factor = ABS_FACTOR_MAX;
     }
     if input.tc && input.throttle > 1.0e-3 {
-        let worst = worst_slip(spec, snapshot, true);
-        if worst > TC_SLIP_TARGET {
-            let factor = (TC_SLIP_TARGET / worst).clamp(TC_MIN_FACTOR, 1.0);
-            input.throttle *= factor;
+        if let Some(worst) = worst_measured_slip(spec, snapshot, true) {
+            if worst > TC_SLIP_TARGET {
+                let factor = (TC_SLIP_TARGET / worst).clamp(TC_MIN_FACTOR, 1.0);
+                input.throttle *= factor;
+            }
         }
+    }
+}
+
+/// Worst absolute slip ratio of the wheels that are touching the ground,
+/// with load. `None` when no wheel offers a measurement, so the controllers
+/// can tell "zero slip" from "nothing measured".
+fn worst_measured_slip(
+    spec: &VehicleSpec,
+    snapshot: &VehicleSnapshot,
+    driven_only: bool,
+) -> Option<f32> {
+    let mut worst = 0.0f32;
+    let mut measured = false;
+    for (index, wheel) in snapshot.wheels.iter().enumerate() {
+        if driven_only && !spec.wheels[index].driven {
+            continue;
+        }
+        if !wheel.contact || wheel.load_n <= 0.0 {
+            continue;
+        }
+        measured = true;
+        worst = worst.max(wheel.slip_ratio.abs());
+    }
+    if !measured {
+        return None;
+    }
+    if worst.is_finite() {
+        Some(worst)
+    } else {
+        Some(0.0)
     }
 }
 
@@ -871,6 +931,7 @@ impl VehicleRuntime {
             fuel_cut_s: 0.0,
             shift_blip: ShiftBlip::new(),
             limiter_phase: 0.0,
+            abs_factor: ABS_FACTOR_MAX,
             previous_gear: 0,
             water_film_mm: [0.0; 4],
             previous_suspension_lengths: [0.0; 4],
@@ -912,7 +973,7 @@ impl VehicleRuntime {
     /// between control updates; the raw driver input stays in [`Self::input`].
     fn write_driver_input(&mut self, physics: &mut PhysicsWorld) -> WorldResult<()> {
         let mut input = self.input;
-        apply_driver_aids(&self.spec, &mut input, &self.snapshot);
+        apply_driver_aids(&self.spec, &mut input, &self.snapshot, &mut self.abs_factor);
         // Cold discs bite less and faded ones deliver less torque. The front
         // axle carries most of the braking, so its efficiency dominates.
         let front = (self.brake_efficiency(Wheel::FrontLeft.index())
@@ -999,6 +1060,15 @@ impl VehicleRuntime {
             if coast > 0.0 && ratio > 0.0 && capacity > 1.0e-3 {
                 brake = (brake + coast * ratio / capacity).clamp(0.0, 1.0);
             }
+        }
+        // Jolt 的自动变速箱在 forward_input == 0 时把「最低降挡挡位」当成空挡
+        // （VehicleTransmission::Update 里 `min_gear = inForwardInput != 0 ? 1 :
+        // 0`）：重刹完全松开油门后，rpm 低于降挡门槛就把变速箱一路降到 0 挡
+        // （实测 brake=1.0、27 m/s 时出现 gear=0），引擎制动丢掉，还要等补油
+        // 才回到 1 挡。滚动中保持一个最小正油门把变速箱钉在 1 挡以上；
+        // 1e-3 的油门折算到引擎扭矩不到 1 N·m，物理上可以忽略。
+        if forward <= 0.0 && self.snapshot.forward_speed_mps > 0.5 {
+            forward = 1.0e-3;
         }
         physics
             .vehicle_mut(self.vehicle)?
@@ -3163,7 +3233,8 @@ mod tests {
             brake: 1.0,
             ..DriveInput::default()
         };
-        apply_driver_aids(&spec, &mut input, &snapshot);
+        let mut factor = ABS_FACTOR_MAX;
+        apply_driver_aids(&spec, &mut input, &snapshot, &mut factor);
         assert_eq!(input.brake, 1.0);
         assert_eq!(input.throttle, 1.0);
 
@@ -3176,10 +3247,33 @@ mod tests {
             tc: true,
             ..DriveInput::default()
         };
-        apply_driver_aids(&spec, &mut input, &snapshot);
-        assert_eq!(input.brake, ABS_MIN_FACTOR);
+        let mut factor = ABS_FACTOR_MAX;
+        apply_driver_aids(&spec, &mut input, &snapshot, &mut factor);
+        // 滑移 0.8 → 比例命令 0.14/0.8 = 0.175，高于下限——下限只兜底，
+        // 不把本该收敛的点抬上去。
+        let expected_release = ABS_SLIP_TARGET / 0.8;
+        assert!((input.brake - expected_release).abs() < 1.0e-6);
+        // 状态也要落下来，否则下一步回压时会在死区里"凭空"保持满压。
+        assert!((factor - expected_release).abs() < 1.0e-6);
+
         // TC 按比例释放：目标滑移 0.08 / 实际 0.8 = 0.1（下限 0 只是不封底）。
         assert!((input.throttle - TC_SLIP_TARGET / 0.8).abs() < 1.0e-6);
+
+        // 滑移大到比例命令低于下限时（低载荷轮抱死：0.14/20 = 0.007），
+        // 下限兜底到 2%——而不是旧值 25% 那样的"锁死"。
+        for wheel in &mut snapshot.wheels {
+            wheel.slip_ratio = 20.0;
+        }
+        let mut input = DriveInput {
+            throttle: 0.1,
+            brake: 1.0,
+            abs: true,
+            ..DriveInput::default()
+        };
+        let mut factor = ABS_FACTOR_MAX;
+        apply_driver_aids(&spec, &mut input, &snapshot, &mut factor);
+        assert_eq!(input.brake, 0.02);
+        assert_eq!(factor, ABS_FACTOR_MIN);
 
         // With the wheels in their window neither system touches the input.
         for wheel in &mut snapshot.wheels {
@@ -3192,9 +3286,37 @@ mod tests {
             tc: true,
             ..DriveInput::default()
         };
-        apply_driver_aids(&spec, &mut input, &snapshot);
-        assert_eq!(input.brake, 0.7);
-        assert_eq!(input.throttle, 0.5);
+        // 关键循环：滑移已明确回落到 RELEASE 之下，压力才按有限速率回上来，
+        // 而不是瞬间恢复满压。
+        let mut factor = expected_release;
+        apply_driver_aids(&spec, &mut input, &snapshot, &mut factor);
+        let expected = expected_release + ABS_RECOVERY_PER_S * ABS_STEP_DT_S;
+        assert!((factor - expected).abs() < 1.0e-6);
+        assert!(factor < ABS_FACTOR_MAX, "recovery is instant: {factor}");
+
+        // Dead-zone: 滑移在 TARGET 与 RELEASE 之间时压力维持不加深不回收。
+        for wheel in &mut snapshot.wheels {
+            wheel.slip_ratio = 0.11;
+        }
+        let mut input = DriveInput {
+            throttle: 0.1,
+            brake: 0.1,
+            abs: true,
+            ..DriveInput::default()
+        };
+        let mut factor = 0.5;
+        apply_driver_aids(&spec, &mut input, &snapshot, &mut factor);
+        assert_eq!(factor, 0.5, "dead-zone must hold pressure");
+        assert_eq!(input.brake, 0.05);
+
+        // With no ABS flag the factor resets to full.
+        let mut factor = 0.02;
+        let mut input = DriveInput {
+            brake: 1.0,
+            ..DriveInput::default()
+        };
+        apply_driver_aids(&spec, &mut input, &snapshot, &mut factor);
+        assert_eq!(input.brake, 1.0);
 
         // No contact means no measurement, so no intervention.
         for wheel in &mut snapshot.wheels {
@@ -3208,7 +3330,8 @@ mod tests {
             tc: true,
             ..DriveInput::default()
         };
-        apply_driver_aids(&spec, &mut input, &snapshot);
+        let mut factor = ABS_FACTOR_MIN;
+        apply_driver_aids(&spec, &mut input, &snapshot, &mut factor);
         assert_eq!(input.brake, 1.0);
         assert_eq!(input.throttle, 1.0);
     }
