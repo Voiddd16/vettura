@@ -17,6 +17,9 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 glam.workspace = true
 godot.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
 vettura-assets.workspace = true
 vettura-audio.workspace = true
 vettura-core.workspace = true

@@ -23,7 +23,7 @@ FMOD 音频直连；GDScript 只做 UI/流程。加载时直读 AC 原格式，�
 | `physics/` | `vettura-physics`：`VehicleSpec/State/Controls` + `VehicleBackend` trait + 固定步长 `Simulation`（默认 600 Hz）+ Simple/Chrono 后端 | 不含赛道碰撞（那是 world/） |
 | `world/` | `vettura-world`：Jolt 世界——碰撞三角网安装、表面摩擦、橡胶进化、AI、天气、计时、碎片（**只吃纯数据，不解析资产**） | 不做渲染 |
 | `audio/` | `vettura-audio`：`sfx/GUIDs.txt` 事件表 + bank 定位 + **FMOD Studio runtime 直连** | 不解析 bank/FSB（FMOD 负责） |
-| `gdext/` | `vettura-godot`：GDExtension 桥（cdylib）+ 4 个 Rust 验证探针场景 | 不是游戏 UI |
+| `gdext/` | `vettura-godot`：GDExtension 桥（cdylib）+ 4 个 Rust 验证探针场景；内含全系统日志（`src/logging`，`user://log.cfg` 驱动，见 docs/logging.md） | 不是游戏 UI |
 | `test_visual/` | 游戏性预览页与冒烟（GDScript）：车库/触摸/多视角/布局 | 不是 Rust 冒烟 |
 | `stylized/` | 风格化渲染子项目：玻璃/HUD/颜色/形状/光照/滤镜 shader 框架（纯 shader+GDScript，见其 README） | 不放游戏逻辑/物理/Rust |
 | `tools/` | `kn5-inspect` / `acd-inspect` CLI（格式逆向排查用） | — |
@@ -41,7 +41,7 @@ FMOD 音频直连；GDScript 只做 UI/流程。加载时直读 AC 原格式，�
   `fmod_probe`、`load_probe`。headless 可跑，验证的是 Rust/GDExtension 链路。
 - **`test_visual/*.tscn` = 游戏性预览页**：`main`（默认浮空车+触摸+多视角+HUD，也是
   `project.godot` 主场景）、`garage`（车模库）、`smoke` / `garage_smoke` / `layout_smoke`
-  （回归冒烟）。
+  （回归冒烟）、`log_smoke`（日志/GDScript API 冒烟，含 `LOG_SMOKE_PANIC=1` panic 转储验证）。
 - **`stylized/showcase.tscn` = 风格化效果展示页**：六大类 shader 各一个展台（纯合成几何，
   不依赖 `mods/`），桌面窗口运行看效果。
 - 新增页面/控件实验放 `test_visual/`；shader 效果放 `stylized/`；不要往 `gdext/` 里加游戏 UI。
@@ -59,6 +59,10 @@ python3 scripts/build.py apk                        # 导出 build/android/Vettu
 # 冒烟（--quit-after N 是帧数不是秒！）
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --quit-after 1500 res://test_visual/garage_smoke.tscn
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://gdext/baseline.tscn   # 需 mods/ 真车
+
+# 日志冒烟：上面任一场景跑完后，user 目录应有 vettura.<日期>.log
+ls ~/Library/Application\ Support/Godot/app_userdata/Vettura/logs/   # macOS
+VETTURA_LOG="info,vettura_assets::track=debug" /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://gdext/baseline.tscn
 
 uv run scripts/load_probe.py                        # 合成车模加载性能探针（不依赖 mods/）
 ```

@@ -11,6 +11,7 @@ build = "build.rs"
 
 [dependencies]
 thiserror.workspace = true
+tracing.workspace = true
 
 # FMOD Engine 2.02.22；只有在启用 `fmod` feature 时编译并链接。
 libfmod = { workspace = true, optional = true }

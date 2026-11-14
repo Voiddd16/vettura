@@ -11,6 +11,7 @@ description = "KN5 (Assetto Corsa model container) reader"
 [dependencies]
 glam.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [[bench]]
 name = "parse"

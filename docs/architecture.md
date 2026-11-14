@@ -199,7 +199,10 @@ Godot GDExtension：
 - `WorldBody`（Node3D）：拥有 `vettura_assets::TrackModule` + `World`，负责
   赛道安装、多车调度、固定步长推进、圈速计时，以及把 `VehicleSnapshot`
   同步回场景树。这是主项目调用 Rust 侧赛车模拟的入口；
-- `FmodSystem`（Node3D）：每帧调用 FMOD `update`，并提供播放 / 参数 / 3D 听者接口。
+- `FmodSystem`（Node3D）：每帧调用 FMOD `update`，并提供播放 / 参数 / 3D 听者接口；
+- `logging`：全系统日志——`InitStage::Scene` 安装 tracing subscriber，读
+  `user://log.cfg`，输出到控制台（stdout）与 `user://logs/` 滚动文件；业务 crate
+  只 `use tracing` 发事件，不依赖本模块。详见 [`docs/logging.md`](logging.md)。
 
 **下一步**：`ResourceFormatLoader`；模型缓存与 surface 合并；AI 车 / pit lane 的
 节点封装；相机、HUD、输入映射等游戏层。

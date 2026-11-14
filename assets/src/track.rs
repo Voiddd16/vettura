@@ -578,6 +578,15 @@ impl TrackModule {
     }
 
     fn load_files(root: &Path, models_path: &Path, layout: Option<String>) -> TrackResult<Self> {
+        // 整条赛道加载挂在同一个 span 下：这条链上的所有事件（含子 crate 的
+        // debug/warn）都自动带上 root / layout 上下文，出问题时一眼定位。
+        let _span = tracing::info_span!(
+            "track_load",
+            root = %root.display(),
+            layout = layout.as_deref().unwrap_or("default"),
+        )
+        .entered();
+
         let models_text = read_text(models_path)?;
         let models = parse_models_ini(&models_text);
 
@@ -698,6 +707,15 @@ impl TrackModule {
             triangles: collider_indices,
             surface_index,
         });
+
+        tracing::info!(
+            models = models.len(),
+            surfaces = surfaces.len(),
+            triangles = triangles.len(),
+            sections = sections.len(),
+            groove = groove.is_some(),
+            "track module loaded"
+        );
 
         Ok(Self {
             root: root.to_owned(),

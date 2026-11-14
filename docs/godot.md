@@ -299,6 +299,12 @@ var car: VehicleBody = world.spawn_vehicle_from_path(
    就说明 `.gdextension` 的 `res://target/...` 路径、`WorldBody` / `VehicleBody`、
    `AcCar → VehicleSpec`、Jolt step、轮子绑定这条链路都是通的。
 
+3. **日志链路**：`test_visual/log_smoke.tscn` 验证 `VetturaLogger` GDScript API
+   （ring/recent/dump/reload/set_level/dump_to_file），打印 `[log-smoke] PASS`；
+   `LOG_SMOKE_PANIC=1` 前缀触发一次真实 Rust panic，之后 `last-crash.log`
+   应包含 panic 消息 + backtrace + 环形缓冲转储（命令见
+   [`logging.md`](logging.md) §10）。
+
 ## 注意事项
 
 - Godot 是 `+X` 右、`+Y` 上、`-Z` 前；KN5 是 `+X` 左、`+Y` 上、`+Z` 前；
@@ -314,6 +320,10 @@ var car: VehicleBody = world.spawn_vehicle_from_path(
 ## 调试
 
 - Godot 控制台会打印 `godot_error!`；
+- **Rust 侧全系统日志**：运行时同时写控制台、`user://logs/vettura.<日期>.log`
+  与内存环形缓冲；级别/target 可用 `VETTURA_LOG`（或 `user://log.cfg`）调，
+  GDScript 侧用 `VetturaLogger`（运行期调级别 / 读最近日志 / 导出转储）；崩溃时
+  panic hook 写 `user://logs/last-crash.log`；详见 [`logging.md`](logging.md)；
 - `cargo build -p vettura-godot` 失败时先确认 `godot` crate 的 `api-4-7`
   feature；
 - 扩展未加载时检查 `.gdextension` 路径和 dylib 是否存在；之前这里踩过一次坑：

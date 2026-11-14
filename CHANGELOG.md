@@ -3,6 +3,27 @@
 本文件记录 Vettura 的版本级变更。版本号遵循 SemVer：`0.x` 阶段允许在次版本间
 调整内部结构，公共 API（GDExtension 暴露给 GDScript 的类与方法）以“能用”为准。
 
+## 未发布
+
+### 新增
+
+- **全系统日志**（`gdext/src/logging/`，见 `docs/logging.md`）：`InitStage::Scene`
+  安装全局 tracing subscriber；`user://log.cfg`（INI）驱动控制台（stdout）+
+  滚动文件（`user://logs/vettura.<日期>.log`，daily × 7）两个 sink，环境变量
+  `VETTURA_LOG`/`RUST_LOG` 优先。文件层走非阻塞 writer 线程，物理主循环不等 IO。
+  业务 crate 只 `use tracing` 发事件；`kn5` 解析统计、`assets::track_load`
+  span + 摘要、`audio` bank 失败 error 已插桩。
+- **日志线索增强（Phase 2）**：RingSink 有界环形缓冲（默认 4096 条）+
+  `VetturaLogger` GDScript 类（`reload` / `set_level` / `log_dir` / `recent` /
+  `dump` / `dump_to_file`）；panic hook 把 panic 消息 + backtrace + ring 转储
+  追加写 `user://logs/last-crash.log`（超 1MiB 重建）；`user://log.cfg` 级别类
+  键热重载（mtime 0.5s 轮询，sink 结构变化只 warn）；WARN/ERROR 按 callsite
+  5s 窗口聚合（per-sink gate，单聚合者发聚合行）。运行期换 filter 用自研
+  `DynamicFilter`（0.3 无 `reloading` 模块）。
+- `test_visual/log_smoke.tscn`：`VetturaLogger` API 冒烟；`LOG_SMOKE_PANIC=1`
+  触发真实 panic 验证 last-crash.log 链路。
+- `kn5` / `audio` 引入 `tracing` 依赖（workspace 共享版本）。
+
 ## 0.0.1 —— 2026-11-10
 
 第一个可运行版本：Rust workspace + Godot 4.7 GDExtension 打通

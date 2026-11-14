@@ -18,6 +18,7 @@
 | `world/` | `WorldBody`（Node3D）：拥有 `TrackModule` + `World`——赛道安装、多车调度、固定步长推进、圈速计时、快照同步回场景树。**进入赛车模拟的主入口** |
 | `fmod_system.rs` | `FmodSystem`（Node3D）：每帧调 FMOD `update` + 播放/参数/3D 听者 |
 | `paths.rs` | `res://` → 文件系统路径解析（`globalize_path` 的统一封装） |
+| `logging/` | 全系统日志：环形缓冲 + 控制台 + 滚动文件 subscriber（`user://log.cfg` 驱动，可热重载），panic hook 写 `last-crash.log`，`VetturaLogger` 暴露给 GDScript。业务 crate 只 `use tracing`，安装与落盘只在这里（见 [`docs/logging.md`](../docs/logging.md)） |
 
 ## 探针场景（验证 Rust 链路，headless 可跑）
 
