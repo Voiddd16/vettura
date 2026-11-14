@@ -15,6 +15,17 @@ extends Node3D
 ##
 ## 期望：输出 `[ai-lap] ...` 前缀的行，最后一行 `[ai-lap] PASS`，退出码 `0`。
 ## 任一步失败 `push_error` + `quit(1)`。
+##
+## 录视频（窗口模式 + 追逐相机 + 日光，跑完 AI_LAP_MAX_S 后退出）：
+##
+## ```bash
+## AI_LAP_CAM=1 AI_LAP_REQUIRE_LAP=0 AI_LAP_MAX_S=25 \
+## /Applications/Godot.app/Contents/MacOS/Godot --path . res://gdext/ai_lap.tscn
+## ```
+##
+## 环境变量：AI_LAP_MAX_S（圈时上限/最长跑动秒数）、AI_LAP_LAPS（目标圈数）、
+## AI_LAP_CAM=1（窗口模式下加追逐相机+日光）、AI_LAP_REQUIRE_LAP=0（短跑录视频
+## 时不要求完成整圈）。
 
 const CAR_DIR := "res://mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
 const TRACK_DIR := "res://mods/daytona_2017"
@@ -61,9 +72,14 @@ var _stuck_time := 0.0
 var _rescues := 0
 var _last_reset_s := -10.0
 
+## 窗口模式视觉：AI_LAP_CAM=1 且非 headless 时加追逐相机 + 日光 + 天空环境。
+var _cam: Camera3D
+var _require_lap := true
+
 func _ready() -> void:
 	_max_lap_s = _env_float("AI_LAP_MAX_S", MAX_LAP_S_DEFAULT)
 	_target_laps = int(_env_float("AI_LAP_LAPS", TARGET_LAPS_DEFAULT))
+	_require_lap = _env_float("AI_LAP_REQUIRE_LAP", 1.0) > 0.5
 
 	_world = WorldBody.new()
 	add_child(_world)
@@ -85,6 +101,41 @@ func _ready() -> void:
 	print("[ai-lap] spawned=", _car.name, " wheels=", _car.bound_wheels(),
 			" vehicles=", _world.vehicle_count())
 	_start = _car.position
+
+	if _env_float("AI_LAP_CAM", 0.0) > 0.5 and DisplayServer.get_name() != "headless":
+		_setup_visual()
+
+## 赛道与车模都不自带灯光：窗口模式下补一盏日光 + 天空环境，否则画面一片死黑。
+func _setup_visual() -> void:
+	var sun := DirectionalLight3D.new()
+	sun.rotation_degrees = Vector3(-48.0, -125.0, 0.0)
+	sun.light_energy = 1.4
+	sun.shadow_enabled = true
+	add_child(sun)
+
+	var env := Environment.new()
+	env.background_mode = Environment.BG_SKY
+	env.sky = Sky.new()
+	env.sky.sky_material = ProceduralSkyMaterial.new()
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_energy = 0.6
+	var world_env := WorldEnvironment.new()
+	world_env.environment = env
+	add_child(world_env)
+
+	_cam = Camera3D.new()
+	add_child(_cam)
+	_cam.current = true
+	print("[ai-lap] visual mode: chase cam + sun + sky")
+
+## 追逐相机：跟在车后上方（物理帧 -Z 为车头，+Z 是车尾方向）。
+func _update_chase_cam() -> void:
+	if _cam == null or _car == null:
+		return
+	var basis := _car.global_transform.basis
+	var origin := _car.global_position
+	_cam.global_position = origin + basis.z * 4.5 + Vector3(0.0, 2.0, 0.0)
+	_cam.look_at(origin - basis.z * 14.0 + Vector3(0.0, 1.0, 0.0), Vector3.UP)
 
 func _physics_process(delta: float) -> void:
 	if _car == null or _world == null:
@@ -144,6 +195,8 @@ func _physics_process(delta: float) -> void:
 				% [_world.laps(), _world.last_lap_s(), _world.best_lap_s(),
 					str(_world.last_sector_times_s()), str(_world.last_lap_valid())])
 
+	_update_chase_cam()
+
 	if _world.laps() >= _target_laps or _elapsed >= _max_lap_s:
 		_finish()
 
@@ -167,7 +220,7 @@ func _finish() -> void:
 			% [_elapsed, moved, _max_speed_kmh, _world.laps(), _world.last_lap_s(),
 				_world.best_lap_s(), _max_airborne_s])
 
-	if _world.laps() < _target_laps:
+	if _require_lap and _world.laps() < _target_laps:
 		push_error("[ai-lap] AI failed to complete %d lap(s) in %.0f s (rescues=%d)" % [_target_laps, _max_lap_s, _rescues])
 		ok = false
 	if not _ai_alive:
