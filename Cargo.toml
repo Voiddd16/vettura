@@ -4,11 +4,11 @@ resolver = "3"
 # workspace 根就是 `project.godot` 所在目录（构建产物在 `target/`，已被
 # `target/.gdignore` 从 Godot 资源系统里屏蔽）。
 members = [
-    "core", # vettura-core：共享数据结构 / 错误类型
     "kn5", # vettura-kn5：KN5 网格解析
     "acdata", # vettura-acdata：AC data.acd / car.ini 解析
     "assets", # vettura-assets：车目录组织（上面三者的组合）
     "physics", # vettura-physics：车辆物理后端
+    "track", # vettura-track：赛道/环境纯数据（无 Jolt）
     "world", # vettura-world：多车世界、赛道、天气、AI
     "audio", # vettura-audio：AC sfx 发现 + FMOD runtime
     "gdext", # vettura-godot：GDExtension 桥接层
@@ -18,11 +18,11 @@ members = [
 # `cargo build` / `cargo test` stay fast and headless.
 # Build the Godot extension explicitly with `cargo build -p vettura-godot`.
 default-members = [
-    "core",
     "kn5",
     "acdata",
     "assets",
     "physics",
+    "track",
     "world",
     "audio",
     "tools/kn5-inspect",
@@ -39,11 +39,11 @@ publish = false
 
 [workspace.dependencies]
 # Internal crates
-vettura-core = { path = "core" }
 vettura-kn5 = { path = "kn5" }
 vettura-acdata = { path = "acdata" }
 vettura-assets = { path = "assets" }
 vettura-physics = { path = "physics" }
+vettura-track = { path = "track" }
 vettura-world = { path = "world" }
 vettura-audio = { path = "audio" }
 

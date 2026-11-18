@@ -117,7 +117,7 @@ depth mode：
 
 由此确定 AC 坐标系为：`+X` 左、`+Y` 上、`+Z` 前。
 
-`vettura_core::coords::ac_to_godot` 负责转换；`vettura_kn5::transform_to_mat4`
+`vettura_physics::coords::ac_to_godot` 负责转换；`vettura_kn5::transform_to_mat4`
 可把行主序的 `Transform` 转成 `glam::Mat4`。
 
 ### type 2：Mesh

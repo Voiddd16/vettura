@@ -369,7 +369,9 @@ impl SurfaceMap {
         &self.table
     }
 
-    pub(crate) fn table_arc(&self) -> Arc<SurfaceTable> {
+    /// Shared handle to the surface table, for code that keeps the map alive
+    /// while the table is handed to per-vehicle tyre callbacks.
+    pub fn table_arc(&self) -> Arc<SurfaceTable> {
         Arc::clone(&self.table)
     }
 

@@ -17,12 +17,12 @@ Vettura 是一款以 **Godot 4** 为运行时的赛车游戏主工程，目标�
 vettura/
 ├── project.godot              # Godot 工程配置（应用名、渲染、物理、主场景）
 ├── Cargo.toml                 # Rust workspace 根（就是本工程根）
-├── core/                      # vettura-core：共享数据结构 / 错误类型 / 坐标转换
 ├── kn5/                       # vettura-kn5：KN5 网格与材质解析
 ├── acdata/                    # vettura-acdata：data.acd 解密与 INI/LUT
 ├── assets/                    # vettura-assets：AC 车目录组织（上面三者的组合）
 ├── physics/                   # vettura-physics：车辆物理后端（Jolt / Simple / Chrono FFI）
-├── world/                     # vettura-world：多车世界、赛道、天气、AI、计时
+├── track/                     # vettura-track：赛道/环境纯数据（表面、橡胶、天气、AI 线、分段，无 Jolt）
+├── world/                     # vettura-world：Jolt 多车世界、车辆适配、AI 控制、计时、遥测
 ├── audio/                     # vettura-audio：AC sfx 发现 + FMOD runtime 直达
 ├── gdext/                     # vettura-godot：GDExtension 桥接层（Kn5File/AcCar/VehicleBody/WorldBody/FmodSystem）
 │   ├── vettura_native.gdextension
@@ -108,7 +108,7 @@ cargo build -p vettura-godot --features fmod       # 接真机 FMOD 声音
 跑真实资产验证（Daytona 赛道 + F1 2008 车；需本地 `mods/` 资源在位）：
 
 ```bash
-cargo test -p vettura-world --test track_module -- --ignored   # 赛道/AI/计时/发车格
+cargo test -p vettura-assets --test track_module -- --ignored   # 赛道/AI/计时/发车格
 cargo test -p vettura-assets --test real_car -- --ignored       # 真实车数据映射
 ```
 

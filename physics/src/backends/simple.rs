@@ -184,7 +184,7 @@ mod tests {
     use super::*;
     use crate::Simulation;
 
-    const GRAVITY: f32 = 9.806_65;
+    use crate::units::GRAVITY;
 
     #[test]
     fn throttle_moves_the_car_forward() {

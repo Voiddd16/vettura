@@ -62,7 +62,6 @@ cargo build --release
 默认成员包括：
 
 ```
-vettura-core
 vettura-kn5
 vettura-acdata
 vettura-assets
@@ -74,7 +73,6 @@ acd-inspect
 ### 3.2 只编译某一个 crate
 
 ```bash
-cargo build -p vettura-core
 cargo build -p vettura-kn5
 cargo build -p vettura-acdata
 cargo build -p vettura-assets

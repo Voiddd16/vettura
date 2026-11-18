@@ -44,11 +44,13 @@ Rust workspace 就在本 Godot 工程根目录，最终产物是一个 Godot 4 G
 └────────┘                     │
 ```
 
-`vettura-assets` 还依赖 `vettura-world` 与 `vettura-core`：它是主程序侧的
+`vettura-assets` 还依赖 `vettura-track`、`vettura-world`：它是主程序侧的
 **编排层**（车目录 + 赛道目录统一组装），赛道加载 `TrackModule` 住在 assets，
-把解析结果（碰撞三角网 / 表面表 / 发车格 / AI 线）交给 world 安装。
-`vettura-core`（单位/坐标转换/glam 再导出）在最底层，所有 crate 共用，图里省略。
-插件之间（kn5 / acdata / physics / audio / core）零内部依赖。
+把解析结果（碰撞三角网 / 表面表 / 发车格 / AI 线）组装成 `vettura-track` 的纯数据，
+再由 world 装进 Jolt。
+坐标系与单位约定（原 `vettura-core`）已并入 `vettura-physics::coords` / `units`，
+没有独立 crate 也就没有"每个 crate 都绕一圈"的重导出。
+插件之间（kn5 / acdata / audio）零内部依赖。
 
 ## 目录与 crate 对应
 
@@ -56,12 +58,12 @@ workspace 根就是 Godot 工程根，每个 crate 一个顶层目录：
 
 | 目录 | crate | 职责 |
 | --- | --- | --- |
-| `core/` | `vettura-core` | 单位、坐标系转换、共享错误 |
 | `kn5/` | `vettura-kn5` | KN5 网格 / 材质 / 贴图 |
 | `acdata/` | `vettura-acdata` | `data.acd`、INI、LUT |
 | `assets/` | `vettura-assets` | AC 车目录（前三者组合）+ 物理数据映射 + 赛道目录组装（`TrackModule`） |
 | `physics/` | `vettura-physics` | 车辆物理后端与 `VehicleSpec` |
-| `world/` | `vettura-world` | 多车世界、表面、天气、AI、计时（只吃纯数据，不解析资产） |
+| `track/` | `vettura-track` | 赛道/环境纯数据：表面表、橡胶进化、天气、AI 线、计时分段（无 Jolt、不解析资产） |
+| `world/` | `vettura-world` | Jolt 多车世界、车辆适配、AI 控制律、圈速计时、遥测（只吃纯数据，不解析资产） |
 | `audio/` | `vettura-audio` | `sfx/GUIDs.txt` + FMOD runtime |
 | `gdext/` | `vettura-godot` | GDExtension 桥接层与 `.gdextension` |
 | `tools/` | `kn5-inspect` / `acd-inspect` | 命令行检查工具 |
@@ -77,13 +79,13 @@ workspace 根就是 Godot 工程根，每个 crate 一个顶层目录：
 
 ## Crate 职责
 
-### `vettura-core`
+### `vettura-physics` 里的共享约定（`coords.rs` / `units.rs`）
 
-- 全工作区共享的单位约定（SI）；
-- Assetto Corsa / Godot 坐标系转换；
-- `glam` 的再导出，避免各 crate 版本漂移。
+- 全工作区共享的单位约定（SI），`GRAVITY = 9.80665` 为全仓唯一来源；
+- Assetto Corsa / Godot / Vettura 物理帧坐标系转换；
+- 原 `vettura-core` crate 已合并进来（它当时只有一个函数真正被调用）。
 
-**不放入**：具体格式解析、物理模型、Godot 类型。
+**不放入**：具体格式解析、物理模型之外的 Godot 类型。
 
 ### `vettura-kn5`
 
@@ -147,16 +149,30 @@ Chrono::Vehicle 的适配器，住在 `vettura-physics` 内的
 由 `build.rs` 在 feature 打开时构建。`build.rs` 找不到 Chrono 时自动退化成
 stub，所以 `cargo build --features chrono` 在任意机器上都能编译。
 
-### `vettura-world`
+### `vettura-track`
 
-基于 Jolt 的世界层：
+赛道/环境**纯数据层**（不依赖 Jolt，不解析 AC 文件）：
 
-- `World`：固定步长、多车、静态体、接触/冲击事件；
 - `SurfaceMap`：矩形/圆形 patch、水坑、赛道三角形索引（`MeshSurfaceIndex`）、
   默认表面；
-- `TrackSection` + `LapTimer`：`sections.ini` 分段语义与圈速计时；
+- `GrooveMap`：`groove.ini` 位置驱动的橡胶堆积；
+- `Weather`：湿滑/积水/温度/风/空气密度；
 - `AiSpline`：解析 `fast_lane.ai` / `ideal_line.ai`（v7）的采样点与速度/宽度
-  元数据，提供起点位姿。
+  元数据，提供投影、按里程采样、逐点曲率与起点位姿；
+- `TrackSection`：`sections.ini` 的分段边界语义。
+
+这层是 `assets`（生产者）与 `world`（消费者）之间的数据契约，拆出来后可被
+不跑物理的工具直接使用，`assets` 也不必为了几种数据类型拖进整个 Jolt 世界。
+
+### `vettura-world`
+
+基于 Jolt 的世界层（消费 `vettura-track`，并通过重导出保持旧路径可用）：
+
+- `World`：固定步长、多车、静态体、接触/冲击事件、天气与赛道温度推进；
+- `VehicleRuntime`：AC spec → Jolt wheeled vehicle 适配与全部车辆物理子系统；
+- `AiDriver`：纯跟踪 + 曲率速度规划 + 车流避让的控制律；
+- `LapTimer`：圈速/分段/无效圈计时；
+- `TelemetrySink`：JSON 帧 + UDP/TCP 输出。
 
 赛道目录的解析（`models*.ini` / `surfaces.ini` / 碰撞 KN5 → 三角网 + 表面 +
 发车格 + AI 线）已上移到 `vettura-assets::TrackModule`：world 只接受组装好的
@@ -164,6 +180,20 @@ stub，所以 `cargo build --features chrono` 在任意机器上都能编译。
 多布局目录（如 `<track>/roadcourse/ai/fast_lane.ai`）和根目录
 （`<track>/ai/fast_lane.ai`）都支持。大三角网会按 800 m 分块后交给 Jolt，
 但对外仍是一个逻辑 `TrackObjectId`。
+
+车辆侧按职责拆成 `world/src/vehicle/` 子模块（原 `vehicle.rs` 单文件 3690 行）：
+
+| 文件 | 职责 |
+| --- | --- |
+| `mod.rs` | `VehicleRuntime` 生命周期、每步子系统的推进顺序、快照组装 |
+| `constraint.rs` | spec → Jolt 尺寸换算（悬架几何/刹车分配/变速箱差速器/惯量）+ 合法性校验 |
+| `friction.rs` | 逐轮动态摩擦圆（纵横向共享预算 + 全滑移保底） |
+| `grip.rs` | Jolt 轮胎回调的共享输入：per-wheel 状态经 relaxed 原子量发布 |
+| `thermal.rs` | 三层胎温 / 刹车盘面与核心温度的纯演化函数 |
+| `aids.rs` | ABS / TC 闭环 |
+
+拆分原则：**共享状态仍在 `mod.rs`，纯函数与纯数据下沉**。`grip.rs` 的原子量
+只暴露 publish/scale 系列方法，不让其它子系统直接写位模式。
 
 **不放入**：渲染网格/材质（留在 `vettura-godot` 的 KN5 管线）、车辆动力学
 （`vettura-physics` / Jolt vehicle constraint）。
@@ -237,7 +267,9 @@ vettura_assets::TrackModule::load_layout(track_dir, "roadcourse")
   │     ├── 节点名 1ROAD/1GRASS/1WALL → SurfaceId
   │     └── MeshSurfaceIndex（10 m 网格宽相位）
   ├── AiSpline::from_path(roadcourse/ai/fast_lane.ai)
-  ├── AiDriver（投影 + 前视点纯跟踪 → DriveInput）
+  │     └── 逐点水平曲率（三点圆）→ max_curvature_between()
+  ├── AiDriver（曲率前馈 + Stanley 反馈 + 刹车包络 → DriveInput）
+  │     └── AC AI 难度 0..=110（`AiDriverTuning.skill`，见下）
   ├── pit_lane.ai → 同一 AiSpline/AiDriver 复用
   ├── data/sections.ini → TrackSection[] → LapTimer（圈速/分段/无效圈）
   ├── data/groove.ini → GrooveSettings → GrooveMap（车轮沉积橡胶 → 抓地倍率）
@@ -262,12 +294,83 @@ Godot _physics_process(delta)              # WorldBody（节点树顺序：父�
 独立模式（`VehicleBody.setup_from_car` / `setup_default`）仍走
 `Simulation::step(delta, Controls)`，不经过 `WorldBody`。
 
+### AI 司机与 AC 难度档
+
+`AiDriver` 是一个纯 Rust 控制器：给它 [`AiSpline`](track/src/spline.rs)、车辆
+快照和 `VehicleSpec`，它输出 `DriveInput`。它不认识赛道数据之外的东西——
+换任何赛道模组、任何车，都用同一条规则。
+
+**控制律**（同一帧内按顺序）：
+
+1. **投影**：把车投到线上，横向误差沿**路面横向**（水平切线 × 路面法向）
+   量，所以倾斜赛道（Daytona oval 的 31° bank）上滑下去 2 m 也看得见；
+   水平投影看不出来，那是老 bug。
+2. **曲率前馈**：Ackermann `atan(L·κ)` + 轮胎侧偏补偿
+   `k·v²·κ·mg/(mg+下压力)`，预瞄 `PREVIEW_S` 秒（难度越高看得越远）。
+3. **Stanley 反馈**：航向误差 + 横向误差，权限钳在 35% 锁角内；车已经贴着
+   抓地极限时反馈自动衰减（前轮越过峰值侧偏角只会更推头）。
+4. **刹车包络**：对每个 4 m 采样点取区间内的**最大水平曲率**（逐点三点圆，
+   不会被直道平均掉），折算弯速 `v=√(a_lat·R)`，反向传成
+   `允许速度` 与「现在必须维持的最小减速度」；后者按 `plan_decel` 归一
+   直接当刹车前馈，所以车贴着包络走而不是等超速才反应。
+
+**弯速只来自车的数据**：`a_lat(v) = clamp(μ·g·share, 0.35g, 0.55g)
++ 0.36·0.5ρ·ClA·v²/m`，倾斜路面再叠加 `g·sin(β_eff)`，规划目标再乘 5% 余量；
+`a_plan` 由刹车扭矩/轮半径/质量推。实测 F1（μ=1.73、ClA=6.64）和一台 1500 kg、
+μ=1.1 的公路车因此自动得到不同弯速，不需要按赛道调参。下压力份额 0.36 由
+60–70 m/s 的真实横向包络标定（ Daytona 31° bank 上实测 ~1.9 g）。
+
+**AC 难度档 `AiDriverTuning.skill`（0..=110，默认 100）** 缩放的是司机的
+能力，不是车的性能：
+
+| 档位 | 抓地使用率 | 规划减速 | 预瞄 | 方向可用量 | 贴线晃动 | 表现 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 0.52 | 0.45× | 0.65× | 0.55× | 3.0 m | 慢、晃、晚刹 |
+| 50 | 0.76 | 0.70× | 0.83× | 0.78× | 0.7 m | 业余 |
+| 100 | 1.00 | 1.00× | 1.00× | 1.00× | 0 | 职业（默认） |
+| 110 | 1.12 | 1.15× | 1.15× | 1.00× | 0 | 超人类抓地 |
+
+Godot 侧 `WorldBody.ai_skill()` / `set_ai_skill(skill)` 可运行时切换。
+两套完全不同布局的 Daytona 整圈实测（同一台真 F1，600 Hz 物理 / 60 Hz AI /
+ABS+TC），用来证明规则不是按某一条赛道调的：
+
+| 档位 | roadcourse（5769 m） | oval（4034 m，线速上限 79 m/s） |
+| --- | --- | --- |
+| 0 | 226.7 s（偏线 5.8 m） | 95.1 s（偏线 3.1 m） |
+| 40 | 199.7 s | — |
+| 80 | 172.6 s | — |
+| **100** | **169.5 s（偏线 2.3 m，10 次擦碰）** | **79.7 s（偏线 2.4 m）** |
+| 110 | 165.4 s | 78.7 s（偏线 5.0 m） |
+
+oval 的 `fast_lane` 是给纳斯卡/GTE 那条抓地写的（全程 79 m/s、最小半径 182 m，
+折合 3.4 g）；这台车物理上到不了，于是规划器自己把速度降到 ~69 m/s 并在 31°
+bank 上贴线跑完——同一个数字都没有为 oval 改过。
+
+### 轮胎摩擦圆（每轮一个，动态）
+
+`world/src/vehicle/friction.rs` 的 `combined_slip_circle()` 每个解算步、**每个轮子**各自算一份：
+
+```
+demand_long = |滑移率| / 1.0      ← 轮子本步自己的纵向滑移
+demand_lat  = |侧偏角| / 0.8      ← 轮子本步自己的侧偏角
+budget_long = floor + (1−floor)·√(1 − demand_lat²)   ← 横向用掉多少，纵向还剩多少
+budget_lat  = floor + (1−floor)·√(1 − demand_long²)
+× 松弛长度（力还没建立出来的部分）
+峰值 = tyre_peak × 环境(路面干湿 × 赛道温度 × 天气 × 滑水) × 粗糙度损失
+        × 橡胶沉积 × 胎窗(温度/压力/磨损) × 载荷敏感(LS_EXPY)
+```
+
+地板 `floor` 不再是常数，而是由**轮胎自己的衰减特性**（`FALLOFF_LEVEL`）和
+**本轮所压的路面**决定：曲线越平，打滑时剩下的越多；冰面越低（下限 0.5，
+保证 bank 起步不会瞬间失去全部侧向力）。磨损/温度/赛道状况通过上面的乘链
+缩放摩擦圆的**大小**。所以每个轮子各自拥有一个随状态变化的摩擦圆。
+
 ## 关键约定
 
 - 内部统一 SI：米、千克、秒、牛顿、弧度；
 - 物理坐标系与 Godot 一致：`+X` 右、`+Y` 上、`-Z` 前；
 - KN5/AC 坐标系：`+X` 左、`+Y` 上、`+Z` 前；
-- 转换集中在 `vettura_core::coords::ac_to_godot`；
+- 转换集中在 `vettura_physics::coords::ac_to_godot`；
 - AC 输入在 `vettura-assets` 边界完成单位/语义转换，物理层不再处理 AC 的
   `%`、`deg`、`km/h`。
 

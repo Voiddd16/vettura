@@ -14,9 +14,9 @@
 
 use vettura_physics::{Controls, Pose, VehicleBackend, VehicleSpec, VehicleState};
 
-use crate::surface::SurfaceMap;
 use crate::vehicle::VehicleHandle;
 use crate::world::{World, WorldResult};
+use vettura_track::SurfaceMap;
 
 /// Single-vehicle Jolt backend implementing the common `VehicleBackend` trait.
 pub struct JoltBackend {

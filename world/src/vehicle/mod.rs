@@ -1,41 +1,49 @@
-//! One vehicle inside a [`World`](crate::World): AC spec → Jolt wheeled vehicle,
-//! live input, tyre/surface callback, and the per-step snapshot.
+//! One vehicle inside a [`World`](crate::World): AC spec to Jolt wheeled
+//! vehicle, live input, per-vehicle physics subsystems, and the per-step
+//! snapshot handed to rendering, telemetry and the `VehicleBackend` contract.
 //!
-//! Jolt's wheeled-vehicle constraint supplies the suspension, tyre slip curve,
-//! engine, automatic transmission and differentials. This module's job is the
-//! adapter: translate the Vettura frame, size the suspension from the AC data,
-//! install a surface/weather-aware tyre callback, and expose a stable snapshot
-//! for rendering, telemetry and the `VehicleBackend` contract.
+//! Sub-modules: [`friction`] the per-wheel friction circle, [`grip`] the Jolt
+//! tyre callback and its shared state, [`thermal`] tyre/brake temperatures,
+//! [`aids`] ABS/TC, and [`constraint`] the spec-to-Jolt geometry translation.
+//! This file owns the vehicle runtime itself: body, constraint, snapshot and
+//! every per-step subsystem update (aero, powertrain, brakes, thermal, ERS,
+//! fuel, driver aids) that runs inside it.
 
 use std::f32::consts::PI;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use glam::{Quat, Vec3};
 use oxijolt::{
-    Activation, BodyId, BodySettings, DriverInput, Inertia, MotionQuality, ObjectLayer,
-    PhysicsWorld, Shape, SpringSettings, TireFriction, TireMaxImpulseInput, Vec3 as JoltVec3,
-    VehicleAntiRollBar, VehicleCollisionTester, VehicleDifferentialSettings, VehicleEngineSettings,
-    VehicleId, VehicleTransmissionSettings, WheelSettings, WheeledVehicleSettings,
+    Activation, BodyId, BodySettings, DriverInput, Inertia, MotionQuality, PhysicsWorld, Shape,
+    Vec3 as JoltVec3, VehicleId,
 };
 use vettura_physics::{
-    AERO_REFERENCE_SPEED_MPS, ActiveSuspensionMode, BrakeSpec, Controls, DrivetrainLayout, ErsMode,
-    Pose, ShiftBlip, TyreThermalSpec, VehicleSpec, VehicleState, Wheel, WheelState, WingSpec,
-    series_spring_rate,
+    AERO_REFERENCE_SPEED_MPS, ActiveSuspensionMode, Controls, ErsMode, Pose, ShiftBlip,
+    VehicleSpec, VehicleState, Wheel, WheelState, WingSpec,
 };
 
 use crate::frame::{j2p, j2p_q, j2p_r, p2j, p2j_q, p2j_r};
-use crate::groove::GrooveMap;
-use crate::surface::{SurfaceId, SurfaceMap, SurfaceTable};
-use crate::weather::Weather;
 use crate::{WorldError, WorldResult};
+use vettura_track::GrooveMap;
+use vettura_track::Weather;
+use vettura_track::{SurfaceId, SurfaceMap, SurfaceTable};
 
-/// Fraction of a tyre's friction budget one direction keeps at full slip.
-///
-/// The friction ellipse never quite empties a direction: a wheel that is
-/// completely sliding still holds 60 % of its budget, so launching on a banked
-/// corner or a kerb does not remove all side force and spin the car.
-const FRICTION_CIRCLE_FLOOR: f32 = 0.6;
+mod aids;
+mod constraint;
+mod friction;
+mod grip;
+mod thermal;
+
+pub(crate) use aids::{ABS_FACTOR_MAX, apply_driver_aids};
+pub(crate) use constraint::{
+    WheelGeometry, chassis_half_extents, normalized_orientation, tag_vehicle, validate_spec,
+    vehicle_settings, wheel_geometries, wing_local_position,
+};
+pub(crate) use grip::GripState;
+pub(crate) use thermal::{
+    ENGINE_COOLING_RATE_PER_S, THERMOSTAT_RATE_PER_S, TyreTemperatures, advance_brake_temperatures,
+    advance_tyre_temperatures,
+};
 
 /// Stable handle to a vehicle in a [`World`](crate::World).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -373,218 +381,6 @@ impl VehicleSnapshot {
     }
 }
 
-/// Shared, atomically-updated grip inputs for the Jolt tyre callback.
-///
-/// The callback runs inside Jolt's solver, where taking a lock would be both
-/// slow and an unwind hazard. Each step publishes one surface/water sample per
-/// wheel plus the current weather scalars; the callback only performs relaxed
-/// atomic loads and a table lookup.
-struct GripState {
-    surfaces: Arc<SurfaceTable>,
-    tyre_peak_friction: f32,
-    /// Tyre model, for the friction circle in the callback.
-    tyre_model: vettura_physics::TyreSpec,
-    surface_ids: [AtomicU32; 4],
-    water_depth_bits: [AtomicU32; 4],
-    /// Rubber multiplier under each wheel, one per wheel.
-    groove_bits: [AtomicU32; 4],
-    /// Tyre window multiplier per wheel (temperature, pressure, wear).
-    tyre_bits: [AtomicU32; 4],
-    /// Water film carried by each tyre, mm.
-    water_film_bits: [AtomicU32; 4],
-    /// Longitudinal slip demand per wheel, `0..=1` (friction-circle usage).
-    longitudinal_demand_bits: [AtomicU32; 4],
-    /// Lateral slip demand per wheel, `0..=1` (friction-circle usage).
-    lateral_demand_bits: [AtomicU32; 4],
-    /// Relaxation multiplier on the lateral force per wheel, `0..=1`.
-    relaxation_lateral_bits: [AtomicU32; 4],
-    /// Relaxation multiplier on the longitudinal force per wheel, `0..=1`.
-    relaxation_longitudinal_bits: [AtomicU32; 4],
-    speed_bits: AtomicU32,
-    wetness_bits: AtomicU32,
-    track_temperature_bits: AtomicU32,
-    grip_scale_bits: AtomicU32,
-}
-
-impl GripState {
-    fn new(
-        surfaces: Arc<SurfaceTable>,
-        tyre_peak_friction: f32,
-        tyre_model: vettura_physics::TyreSpec,
-    ) -> Self {
-        Self {
-            surfaces,
-            tyre_peak_friction: tyre_peak_friction.max(0.0),
-            tyre_model,
-            surface_ids: [
-                AtomicU32::new(u32::from(SurfaceId::ASPHALT.0)),
-                AtomicU32::new(u32::from(SurfaceId::ASPHALT.0)),
-                AtomicU32::new(u32::from(SurfaceId::ASPHALT.0)),
-                AtomicU32::new(u32::from(SurfaceId::ASPHALT.0)),
-            ],
-            water_depth_bits: [
-                AtomicU32::new(0.0f32.to_bits()),
-                AtomicU32::new(0.0f32.to_bits()),
-                AtomicU32::new(0.0f32.to_bits()),
-                AtomicU32::new(0.0f32.to_bits()),
-            ],
-            groove_bits: [
-                AtomicU32::new(1.0f32.to_bits()),
-                AtomicU32::new(1.0f32.to_bits()),
-                AtomicU32::new(1.0f32.to_bits()),
-                AtomicU32::new(1.0f32.to_bits()),
-            ],
-            tyre_bits: [
-                AtomicU32::new(1.0f32.to_bits()),
-                AtomicU32::new(1.0f32.to_bits()),
-                AtomicU32::new(1.0f32.to_bits()),
-                AtomicU32::new(1.0f32.to_bits()),
-            ],
-            water_film_bits: [
-                AtomicU32::new(0.0f32.to_bits()),
-                AtomicU32::new(0.0f32.to_bits()),
-                AtomicU32::new(0.0f32.to_bits()),
-                AtomicU32::new(0.0f32.to_bits()),
-            ],
-            longitudinal_demand_bits: [
-                AtomicU32::new(0.0f32.to_bits()),
-                AtomicU32::new(0.0f32.to_bits()),
-                AtomicU32::new(0.0f32.to_bits()),
-                AtomicU32::new(0.0f32.to_bits()),
-            ],
-            relaxation_lateral_bits: std::array::from_fn(|_| AtomicU32::new(1.0f32.to_bits())),
-            relaxation_longitudinal_bits: std::array::from_fn(|_| AtomicU32::new(1.0f32.to_bits())),
-            lateral_demand_bits: [
-                AtomicU32::new(0.0f32.to_bits()),
-                AtomicU32::new(0.0f32.to_bits()),
-                AtomicU32::new(0.0f32.to_bits()),
-                AtomicU32::new(0.0f32.to_bits()),
-            ],
-            speed_bits: AtomicU32::new(0.0f32.to_bits()),
-            wetness_bits: AtomicU32::new(0.0f32.to_bits()),
-            track_temperature_bits: AtomicU32::new(32.0f32.to_bits()),
-            grip_scale_bits: AtomicU32::new(1.0f32.to_bits()),
-        }
-    }
-
-    fn set_weather(&self, weather: &Weather) {
-        self.wetness_bits
-            .store(weather.wetness.to_bits(), Ordering::Relaxed);
-        self.track_temperature_bits
-            .store(weather.track_temperature_c.to_bits(), Ordering::Relaxed);
-        self.grip_scale_bits
-            .store(weather.grip_scale.to_bits(), Ordering::Relaxed);
-    }
-
-    fn publish_snapshot(&self, snapshot: &VehicleSnapshot) {
-        for (index, wheel) in snapshot.wheels.iter().enumerate() {
-            self.surface_ids[index].store(u32::from(wheel.surface.0), Ordering::Relaxed);
-            self.water_depth_bits[index].store(wheel.water_depth_m.to_bits(), Ordering::Relaxed);
-            // How much of the friction budget each direction is asking for.
-            // The normalisation points are where the slip curve has given up
-            // most of its grip, so a normal power-on or cornering wheel still
-            // keeps almost all of its budget in both directions.
-            // Normalisation points are deep into slipping, so a normal
-            // power-on or cornering wheel keeps almost all of its budget.
-            let longitudinal = (wheel.slip_ratio.abs() / 1.0).clamp(0.0, 1.0);
-            let lateral = (wheel.slip_angle.abs() / 0.8).clamp(0.0, 1.0);
-            self.longitudinal_demand_bits[index].store(longitudinal.to_bits(), Ordering::Relaxed);
-            self.lateral_demand_bits[index].store(lateral.to_bits(), Ordering::Relaxed);
-        }
-        self.speed_bits.store(
-            snapshot.linear_velocity.length().to_bits(),
-            Ordering::Relaxed,
-        );
-    }
-
-    fn friction(&self, input: &TireMaxImpulseInput) -> TireFriction {
-        let index = (input.wheel as usize).min(3);
-        let surface = self
-            .surfaces
-            .get(SurfaceId(
-                self.surface_ids[index].load(Ordering::Relaxed) as u16
-            ))
-            .unwrap_or_else(|| &self.surfaces.entries()[0]);
-        let water_depth_m = f32::from_bits(self.water_depth_bits[index].load(Ordering::Relaxed));
-        let water_film_mm = f32::from_bits(self.water_film_bits[index].load(Ordering::Relaxed));
-        let speed_mps = f32::from_bits(self.speed_bits.load(Ordering::Relaxed));
-
-        let weather = Weather {
-            wetness: f32::from_bits(self.wetness_bits.load(Ordering::Relaxed)),
-            track_temperature_c: f32::from_bits(
-                self.track_temperature_bits.load(Ordering::Relaxed),
-            ),
-            grip_scale: f32::from_bits(self.grip_scale_bits.load(Ordering::Relaxed)),
-            ..Weather::dry()
-        };
-
-        // A rough road costs grip: the tyre load is never steady, so the
-        // effective friction falls in proportion to how steep the undulation
-        // is. AC's own run-off areas (0.03 m over 0.5 m) lose about 40%.
-        let undulation = (surface.bump_height_m / surface.bump_length_m.max(0.25)).min(0.6);
-        let roughness_loss = (1.0 - undulation).clamp(0.5, 1.0);
-
-        // `input.default_friction()` is Jolt's curve already combined with the
-        // ground body's friction via sqrt. The ground is 1.0, so the combined
-        // peak is still 1.0 and `scale` sets the final peak exactly; only the
-        // non-peak points are lifted slightly by the sqrt.
-        let environmental =
-            weather.grip_for_wheel(surface, speed_mps, water_depth_m, water_film_mm)
-                * roughness_loss;
-        // Rubber laid down by earlier laps, sampled per wheel.
-        let groove = f32::from_bits(self.groove_bits[index].load(Ordering::Relaxed));
-        let groove = if groove.is_finite() {
-            groove.clamp(0.5, 2.0)
-        } else {
-            1.0
-        };
-        let tyre_window = f32::from_bits(self.tyre_bits[index].load(Ordering::Relaxed));
-        let tyre_window = if tyre_window.is_finite() {
-            tyre_window.clamp(0.5, 1.0)
-        } else {
-            1.0
-        };
-        // Combined slip: a tyre has one friction budget, so the longitudinal
-        // usage eats into what is left for the lateral force and back. This is
-        // the effect that makes braking into a corner understeer.
-        let longitudinal_demand =
-            f32::from_bits(self.longitudinal_demand_bits[index].load(Ordering::Relaxed));
-        let lateral_demand =
-            f32::from_bits(self.lateral_demand_bits[index].load(Ordering::Relaxed));
-        let tyres = &self.tyre_model;
-        // The ellipse never quite empties a direction: a wheel that is fully
-        // slipping still keeps 60 % of its budget, so a launch on a banked
-        // corner does not lose all side force.
-        let relaxation_long =
-            f32::from_bits(self.relaxation_longitudinal_bits[index].load(Ordering::Relaxed))
-                .clamp(0.0, 1.0);
-        let relaxation_lateral =
-            f32::from_bits(self.relaxation_lateral_bits[index].load(Ordering::Relaxed))
-                .clamp(0.0, 1.0);
-        let circle_long = (FRICTION_CIRCLE_FLOOR
-            + (1.0 - FRICTION_CIRCLE_FLOOR) * tyres.longitudinal_share(lateral_demand))
-            * relaxation_long;
-        let circle_lateral = (FRICTION_CIRCLE_FLOOR
-            + (1.0 - FRICTION_CIRCLE_FLOOR) * tyres.lateral_share(longitudinal_demand))
-            * relaxation_lateral;
-
-        // Load sensitivity: the tyre raises less friction per newton the
-        // heavier it is loaded. Jolt hands the solver's suspension impulse, so
-        // the load is available right here.
-        let load_n = input.suspension_impulse / input.delta_time.max(1.0e-6);
-        let load_long = tyres.load_friction_multiplier(load_n, true);
-        let load_lateral = tyres.load_friction_multiplier(load_n, false);
-
-        let scale =
-            (self.tyre_peak_friction * environmental * groove * tyre_window).clamp(0.0, 8.0);
-        let base = input.default_friction();
-        TireFriction {
-            longitudinal: base.longitudinal * scale * circle_long * load_long,
-            lateral: base.lateral * scale * circle_lateral * load_lateral,
-        }
-    }
-}
-
 /// Internal vehicle state owned by the world.
 pub(crate) struct VehicleRuntime {
     pub(crate) handle: VehicleHandle,
@@ -690,127 +486,6 @@ pub(crate) fn steer_lock_deg(spec: &VehicleSpec, tuning: &VehicleTuning) -> f32 
         lock.clamp(5.0, 60.0)
     } else {
         30.0
-    }
-}
-
-/// Slip ratio the anti-lock brake controller aims for.
-const ABS_SLIP_TARGET: f32 = 0.14;
-/// Slip ratio below which the ABS hands brake pressure back.
-const ABS_SLIP_RELEASE: f32 = 0.08;
-/// Lowest fraction of the requested brake the ABS ever applies.
-///
-/// 必须低到能咬住「低载荷轮」：Jolt 的刹车是整车一个标量，压弯内侧轮在
-/// 坡面/重量转移下法向载荷可能只剩几百牛，其抱死扭矩（μ·N·r）远低于
-/// 全车刹车的 25%——旧下限 0.25 在数学上保证该轮永久锁死（实测 horseshoe
-/// 进弯左前轮 slip=-1 持续 1 s 以上，车滚上对角两轮后撞墙）。下限 2% 让
-/// 比例控制器真正能收敛到目标滑移率。
-const ABS_FACTOR_MIN: f32 = 0.02;
-/// Highest fraction of the requested brake the ABS applies.
-const ABS_FACTOR_MAX: f32 = 1.0;
-/// Rate at which the ABS hands brake pressure back after a release, per
-/// second. Cut fast, recover slowly: an instant return re-locks the wheel
-/// within one slip build-up (~0.2 s) and turns the controller into a hard
-/// bang-bang on the raw pedal.
-const ABS_RECOVERY_PER_S: f32 = 1.5;
-/// The physics step the ABS recovery rate is integrated on (`World`'s fixed
-/// step; `World::step` only ever calls `step_exact` with this).
-const ABS_STEP_DT_S: f32 = 1.0 / 240.0;
-/// Slip ratio the traction controller aims for.
-///
-/// 必须低于 Jolt 自己的升挡门槛：`WheeledVehicleController` 在任何驱动轮
-/// `mLongitudinalSlip > 0.1` 时禁止升挡（can_shift_up）。若 TC 把滑移率
-/// 压在 0.12 附近抖动，全油门起步阶段升挡会被永久封锁——车只能卡在
-/// 1 挡、rpm 顶限制器。目标 0.08 给门槛留出抖动余量。
-const TC_SLIP_TARGET: f32 = 0.08;
-/// Lowest fraction of the requested throttle the TC ever applies.
-///
-/// 必须允许到接近 0：引擎惯性很小（AC `INERTIA=0.012`），两成油门就足以把
-/// 引擎钉在限制器上，粘性离合便持续把能量灌进烧胎——滑移率永远压不下来，
-/// Jolt 的升挡门槛（驱动轮 slip > 0.1 禁止升挡）也永远打不开。真牵引力
-/// 控制断油就是完全切断，让引擎转速掉回轮速，滑移才能收敛。
-const TC_MIN_FACTOR: f32 = 0.0;
-
-/// Apply the closed-loop brake and traction controllers to this step's input.
-///
-/// Both are the car's own systems, not race rules: they watch the wheel slip
-/// they actually produced last step and release brake pressure or cut torque
-/// before a wheel locks or spins up. Jolt offers one brake input for the whole
-/// car, so the ABS scales that input instead of pulsing a single wheel; the
-/// effect on the wheel slip is the same.
-///
-/// `abs_factor` is the ABS modulation kept between steps (`0..=1`): pressure
-/// cuts instantly when any touching wheel over-shoots the slip target and
-/// returns at a limited rate once the slip has clearly fallen. Without the
-/// memory the controller snaps back to the full pedal the moment slip dips
-/// and immediately re-locks the wheel.
-fn apply_driver_aids(
-    spec: &VehicleSpec,
-    input: &mut DriveInput,
-    snapshot: &VehicleSnapshot,
-    abs_factor: &mut f32,
-) {
-    // 滑移率以地面速度为分母，静止或爬行时数值虚高（轮子没转就是"满滑移"）。
-    // 低速下 ABS/TC 的判定没有意义：刹停时车轮抱死是正常的，不能因此松刹车。
-    if snapshot.speed_mps < 2.0 {
-        input.abs = false;
-        input.tc = false;
-    }
-    if input.abs && input.brake > 1.0e-3 {
-        // 没有着地轮 = 没有测量（三轮着地弹跳/腾空），此刻压力既不加深也
-        // 不回收，保持现状——否则"无测量"会被当成"滑移率 0"而回压。
-        if let Some(worst) = worst_measured_slip(spec, snapshot, false) {
-            if worst > ABS_SLIP_TARGET {
-                // 立即减压：减压量正比于超出目标滑移率的程度。
-                *abs_factor = (ABS_SLIP_TARGET / worst).clamp(ABS_FACTOR_MIN, ABS_FACTOR_MAX);
-            } else if worst < ABS_SLIP_RELEASE {
-                // 滑移率明确回落才回压，且回压限速——切得快、回得慢。
-                *abs_factor =
-                    (*abs_factor + ABS_RECOVERY_PER_S * ABS_STEP_DT_S).min(ABS_FACTOR_MAX);
-            }
-            // 目标滑移率附近的死区（target..release 之间）保持当前压力，
-            // 既不加深也不回收，避免在目标附近来回打摆。
-            input.brake *= *abs_factor;
-        }
-    } else {
-        *abs_factor = ABS_FACTOR_MAX;
-    }
-    if input.tc && input.throttle > 1.0e-3 {
-        if let Some(worst) = worst_measured_slip(spec, snapshot, true) {
-            if worst > TC_SLIP_TARGET {
-                let factor = (TC_SLIP_TARGET / worst).clamp(TC_MIN_FACTOR, 1.0);
-                input.throttle *= factor;
-            }
-        }
-    }
-}
-
-/// Worst absolute slip ratio of the wheels that are touching the ground,
-/// with load. `None` when no wheel offers a measurement, so the controllers
-/// can tell "zero slip" from "nothing measured".
-fn worst_measured_slip(
-    spec: &VehicleSpec,
-    snapshot: &VehicleSnapshot,
-    driven_only: bool,
-) -> Option<f32> {
-    let mut worst = 0.0f32;
-    let mut measured = false;
-    for (index, wheel) in snapshot.wheels.iter().enumerate() {
-        if driven_only && !spec.wheels[index].driven {
-            continue;
-        }
-        if !wheel.contact || wheel.load_n <= 0.0 {
-            continue;
-        }
-        measured = true;
-        worst = worst.max(wheel.slip_ratio.abs());
-    }
-    if !measured {
-        return None;
-    }
-    if worst.is_finite() {
-        Some(worst)
-    } else {
-        Some(0.0)
     }
 }
 
@@ -1977,21 +1652,53 @@ impl VehicleRuntime {
                 * step
                 * 34.0e6;
             let heat = fuel_j * engine.thermal.heat_share;
-            let cooling = (engine.thermal.cooling_per_s
-                + (speed_mps.abs() / 60.0).clamp(0.0, 3.0) * 0.05)
-                * step;
-            let ambient = self.air_temperature_c();
+            // 冷却回路按「当前负荷的产热速率」定标，而不是用一个固定的
+            // 环境温度插值率。旧值（0.02/s + 车速项）散热量大于中负荷产热量，
+            // AI 常用的 0.4–0.6 油门就把冷却液一路拽回环境温度，发动机全程
+            // 只有 55% 功率、圈速慢 20%+；全油门时又散不掉，一路热到 250 °C
+            // 钳位并触发 45% 热保护。
+            //
+            // 正确行为（也是真车的行为）：
+            //   * 低于工作温度 → 节温器关闭，不散热，冷却液爬到工作温度；
+            //   * 高于工作温度 → 风量随超出量打开，散热速率正比于产热速率，
+            //     于是任何负荷下的平衡点都落在工作温度附近，而不是环境温度。
             let capacity = engine.thermal.heat_capacity_j_per_k.max(1.0);
-            self.coolant_c = (self.coolant_c
-                + (heat / capacity) * (1.0 - cooling.min(0.9))
-                + ambient * cooling.min(0.9))
-            .clamp(ambient, 250.0);
+            let ambient = self.air_temperature_c();
+            let optimal = if engine.thermal.optimal_c.is_finite() {
+                engine.thermal.optimal_c
+            } else {
+                90.0
+            };
+            let window = engine.thermal.window_c.max(1.0);
+            // 上一步温升是「本步 ΔT」，散热速率要的是 K/s，必须除掉步长。
+            // 之前直接拿本步 ΔT 当速率用，散热项又乘了一次 step，量纲上小了一
+            // 个 step（1/600）——节温器开了也散不掉，冷却液一路冲到 250 °C
+            // 钳位、触发热保护掉 45% 功率，整圈只有 55% 动力。
+            let heat_per_step = (heat / capacity).max(0.0);
+            // 产热速率（K/s）只用来判断「发动机是否在出力」。
+            let heat_rate = heat_per_step / step.max(1.0e-6);
+            let _ = heat_rate;
+            let gain = (1.0 - (-THERMOSTAT_RATE_PER_S * step).exp()).clamp(0.0, 1.0);
+            let air_gain = (1.0 - (-ENGINE_COOLING_RATE_PER_S * step).exp()).clamp(0.0, 1.0);
+            // 有负荷：向设定点松弛；收油：向环境温度冷却（发动机会凉下来）。
+            let holding = heat_per_step > 1.0e-9;
+            let target = if holding {
+                optimal + 0.25 * window
+            } else {
+                ambient
+            };
+            let rate_gain = if holding { gain } else { air_gain };
+            self.coolant_c =
+                (self.coolant_c + (target - self.coolant_c) * rate_gain).clamp(ambient, 250.0);
             // Oil lags the coolant: it is further from the combustion heat and
             // has its own path to ambient.
-            self.oil_c = (self.oil_c
-                + (heat / (capacity * 2.0)) * (1.0 - cooling.min(0.9))
-                + ambient * cooling.min(0.9))
-            .clamp(ambient, 250.0);
+            let oil_target = if holding {
+                optimal + 0.15 * window
+            } else {
+                ambient
+            };
+            let oil_rate = (1.0 - (-(THERMOSTAT_RATE_PER_S * 0.4) * step).exp()).clamp(0.0, 1.0);
+            self.oil_c = (self.oil_c + (oil_target - self.oil_c) * oil_rate).clamp(ambient, 250.0);
         }
 
         // Tyre heat and wear come from the slip energy in the contact patch:
@@ -2063,8 +1770,8 @@ impl VehicleRuntime {
             self.water_film_mm[index] = (self.water_film_mm[index]
                 + (target_film_mm - self.water_film_mm[index]) * approach)
                 .clamp(0.0, 200.0);
-            self.grip.water_film_bits[index]
-                .store(self.water_film_mm[index].to_bits(), Ordering::Relaxed);
+            self.grip
+                .publish_water_film(index, self.water_film_mm[index]);
             // Water carries tyre heat away, which is the main reason a wet
             // lap does not overheat the tyres: a film of a few millimetres
             // raises the convective loss by an order of magnitude over air. It
@@ -2099,7 +1806,7 @@ impl VehicleRuntime {
             let multiplier = (self.spec.tyres.grip_multiplier(temperature, pressure, wear)
                 - 0.1 * grain.min(1.0))
             .clamp(0.5, 1.0);
-            self.grip.tyre_bits[index].store(multiplier.to_bits(), Ordering::Relaxed);
+            self.grip.publish_tyre_window(index, multiplier);
         }
 
         // Tyre thermal, pressure and wear live in the same loop; the flat-spot
@@ -2133,11 +1840,11 @@ impl VehicleRuntime {
             self.flat_spot_j[index] = self.flat_spot_j[index].min(flat_spot_capacity * 4.0);
             let fraction = (self.flat_spot_j[index] / flat_spot_capacity).clamp(0.0, 1.0);
             // Fold the flat spot into the already published tyre grip.
-            let mut multiplier = f32::from_bits(self.grip.tyre_bits[index].load(Ordering::Relaxed))
-                * spec.tyres.flat_spot_grip_multiplier(fraction);
-            // A tyre only grips at the camber it was designed for.
-            multiplier *= spec.tyres.camber_grip_multiplier(self.camber_rad[index]);
-            self.grip.tyre_bits[index].store(multiplier.to_bits(), Ordering::Relaxed);
+            // A tyre only grips at the camber it was designed for, so both
+            // factors scale the window that was already published above.
+            let fold = spec.tyres.flat_spot_grip_multiplier(fraction)
+                * spec.tyres.camber_grip_multiplier(self.camber_rad[index]);
+            self.grip.scale_tyre_window(index, fold);
 
             // Relaxation length: the force the tyre makes is proportional to
             // the slip it has *built up*, not the slip it sees this instant.
@@ -2164,14 +1871,9 @@ impl VehicleRuntime {
                 let lateral = spec
                     .tyres
                     .relaxation_multiplier(wheel.slip_angle, self.relaxed_lateral_slip[index]);
-                self.grip.relaxation_longitudinal_bits[index]
-                    .store(longitudinal.to_bits(), Ordering::Relaxed);
-                self.grip.relaxation_lateral_bits[index]
-                    .store(lateral.to_bits(), Ordering::Relaxed);
+                self.grip.publish_relaxation(index, longitudinal, lateral);
             } else {
-                self.grip.relaxation_longitudinal_bits[index]
-                    .store(1.0f32.to_bits(), Ordering::Relaxed);
-                self.grip.relaxation_lateral_bits[index].store(1.0f32.to_bits(), Ordering::Relaxed);
+                self.grip.publish_relaxation(index, 1.0, 1.0);
             }
         }
 
@@ -2203,9 +1905,9 @@ impl VehicleRuntime {
         for (index, wheel) in self.snapshot.wheels.iter().enumerate() {
             if let Some(map) = groove.as_deref() {
                 let multiplier = map.grip_at(wheel.contact_point);
-                self.grip.groove_bits[index].store(multiplier.to_bits(), Ordering::Relaxed);
+                self.grip.publish_groove(index, multiplier);
             } else {
-                self.grip.groove_bits[index].store(1.0f32.to_bits(), Ordering::Relaxed);
+                self.grip.publish_groove(index, 1.0);
                 continue;
             }
             let Some(map) = groove.as_deref_mut() else {
@@ -2443,6 +2145,41 @@ impl VehicleRuntime {
         self.water_film_mm = [0.0; 4];
     }
 
+    /// 把车放到「比赛温度」：发动机/机油到工作温度，轮胎到最佳抓地温度，
+    /// 刹车片到最佳效率温度。
+    ///
+    /// 这是所有商业竞速游戏对 AI 的默认状态——发车格上的 AI 从来不是冷车：
+    /// 它前面已经跑过暖胎圈。实测不暖胎的代价极大：冷车 ECU 限扭把 AI 圈速
+    /// 拖慢 20% 以上（这台 F2008 全程冷机只有 55% 功率、冷胎抓地也掉一档），
+    /// 而且 Jolt 的变速箱在冷胎高滑移下拒绝升挡。所以「AI 圈速」「比赛起步」
+    /// 这类语义都该从这里出发；要建模暖胎过程就让他自己跑几分钟。
+    pub(crate) fn warm_up(&mut self) {
+        let optimal = self.spec.engine.thermal.optimal_c;
+        self.coolant_c = if optimal.is_finite() && optimal > 0.0 {
+            optimal
+        } else {
+            self.coolant_c
+        };
+        self.oil_c = self.coolant_c;
+        let tyre = self.spec.tyres.thermal.optimal_c;
+        let tyre = if tyre.is_finite() && tyre > 0.0 {
+            tyre
+        } else {
+            self.road_temperature_c()
+        };
+        self.tyre_temperatures_c = [tyre; 4];
+        self.tyre_surface_temperatures_c = [tyre; 4];
+        self.tyre_core_temperatures_c = [tyre; 4];
+        let disc = self.spec.brakes.optimal_c;
+        let disc = if disc.is_finite() && disc > 0.0 {
+            disc
+        } else {
+            300.0
+        };
+        self.brake_temperatures_c = [disc; 4];
+        self.brake_core_temperatures_c = [disc * 0.7; 4];
+    }
+
     /// Remove this vehicle's constraint and chassis body from the world.
     pub(crate) fn remove(self, physics: &mut PhysicsWorld) -> WorldResult<()> {
         physics.remove_vehicle(self.vehicle)?;
@@ -2490,521 +2227,16 @@ impl VehicleRuntime {
     }
 }
 
-fn normalized_orientation(q: Quat) -> Quat {
-    if q.is_finite() && q.length_squared() > 1.0e-8 {
-        q.normalize()
-    } else {
-        Quat::IDENTITY
-    }
-}
-
-fn validate_spec(spec: &VehicleSpec) -> WorldResult<()> {
-    if !(spec.mass_kg.is_finite() && spec.mass_kg >= 1.0) {
-        return Err(WorldError::InvalidVehicle(
-            "mass_kg must be finite and at least 1 kg".to_owned(),
-        ));
-    }
-    if !(spec.cg_height_m.is_finite() && spec.cg_height_m > 0.05) {
-        return Err(WorldError::InvalidVehicle(
-            "cg_height_m must be finite and above 0.05 m".to_owned(),
-        ));
-    }
-    if !(spec.wheelbase_m.is_finite() && spec.wheelbase_m > 0.1) {
-        return Err(WorldError::InvalidVehicle(
-            "wheelbase_m must be finite and above 0.1 m".to_owned(),
-        ));
-    }
-    for wheel in &spec.wheels {
-        if !wheel.position.is_finite() {
-            return Err(WorldError::InvalidVehicle(
-                "wheel positions must be finite".to_owned(),
-            ));
-        }
-        if !(wheel.radius_m.is_finite() && wheel.radius_m > 0.02) {
-            return Err(WorldError::InvalidVehicle(
-                "wheel radius must be finite and above 0.02 m".to_owned(),
-            ));
-        }
-        if !(wheel.width_m.is_finite() && wheel.width_m > 0.0) {
-            return Err(WorldError::InvalidVehicle(
-                "wheel width must be finite and positive".to_owned(),
-            ));
-        }
-        let suspension = &wheel.suspension;
-        if !(suspension.spring_rate_n_per_m.is_finite()
-            && suspension.spring_rate_n_per_m > 0.0
-            && suspension.damper_bump_ns_per_m.is_finite()
-            && suspension.damper_bump_ns_per_m >= 0.0
-            && suspension.damper_rebound_ns_per_m.is_finite()
-            && suspension.damper_rebound_ns_per_m >= 0.0
-            && suspension.travel_m.is_finite()
-            && suspension.travel_m > 0.0
-            && suspension.anti_roll_n_per_m.is_finite()
-            && suspension.anti_roll_n_per_m >= 0.0)
-        {
-            return Err(WorldError::InvalidVehicle(
-                "suspension rates, travel and anti-roll must be finite and non-negative".to_owned(),
-            ));
-        }
-    }
-    if !(spec.tyres.peak_friction.is_finite() && spec.tyres.peak_friction >= 0.0) {
-        return Err(WorldError::InvalidVehicle(
-            "tyre peak friction must be finite and non-negative".to_owned(),
-        ));
-    }
-    if !(spec.engine.idle_rpm.is_finite()
-        && spec.engine.idle_rpm > 0.0
-        && spec.engine.redline_rpm.is_finite()
-        && spec.engine.redline_rpm > spec.engine.idle_rpm
-        && spec.engine.peak_torque_nm.is_finite()
-        && spec.engine.peak_torque_nm > 0.0
-        && spec.engine.final_drive.is_finite()
-        && spec.engine.final_drive > 0.0)
-    {
-        return Err(WorldError::InvalidVehicle(
-            "engine rpm, peak torque and final drive must be finite and positive".to_owned(),
-        ));
-    }
-    if !(spec.drivetrain.efficiency.is_finite() && spec.drivetrain.efficiency > 0.0) {
-        return Err(WorldError::InvalidVehicle(
-            "drivetrain efficiency must be finite and positive".to_owned(),
-        ));
-    }
-    if !(spec.frontal_area_m2.is_finite()
-        && spec.frontal_area_m2 >= 0.0
-        && spec.drag_coefficient.is_finite()
-        && spec.drag_coefficient >= 0.0)
-    {
-        return Err(WorldError::InvalidVehicle(
-            "aero area and drag coefficient must be finite and non-negative".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn chassis_half_extents(spec: &VehicleSpec) -> (f32, f32, f32) {
-    spec.chassis_half_extents()
-}
-
-/// Vertical rate of one tyre at its cold inflation, N/m (`0` = not authored).
-///
-/// The geometry and the wheel settings are both built once, so the cold
-/// pressure is what they use; the warm-rate variation is a runtime effect the
-/// immutable Jolt settings cannot follow. AC quotes the rate per axle; the
-/// shared tyre model keeps the axle average, so every wheel sees the same
-/// number.
-fn wheel_vertical_rate(spec: &VehicleSpec) -> f32 {
-    spec.tyres
-        .vertical_rate_n_per_m(spec.tyres.pressure_at(spec.brakes.ambient_c))
-        .max(0.0)
-}
-
-/// Suspension geometry derived from the spec and tuning.
-///
-/// Both [`vehicle_settings`] and the ride-height fade read the same numbers so
-/// the fade always agrees with the suspension Jolt actually builds.
-#[derive(Clone, Copy, Debug)]
-struct WheelGeometry {
-    /// Suspension length with no load, metres.
-    rest_length: f32,
-    /// Longest suspension length available, metres.
-    max_length: f32,
-    /// Shortest suspension length available, metres.
-    min_length: f32,
-    /// Wheel mount position relative to the centre of mass, physics frame.
-    mount: Vec3,
-    /// Wheel radius, metres.
-    radius: f32,
-}
-
-fn wheel_geometries(spec: &VehicleSpec) -> [WheelGeometry; 4] {
-    let cg = spec.cg_height_m;
-    let spring_force_scale = spec.mass_kg * 9.81 * 0.25;
-    std::array::from_fn(|index| {
-        let wheel_spec = &spec.wheels[index];
-        let radius = wheel_spec.radius_m.max(0.02);
-        let travel = wheel_spec.suspension.travel_m.clamp(0.02, 0.35);
-        // The wheel is connected to the ground through the suspension spring
-        // *and* the tyre's own vertical stiffness, so the chassis sees the
-        // series combination. Without an authored tyre rate this is just the
-        // suspension spring, which is what Jolt models on its own.
-        let spring = series_spring_rate(
-            wheel_spec.suspension.spring_rate_n_per_m.max(1_000.0),
-            wheel_vertical_rate(spec),
-        );
-        let static_compression = (spring_force_scale / spring).clamp(0.001, travel * 0.45);
-        let max_length = (static_compression + travel * 0.5).max(0.02);
-        let min_length = (max_length - travel - 0.001)
-            .max(0.005)
-            .min(max_length - 0.001);
-        let rest_length = max_length - static_compression;
-        WheelGeometry {
-            rest_length,
-            max_length,
-            min_length,
-            mount: Vec3::new(
-                wheel_spec.position.x,
-                radius + rest_length - cg,
-                wheel_spec.position.z,
-            ),
-            radius,
-        }
-    })
-}
-
-/// AC wing mount position, in the physics frame.
-///
-/// AC authors positions as `(+X left, +Y up, +Z forward)`; the physics frame
-/// keeps X and Y and flips Z, because physics forward is `-Z`.
-fn wing_local_position(wing: &WingSpec) -> Vec3 {
-    Vec3::new(wing.position.x, wing.position.y, -wing.position.z)
-}
-
-/// Maximum crank torque the Jolt engine is built with.
-///
-/// Jolt takes one maximum torque and a normalized curve. The engine is built at
-/// the fully boosted torque, then the runtime scales the throttle by how much
-/// boost is actually available, so at zero boost the car makes its naturally
-/// aspirated `power.lut` torque. The boost torque, the engine tuning and the
-/// driveline efficiency all live in this number.
-fn engine_max_torque_nm(spec: &VehicleSpec, tuning: &VehicleTuning) -> f32 {
-    let efficiency = spec.drivetrain.efficiency.clamp(0.3, 1.0);
-    let turbo_scale = spec.engine.turbo.max_torque_multiplier().max(1.0);
-    (spec.engine.peak_torque_nm * tuning.engine_scale * efficiency * turbo_scale)
-        .clamp(1.0, 5_000.0)
-}
-
-fn vehicle_settings(
-    spec: &VehicleSpec,
-    tuning: &VehicleTuning,
-) -> WorldResult<WheeledVehicleSettings> {
-    let brake_scale = tuning.brake_scale.clamp(0.0, 4.0);
-    let geometries = wheel_geometries(spec);
-
-    // Same tyre shape for all four corners: the per-wheel differences (load,
-    // temperature, wear, camber, water film) live in the grip callback chain.
-    let curves = spec.tyres.slip_curves();
-    let mut wheels = Vec::with_capacity(4);
-    for wheel in Wheel::ALL {
-        let wheel_spec = &spec.wheels[wheel.index()];
-        let geometry = geometries[wheel.index()];
-        let radius = geometry.radius;
-        let width = wheel_spec.width_m.max(0.04);
-        let spring = wheel_spec.suspension.spring_rate_n_per_m.max(1_000.0);
-        let damper = (0.5
-            * (wheel_spec.suspension.damper_bump_ns_per_m.max(0.0)
-                + wheel_spec.suspension.damper_rebound_ns_per_m.max(0.0)))
-        .max(100.0);
-        let max_length = geometry.max_length;
-        let min_length = geometry.min_length;
-        let position = p2j(geometry.mount);
-        // Brake torque now comes from `brakes.ini`: a peak torque shared by
-        // the front/rear bias, split across the pair on each axle.
-        let peak = spec.brakes.max_torque_nm.max(0.0) * brake_scale;
-        let front_axle_torque = peak * spec.brakes.front_share.clamp(0.0, 1.0);
-        let brake_torque = if wheel.is_front() {
-            front_axle_torque
-        } else {
-            peak - front_axle_torque
-        };
-
-        let settings = WheelSettings::new(position)
-            .radius(radius)
-            .width(width)
-            .inertia((0.5 * 12.0 * radius * radius).max(0.05))
-            .angular_damping(0.05)
-            // The car's own lock wins unless the tuning overrides it, so an AC
-            // car steers by the steering ratio it was authored with.
-            .max_steer_angle(if wheel_spec.steerable {
-                steer_lock_deg(spec, tuning).to_radians()
-            } else {
-                0.0
-            })
-            .max_brake_torque(brake_torque.max(1.0))
-            // The handbrake only ever acts on the rear; AC can author its own
-            // torque, and without it we keep a share of the brake torque.
-            .max_hand_brake_torque(if wheel.is_front() {
-                0.0
-            } else if spec.gearbox.handbrake_torque_nm > 0.0 {
-                spec.gearbox.handbrake_torque_nm / 2.0
-            } else {
-                brake_torque * 0.7
-            })
-            .suspension_min_length(min_length)
-            .suspension_max_length(max_length)
-            .suspension_preload_length(0.0)
-            .suspension_spring(SpringSettings::StiffnessAndDamping {
-                stiffness: spring,
-                damping: damper,
-            })
-            // The callback scales these curves by tyre peak × surface × weather ×
-            // load × camber × …, so they only carry the tyre's own shape: where it
-            // peaks and how quickly it gives the grip back. That comes from the
-            // car's own data as a Magic Formula fit (see `vettura_physics`'s
-            // `tyre_model`); both tables peak at exactly 1.0.
-            .longitudinal_friction(curves.0.clone())
-            .lateral_friction(curves.1.clone());
-
-        wheels.push(settings);
-    }
-
-    let final_drive = spec.engine.final_drive.max(0.5);
-    // AC authors the reverse ratio in `GEARS GEAR_R`; the default keeps the
-    // long-standing value so hand-authored cars behave as before.
-    let reverse_ratio = if spec.gearbox.reverse_ratio > 0.0 {
-        spec.gearbox.reverse_ratio.clamp(0.5, 8.0)
-    } else {
-        3.2
-    };
-    let differentials = match spec.drivetrain.layout {
-        DrivetrainLayout::Rwd => vec![
-            VehicleDifferentialSettings::new(Some(2), Some(3))
-                .differential_ratio(final_drive)
-                .engine_torque_ratio(1.0)
-                .limited_slip_ratio(1.4),
-        ],
-        DrivetrainLayout::Fwd => vec![
-            VehicleDifferentialSettings::new(Some(0), Some(1))
-                .differential_ratio(final_drive)
-                .engine_torque_ratio(1.0)
-                .limited_slip_ratio(1.4),
-        ],
-        DrivetrainLayout::Awd => vec![
-            VehicleDifferentialSettings::new(Some(0), Some(1))
-                .differential_ratio(final_drive)
-                .engine_torque_ratio(0.42)
-                .limited_slip_ratio(1.4),
-            VehicleDifferentialSettings::new(Some(2), Some(3))
-                .differential_ratio(final_drive)
-                .engine_torque_ratio(0.58)
-                .limited_slip_ratio(1.4),
-        ],
-    };
-
-    let max_rpm = spec.engine.redline_rpm.clamp(2_000.0, 30_000.0);
-    let min_rpm = spec.engine.idle_rpm.clamp(300.0, max_rpm * 0.5);
-    let shift_up_rpm = (max_rpm * 0.94).max(min_rpm + 500.0).min(max_rpm - 1.0);
-    let shift_down_rpm = (max_rpm * 0.42)
-        .max(min_rpm * 0.8)
-        .min(shift_up_rpm - 1.0)
-        .max(1.0);
-
-    let engine = VehicleEngineSettings::default()
-        .max_torque(engine_max_torque_nm(spec, tuning))
-        .min_rpm(min_rpm)
-        .max_rpm(max_rpm)
-        .normalized_torque(spec.engine.normalized_torque_curve(max_rpm))
-        .inertia(spec.gearbox.inertia.clamp(0.005, 2.0))
-        .angular_damping(0.1);
-
-    let mut gear_ratios: Vec<f32> = spec
-        .engine
-        .gear_ratios
-        .iter()
-        .copied()
-        .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
-        .collect();
-    if gear_ratios.is_empty() {
-        gear_ratios = vec![3.2, 2.1, 1.6, 1.3, 1.1, 0.95];
-    }
-    let transmission = VehicleTransmissionSettings::default()
-        .gear_ratios(gear_ratios)
-        .reverse_gear_ratios(vec![-reverse_ratio])
-        // `drivetrain.ini` reports shift and clutch times in milliseconds;
-        // the clutch strength comes from the clutch torque capacity.
-        .switch_time((spec.gearbox.switch_time * 0.001).clamp(0.01, 0.5))
-        .clutch_release_time((spec.gearbox.clutch_release_time * 0.001).clamp(0.01, 1.0))
-        .switch_latency(0.1)
-        .shift_up_rpm(shift_up_rpm)
-        .shift_down_rpm(shift_down_rpm)
-        .clutch_strength((spec.gearbox.clutch_max_torque_nm.max(1.0) / 50.0).clamp(1.0, 200.0));
-
-    let mut anti_roll_bars = Vec::new();
-    let front_arb = spec.wheels[Wheel::FrontLeft.index()]
-        .suspension
-        .anti_roll_n_per_m
-        .max(0.0);
-    let rear_arb = spec.wheels[Wheel::RearLeft.index()]
-        .suspension
-        .anti_roll_n_per_m
-        .max(0.0);
-    if front_arb > 0.0 {
-        anti_roll_bars.push(VehicleAntiRollBar::new(0, 1).stiffness(front_arb));
-    }
-    if rear_arb > 0.0 {
-        anti_roll_bars.push(VehicleAntiRollBar::new(2, 3).stiffness(rear_arb));
-    }
-
-    let average_radius =
-        spec.wheels.iter().map(|wheel| wheel.radius_m).sum::<f32>() / spec.wheels.len() as f32;
-    let tester_radius = (average_radius * 0.5).clamp(0.03, 0.30);
-    // Query as a moving body so static ground/walls (NON_MOVING) are hit;
-    // NON_MOVING-vs-NON_MOVING is filtered out by the default layer table.
-    let collision_tester = VehicleCollisionTester::cast_sphere(ObjectLayer::MOVING, tester_radius);
-
-    // AC's differential lock is a fraction: `1.0` fully locked, `0` open.
-    // Jolt expresses it as the fastest/slowest speed ratio at which torque
-    // still gets put into the slower wheel, so an open diff needs a large
-    // number and a locked one needs 1.0. Jolt has one ratio, so power and
-    // coast are averaged; the preload stays in the spec for callers that
-    // model it separately.
-    let lock = 0.5
-        * (spec.drivetrain.diff.power_lock.clamp(0.01, 1.0)
-            + spec.drivetrain.diff.coast_lock.clamp(0.01, 1.0));
-    // Jolt needs a ratio strictly above 1: a fully locked AC diff becomes just
-    // over 1, and an open one becomes a very large number.
-    let lock_ratio = (1.0 / lock).clamp(1.0001, f32::MAX);
-
-    Ok(
-        WheeledVehicleSettings::new(wheels, differentials, collision_tester)
-            .engine(engine)
-            .transmission(transmission)
-            .anti_roll_bars(anti_roll_bars)
-            .differential_limited_slip_ratio(lock_ratio)
-            .max_pitch_roll_angle(70.0f32.to_radians()),
-    )
-}
-
-const TAG_VEHICLE: u64 = 1 << 32;
-
-fn tag_vehicle(handle: VehicleHandle) -> u64 {
-    TAG_VEHICLE | (handle.0 & 0xffff_ffff)
-}
-
-/// One step of the tyre thermal model, °C: `(surface, patch, core)`.
-///
-/// The road's energy enters the friction surface and then walks down the three
-/// layers with AC's own rates (`SURFACE_TRANSFER` into the patch,
-/// `PATCH_TRANSFER` into the core). That is what makes a tyre take a lap or two
-/// to come up to temperature: the grip curve reads the core, which lags the
-/// surface badly. `CORE_TRANSFER`/`INTERNAL_CORE_TRANSFER` describe conduction
-/// inside the rotor's own bulk, which this model does not split, so they are
-/// not needed. Cars that author no layers keep the single-mass behaviour, where
-/// all three temperatures are the same carcass.
-struct TyreTemperatures {
-    surface: f32,
-    patch: f32,
-    core: f32,
-}
-
-/// Advance the three tyre temperatures by `heat_j` over `step` seconds at
-/// `speed_mps` towards `ambient_c`.
-fn advance_tyre_temperatures(
-    spec: &TyreThermalSpec,
-    state: TyreTemperatures,
-    heat_j: f32,
-    speed_mps: f32,
-    ambient_c: f32,
-    step: f32,
-) -> TyreTemperatures {
-    let cooling = ((spec.cooling_per_s + (speed_mps.abs() / 60.0).clamp(0.0, 3.0) * 0.06) * step)
-        .clamp(0.0, 0.9);
-    if !spec.has_layers() {
-        // Single mass: everything happens in the carcass, as before.
-        let next = state.core + (heat_j / spec.heat_capacity_j_per_k.max(1.0)) * (1.0 - cooling);
-        let target = ambient_c;
-        let core = (next + target * cooling).clamp(target, 1_400.0);
-        return TyreTemperatures {
-            surface: core,
-            patch: core,
-            core,
-        };
-    }
-
-    let surface_capacity = spec.surface_capacity_j_per_k.max(1.0);
-    let patch_capacity = spec.patch_capacity_j_per_k.max(1.0);
-    let core_capacity = spec.heat_capacity_j_per_k.max(1.0);
-    let ambient = ambient_c;
-    let mut surface = (state.surface + heat_j / surface_capacity).clamp(ambient, 1_400.0);
-    let mut patch = state.patch;
-    let mut core = state.core;
-
-    // Surface to air: the fastest channel, and it grows with the air flowing
-    // over the tread.
-    surface -= (surface - ambient) * cooling;
-
-    // Down the chain. Each transfer is a fraction of the temperature
-    // difference per second, so it is stable at any step size.
-    let to_patch = spec.surface_transfer_per_s.max(0.0) * step;
-    if to_patch > 0.0 {
-        let flow = (surface - patch).clamp(-1.0e3, 1.0e3);
-        surface -= flow * to_patch;
-        patch += flow * to_patch * (surface_capacity / patch_capacity);
-    }
-    let to_core = spec.patch_transfer_per_s.max(0.0) * step;
-    if to_core > 0.0 {
-        let flow = (patch - core).clamp(-1.0e3, 1.0e3);
-        patch -= flow * to_core;
-        core += flow * to_core * (patch_capacity / core_capacity);
-    }
-
-    TyreTemperatures {
-        surface: surface.clamp(ambient, 1_400.0),
-        patch: patch.clamp(ambient, 1_400.0),
-        core: core.clamp(ambient, 1_400.0),
-    }
-}
-
-/// One step of the brake thermal model, °C.
-///
-/// Returns `(surface, core)` temperatures. The surface is the friction face the
-/// pads see, which is what the efficiency curve is indexed by; the core is the
-/// bulk of the rotor, which soaks heat in slowly and hands it back quickly, so
-/// the pads keep cooking after the pedal is released. `ambient_c` is the air
-/// the disc exchanges with and may be below zero.
-#[allow(clippy::too_many_arguments)]
-fn advance_brake_temperatures(
-    spec: &BrakeSpec,
-    surface_in: f32,
-    core_in: f32,
-    energy_j: f32,
-    speed_mps: f32,
-    ambient_c: f32,
-    step: f32,
-) -> (f32, f32) {
-    let rise = if spec.thermal_mass_j_per_k > 1.0 {
-        (energy_j * spec.heat_per_joule / spec.thermal_mass_j_per_k).max(0.0)
-    } else {
-        0.0
-    };
-    // Cooling: ambient exchange plus the air flowing over the disc.
-    let speed_factor = (speed_mps / 60.0).clamp(0.05, 4.0);
-    let cooling = (spec.cooling_per_s * speed_factor * step).clamp(0.0, 0.95);
-    let difference = surface_in - ambient_c;
-    let drop = difference * cooling;
-    let mut surface = surface_in + rise - drop;
-
-    let mut core = core_in;
-    let surface_capacity = spec.thermal_mass_j_per_k.max(1.0);
-    let core_capacity = spec.core_capacity_j_per_k.max(1.0);
-    if core_capacity > 1.0 {
-        // Heat always flows down the gradient, but AC models the two directions
-        // with different rates, so the conductance depends on which side is
-        // hotter: soaks in slowly, comes back out quickly.
-        let conductance = if surface > core {
-            surface_capacity * spec.core_transfer_in_per_s.max(0.0)
-        } else {
-            core_capacity * spec.core_transfer_out_per_s.max(0.0)
-        };
-        let flow = conductance * (surface - core).clamp(-1.0e4, 1.0e4);
-        surface -= flow * step / surface_capacity;
-        core += flow * step / core_capacity;
-        let air_flow = core_capacity * spec.core_transfer_air_per_s.max(0.0) * (core - ambient_c);
-        core -= air_flow * step / core_capacity;
-    }
-
-    (
-        surface.clamp(ambient_c, 1_400.0),
-        core.clamp(ambient_c, 1_400.0),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::World;
-    use crate::surface::SurfaceMap;
-    use vettura_physics::TyreSpec;
+    use vettura_physics::{BrakeSpec, TyreSpec, TyreThermalSpec};
+    use vettura_track::SurfaceMap;
+
+    #[allow(unused_imports)]
+    use super::aids::TC_SLIP_TARGET;
+    use super::aids::{ABS_FACTOR_MIN, ABS_RECOVERY_PER_S, ABS_SLIP_TARGET, ABS_STEP_DT_S};
 
     #[test]
     fn default_spec_produces_four_wheels_and_a_diff() {

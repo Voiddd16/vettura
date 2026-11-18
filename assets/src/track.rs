@@ -22,18 +22,19 @@ use std::path::{Path, PathBuf};
 use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
 use thiserror::Error;
 use vettura_acdata::ini::Ini;
-use vettura_core::coords::ac_to_godot;
 use vettura_kn5::{Kn5, Node, NodeKind, transform_to_mat4};
 use vettura_physics::Pose;
-use vettura_world::{
-    AiDriver, AiSpline, ColliderTriangle, DEFAULT_GROOVE_CELL_M, GrooveMap, GrooveSettings,
-    LapTimer, MeshSurfaceIndex, SPAWN_CLEARANCE_M, SurfaceId, SurfaceKind, SurfaceMap,
-    SurfaceProperties, TrackObjectId, TrackSection, World, parse_groove_ini, triangle_height,
+use vettura_physics::coords::ac_to_godot;
+use vettura_track::{
+    AiSpline, ColliderTriangle, DEFAULT_GROOVE_CELL_M, GrooveMap, GrooveSettings, MeshSurfaceIndex,
+    SPAWN_CLEARANCE_M, SurfaceId, SurfaceKind, SurfaceMap, SurfaceProperties, TrackSection,
+    parse_groove_ini, triangle_height,
 };
+use vettura_world::{AiDriver, LapTimer, TrackObjectId, World};
 
 /// 赛道加载错误：文件 / INI / KN5 解析，以及底层世界装配。
 #[derive(Debug, Error)]
-pub enum TrackError {
+pub enum TrackLoadError {
     #[error("track i/o error at {path}: {source}")]
     Io {
         path: PathBuf,
@@ -45,10 +46,12 @@ pub enum TrackError {
     Kn5(#[from] vettura_kn5::Error),
     #[error(transparent)]
     World(#[from] vettura_world::WorldError),
+    #[error(transparent)]
+    Data(#[from] vettura_track::TrackError),
 }
 
 /// 赛道加载结果别名。
-pub type TrackResult<T> = std::result::Result<T, TrackError>;
+pub type TrackLoadResult<T> = std::result::Result<T, TrackLoadError>;
 
 /// Horizontal radius of the cylinder used to check spawn clearance, metres.
 pub const SPAWN_CLEARANCE_RADIUS_M: f32 = 2.2;
@@ -138,7 +141,7 @@ pub fn parse_models_ini(text: &str) -> Vec<TrackModelEntry> {
 /// `rotation_deg` is interpreted as an XYZ Euler triple (degrees). The result
 /// conjugates the AC transform by the 180° yaw between the AC and physics
 /// frames, so a KN5 whose vertices were converted with
-/// [`vettura_core::coords::ac_to_godot`] can be transformed by this matrix
+/// [`vettura_physics::coords::ac_to_godot`] can be transformed by this matrix
 /// directly.
 pub fn euler_deg_to_mat4(position: Vec3, rotation_deg: Vec3) -> Mat4 {
     let position = finite_vec3(position);
@@ -530,10 +533,10 @@ impl TrackCollider {
 impl TrackModule {
     /// Load a track directory, using `models.ini` when present or the first
     /// `models_*.ini` (alphabetically) otherwise.
-    pub fn load(root: impl AsRef<Path>) -> TrackResult<Self> {
+    pub fn load(root: impl AsRef<Path>) -> TrackLoadResult<Self> {
         let root = root.as_ref();
         let models_path = find_models_ini(root).ok_or_else(|| {
-            TrackError::Format(format!(
+            TrackLoadError::Format(format!(
                 "no models.ini or models_*.ini in {}",
                 root.display()
             ))
@@ -548,7 +551,7 @@ impl TrackModule {
     }
 
     /// Load a specific layout (`roadcourse` for `models_roadcourse.ini`).
-    pub fn load_layout(root: impl AsRef<Path>, layout: &str) -> TrackResult<Self> {
+    pub fn load_layout(root: impl AsRef<Path>, layout: &str) -> TrackLoadResult<Self> {
         let root = root.as_ref();
         let layout = layout
             .trim()
@@ -561,7 +564,7 @@ impl TrackModule {
         };
         let models_path = root.join(name);
         if !models_path.is_file() {
-            return Err(TrackError::Io {
+            return Err(TrackLoadError::Io {
                 path: models_path,
                 source: std::io::Error::new(
                     std::io::ErrorKind::NotFound,
@@ -577,7 +580,11 @@ impl TrackModule {
         )
     }
 
-    fn load_files(root: &Path, models_path: &Path, layout: Option<String>) -> TrackResult<Self> {
+    fn load_files(
+        root: &Path,
+        models_path: &Path,
+        layout: Option<String>,
+    ) -> TrackLoadResult<Self> {
         // 整条赛道加载挂在同一个 span 下：这条链上的所有事件（含子 crate 的
         // debug/warn）都自动带上 root / layout 上下文，出问题时一眼定位。
         let _span = tracing::info_span!(
@@ -803,17 +810,17 @@ impl TrackModule {
     /// AI data is optional, so a track without the file returns `Ok(None)`.
     /// Parse errors still propagate: a corrupt AI line should be visible to
     /// the caller instead of silently disabling the racing line.
-    pub fn load_fast_lane(&self) -> TrackResult<Option<AiSpline>> {
+    pub fn load_fast_lane(&self) -> TrackLoadResult<Option<AiSpline>> {
         self.fast_lane_path()
             .map(AiSpline::from_path)
             .transpose()
-            .map_err(TrackError::World)
+            .map_err(TrackLoadError::Data)
     }
 
     /// Create a pure-pursuit AI driver for this track's `fast_lane.ai`.
     ///
     /// Returns `Ok(None)` when the track has no AI line.
-    pub fn ai_driver(&self) -> TrackResult<Option<AiDriver>> {
+    pub fn ai_driver(&self) -> TrackLoadResult<Option<AiDriver>> {
         Ok(self.load_fast_lane()?.map(AiDriver::new))
     }
 
@@ -832,15 +839,15 @@ impl TrackModule {
     /// The pit lane uses the same v7 spline format as `fast_lane.ai`, so the
     /// returned [`AiSpline`] drives through [`AiDriver`] and spawns through
     /// [`Self::spawn_poses_on_line`] exactly like the racing line.
-    pub fn load_pit_lane(&self) -> TrackResult<Option<AiSpline>> {
+    pub fn load_pit_lane(&self) -> TrackLoadResult<Option<AiSpline>> {
         self.pit_lane_path()
             .map(AiSpline::from_path)
             .transpose()
-            .map_err(TrackError::World)
+            .map_err(TrackLoadError::Data)
     }
 
     /// A driver that follows the pit lane instead of the racing line.
-    pub fn pit_lane_driver(&self) -> TrackResult<Option<AiDriver>> {
+    pub fn pit_lane_driver(&self) -> TrackLoadResult<Option<AiDriver>> {
         Ok(self.load_pit_lane()?.map(AiDriver::new))
     }
 
@@ -855,7 +862,7 @@ impl TrackModule {
     /// Lap and sector timer for the racing line of this track.
     ///
     /// Returns `Ok(None)` when the track has no `fast_lane.ai`.
-    pub fn lap_timer(&self) -> TrackResult<Option<LapTimer>> {
+    pub fn lap_timer(&self) -> TrackLoadResult<Option<LapTimer>> {
         Ok(self
             .load_fast_lane()?
             .map(|line| LapTimer::new(line, &self.sections)))
@@ -865,7 +872,7 @@ impl TrackModule {
     ///
     /// The pose already uses the physics frame and is lifted by
     /// [`SPAWN_CLEARANCE_M`](vettura_world::SPAWN_CLEARANCE_M) above the line.
-    pub fn start_pose(&self) -> TrackResult<Option<Pose>> {
+    pub fn start_pose(&self) -> TrackLoadResult<Option<Pose>> {
         Ok(self.load_fast_lane()?.and_then(|line| line.start_pose()))
     }
 
@@ -885,7 +892,7 @@ impl TrackModule {
     /// poses with their position lifted by
     /// [`SPAWN_CLEARANCE_M`](vettura_world::SPAWN_CLEARANCE_M). Fewer than `count`
     /// poses may be returned when the available line has no clear slots.
-    pub fn spawn_poses(&self, count: usize, spacing_m: f32) -> TrackResult<Vec<Pose>> {
+    pub fn spawn_poses(&self, count: usize, spacing_m: f32) -> TrackLoadResult<Vec<Pose>> {
         let Some(line) = self.load_fast_lane()? else {
             return Ok(Vec::new());
         };
@@ -1086,7 +1093,7 @@ impl TrackModule {
         Some(GrooveMap::new(vertices, settings, DEFAULT_GROOVE_CELL_M))
     }
 
-    pub fn add_to_world(&self, world: &mut World) -> TrackResult<Option<TrackObjectId>> {
+    pub fn add_to_world(&self, world: &mut World) -> TrackLoadResult<Option<TrackObjectId>> {
         if let Some(groove) = self.groove_map() {
             world.set_groove_map(groove);
         }
@@ -1100,7 +1107,7 @@ impl TrackModule {
         world
             .add_static_mesh(&collider.vertices, &collider.triangles, 1.0, 0.0)
             .map(Some)
-            .map_err(TrackError::World)
+            .map_err(TrackLoadError::World)
     }
 
     /// Convenience: create a world with a safety ground and this track's
@@ -1109,7 +1116,7 @@ impl TrackModule {
     /// The safety ground catches cars that leave the collider. Use
     /// [`Self::create_world_without_ground`] when the track has geometry below
     /// `y = 0` or when a fall should not be silently caught.
-    pub fn create_world(&self) -> TrackResult<World> {
+    pub fn create_world(&self) -> TrackLoadResult<World> {
         let mut world = World::new(self.surface_map.clone())?;
         self.add_to_world(&mut world)?;
         Ok(world)
@@ -1117,7 +1124,7 @@ impl TrackModule {
 
     /// Convenience: create a world whose only static ground is the track
     /// collider.
-    pub fn create_world_without_ground(&self) -> TrackResult<World> {
+    pub fn create_world_without_ground(&self) -> TrackLoadResult<World> {
         let mut world = World::without_ground(self.surface_map.clone())?;
         self.add_to_world(&mut world)?;
         Ok(world)
@@ -1302,8 +1309,8 @@ fn compact_mesh(
     }
 }
 
-fn read_text(path: &Path) -> TrackResult<String> {
-    std::fs::read_to_string(path).map_err(|source| TrackError::Io {
+fn read_text(path: &Path) -> TrackLoadResult<String> {
+    std::fs::read_to_string(path).map_err(|source| TrackLoadError::Io {
         path: path.to_owned(),
         source,
     })

@@ -228,3 +228,83 @@ spatial 侧读屏幕纹理，移动端 `mobile` 渲染器安全。
 - 文档同步：`docs/architecture.md`（crate 图、职责、赛道数据流）、
   `world/README.md`、`assets/README.md`、`AGENTS.md`（仓库地图、测试命令、
   crate 边界规则）。
+
+## 依赖重构：赛道数据拆出 vettura-track（未定版，2026-11-17）
+
+在「赛道加载搬入 assets」之后继续收紧边界：`world` 里混着三层东西——
+赛道/环境纯数据、Jolt 仿真内核、控制律/观察层。这次把**不需要 Jolt** 的
+第一层拆成独立 crate：
+
+- **新 crate `track/`（`vettura-track`）**：`SurfaceMap` / `SurfaceTable` /
+  `MeshSurfaceIndex` / `ColliderTriangle`（`surface.rs`）、`GrooveMap`
+  （`groove.rs`）、`Weather`（`weather.rs`）、`AiSpline` 与点/采样/投影类型
+  （`spline.rs`，原 `world/src/ai.rs` 的解析半边）、`TrackSection`
+  （`section.rs`，原 `world/src/timing.rs`）。
+- **错误类型归位**：新增 `TrackError` / `TrackResult`（`Io` / `Format`），
+  `WorldError::TrackIo/TrackFormat` 删除。AI 线解析搬去 `track` 之后，
+  `world` 再也不产生赛道错误，因此 `WorldError` 直接不再挂 track 变体
+  （不留 `#[from]` 死变体）；`assets` 侧的 `TrackError` 同时改名
+  `TrackLoadError`（与 `vettura_track::TrackError` 区分），并新增
+  `Data(#[from] vettura_track::TrackError)` 承接解析错误。
+- **`world` 保留**：`World`、`VehicleRuntime`、`debris`、`backend`、`frame`
+  （依赖 Jolt 帧）、`AiDriver` 控制律、`LapTimer`、`telemetry`。
+  `world/src/lib.rs` 重导出 `vettura_track` 的全部类型，`assets` / `gdext` /
+  测试的 `vettura_world::SurfaceMap` 这类旧路径依旧可用。
+- **`assets` 依赖调整**：赛道纯数据类型改从 `vettura_track` 取；`World` /
+  `AiDriver` / `LapTimer` / `TrackObjectId` 仍来自 `vettura_world`。
+- **拆分细节**：`AiSpline` 的格式版本公开为 `SPLINE_VERSION`（测试构造
+  合成线不再复制魔数）；`SurfaceMap::table_arc` 由 `pub(crate)` 改 `pub`；
+  `ai.rs` 的 21 个单测按归属拆到两个 crate（spline 7 例、driver 14 例），
+  `world_physics` 的 63 例集成测试不变。
+- **验证**：`cargo test --workspace` 全绿（`vettura-track` 25 例、
+  `vettura-world` 55 例 + 63 例集成）。
+- 文档同步：`track/README.md`（新）、`world/README.md`、`docs/architecture.md`、
+  `README.md`、`AGENTS.md`。
+
+## crate 整合：`vettura-core` 并入 `vettura-physics`（未定版，2026-11-17）
+
+收紧编译期依赖图的下一步：一个整 crate 只有一个函数被真正调用的，不配单独
+
+存在。删除 `vettura-core`（crate 目录已移除）。
+
+- **搬入 `vettura-physics`**：`core/src/coords.rs` → `physics/src/coords.rs`
+  （`ac_to_godot` / `godot_to_ac` / 六个轴常量），`core/src/units.rs` →
+  `physics/src/units.rs`（`GRAVITY = 9.806_65`，原 `units` 里的
+  km/h 换算与单位别名全仓零调用，随 crate 一起删除，不搬死代码）。
+  `physics::coords` / `physics::units` 成为公开模块，`GRAVITY` 重导出。
+- **glam 再导出删除**：`vettura_core::glam` 的唯一意义是避免各 crate 版本漂移，
+  而 workspace 的 `glam` 本来就锁同一版本；各 crate 直接 `use glam::…`。
+- **收益后的依赖图**：`kn5` / `acdata` / `audio` 零内部依赖 → `physics`
+  → `track` → `world` → `assets` → `gdext`。叶子插件比之前少一个，
+  且没有 crate 依赖一个"只提供两个函数"的中间层。
+- `docs/architecture.md`、`physics/README.md`、`README.md`、`AGENTS.md`
+  同步（crate 清单、"共享约定"小节、仓库地图）。
+- **验证**：`cargo test --workspace` 全绿，无新增警告。
+
+## `world/src/vehicle.rs` 按职责拆子模块（未定版，2026-11-17）
+
+不新开 crate——`world` 的模块边界靠目录就能表达清楚，多一个 workspace 成员
+只会让"每个 crate 一个顶层目录"的地图变糊。
+
+- **拆分结果**（原单文件 3690 行）：
+  - `vehicle/mod.rs`（~2590 行）：`VehicleRuntime` 生命周期、每步子系统的
+    推进顺序、快照组装；
+  - `vehicle/constraint.rs`：spec → Jolt `wheeled vehicle` 尺寸换算
+    （悬架几何、刹车力矩分配、变速箱/差速器、整车惯量、合法性校验）；
+  - `vehicle/friction.rs`：逐轮动态摩擦圆（纵横向共享抓地预算 + 随路面与
+    轮胎衰减特性变的全滑移保底）；
+  - `vehicle/grip.rs`：Jolt 轮胎回调的共享输入；
+  - `vehicle/thermal.rs`：三层胎温与刹车盘面/核心温度的纯演化函数；
+  - `vehicle/aids.rs`：ABS / TC 闭环。
+- **拆分原则**：共享状态留在 `mod.rs`，纯函数与纯数据下沉；跨模块访问
+  `pub(crate)` 显式重导出。`grip.rs` 的原子量只暴露
+  `publish_water_film` / `publish_tyre_window` / `scale_tyre_window` /
+  `publish_relaxation` / `publish_groove` 五方法，其它子系统不再直接写位模式。
+- **行为等价性**：拆分前先把原始 3620 行文件存为基准，用符号集合对比核对
+  ——105 个原符号一个没丢，新增只有 5 个 publisher 方法。
+  `world_physics` 63 例集成测试 + `vettura-world` 55 例单测全绿。
+- 踩到并修掉一个自己引入的行为回归：轮胎窗原本是"先绝对值写入、再按平点/
+   camber 比例缩放"，第一版把两步都换成 scale 导致窗口每步累积衰减、
+  9 例集成测试失败；已恢复为 publish + scale 两个语义。
+- 文档同步：`world/README.md` 模块地图、`docs/architecture.md`（车辆子模块表）、
+  `docs/physics.md` 路径引用。

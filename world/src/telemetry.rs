@@ -16,8 +16,8 @@ use vettura_physics::{Controls, ErsMode};
 
 use crate::timing::LapTimer;
 use crate::vehicle::{VehicleSnapshot, WheelSnapshot};
-use crate::weather::Weather;
 use crate::world::{ContactEntity, ImpactEvent};
+use vettura_track::Weather;
 
 /// 配置文件路径（Godot 虚拟路径）。
 pub const TELEMETRY_CONFIG_PATH: &str = "user://telemetry.cfg";

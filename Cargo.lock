@@ -889,9 +889,9 @@ dependencies = [
  "thiserror",
  "tracing",
  "vettura-acdata",
- "vettura-core",
  "vettura-kn5",
  "vettura-physics",
+ "vettura-track",
  "vettura-world",
 ]
 
@@ -905,13 +905,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "vettura-core"
-version = "0.0.1"
-dependencies = [
- "glam 0.34.1",
-]
-
-[[package]]
 name = "vettura-godot"
 version = "0.0.1"
 dependencies = [
@@ -922,7 +915,6 @@ dependencies = [
  "tracing-subscriber",
  "vettura-assets",
  "vettura-audio",
- "vettura-core",
  "vettura-kn5",
  "vettura-physics",
  "vettura-world",
@@ -948,6 +940,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vettura-track"
+version = "0.0.1"
+dependencies = [
+ "glam 0.34.1",
+ "thiserror",
+ "vettura-physics",
+]
+
+[[package]]
 name = "vettura-world"
 version = "0.0.1"
 dependencies = [
@@ -958,8 +959,8 @@ dependencies = [
  "thiserror",
  "tracing",
  "vettura-assets",
- "vettura-core",
  "vettura-physics",
+ "vettura-track",
 ]
 
 [[package]]

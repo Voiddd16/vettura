@@ -13,7 +13,7 @@ AC 兼容性的"胶水层"：打开车目录 → 选数据源 → 解析参数 �
 | `car.rs` | `CarFolder` / `CarData` / `DataSource`：定位数据源（`data.acd` 或已解包的 `data/`）、按名读 INI/LUT、选主模型 `.kn5`（`lods.ini` → 最大文件） |
 | `track.rs` | `TrackModule`：`models*.ini` / `surfaces.ini` / `sections.ini` 解析、碰撞 KN5 → 物理帧三角网、`SurfaceMap` / 发车格 / AI 线组装，结果装进 `vettura_world::World` |
 | `physics_mapping.rs` | AC 参数 → `vettura_physics::VehicleSpec` 全字段映射（约 1300 行）：`car.ini` / `engine.ini` / `drivetrain.ini` / `suspensions.ini` / `tyres.ini` / `aero.ini` / `brakes.ini`，含 `power.lut` 扭矩曲线、惯量张量合理性校验 |
-| `error.rs` | `AssetError`：缺文件、缺 key、数据不合理……带文件与字段定位；赛道侧另有 `TrackError` |
+| `error.rs` | `AssetError`：缺文件、缺 key、数据不合理……带文件与字段定位；赛道侧另有 `TrackLoadError` |
 
 ## 关键入口
 
@@ -32,7 +32,7 @@ track.add_to_world(&mut world)?;                                // 解析结果�
 - KN5 内部解析（`kn5/`）、INI/ACD 底层解析（`acdata/`）；
 - 世界模拟本身（`world/`）：本 crate 只负责把赛道目录**组装**成纯数据交给
   `vettura_world::World`，不实现碰撞/表面/AI/计时语义；
-- 单位/坐标转换（走 `vettura_core::coords`，AC 单位在这里的边界处转成 SI）。
+- 单位/坐标转换（走 `vettura_physics::coords`，AC 单位在这里的边界处转成 SI）。
 
 ## 验证
 

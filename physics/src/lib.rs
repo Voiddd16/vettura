@@ -11,15 +11,21 @@
 pub mod backend;
 pub mod backends;
 pub mod controls;
+pub mod coords;
 pub mod simulation;
 pub mod spec;
 pub mod state;
 pub mod tyre_model;
+pub mod units;
 
 pub use backend::VehicleBackend;
+// 全工作区共享的坐标系/单位约定（原 `vettura-core`）。
 #[cfg(feature = "chrono")]
 pub use backends::{ChronoBackend, ChronoError};
 pub use controls::{Controls, ShiftBlip};
+pub use coords::{
+    AC_FORWARD, AC_LEFT, AC_UP, GODOT_FORWARD, GODOT_RIGHT, GODOT_UP, ac_to_godot, godot_to_ac,
+};
 pub use simulation::Simulation;
 pub use spec::{
     AERO_REFERENCE_SPEED_MPS, AIR_DENSITY_KG_M3, ActiveSuspensionMode, ActiveSuspensionSpec,
@@ -30,3 +36,4 @@ pub use spec::{
 };
 pub use state::{VehicleState, WheelState};
 pub use tyre_model::SlipCurve;
+pub use units::GRAVITY;

@@ -13,6 +13,8 @@ AC 参数映射住在 `vettura-assets`，物理核心可以用合成车测试，
 | `controls.rs` | `Controls` / `ShiftBlip`：油门、刹车、离合、转向、换挡、手刹、DRS、ABS/TC 请求 |
 | `backend.rs` | `VehicleBackend` trait：`step(dt, controls)`——所有求解器（Simple / Chrono / 将来自研）的唯一契约 |
 | `simulation.rs` | 固定步长调度：accumulator + `max_substeps` 防死亡螺旋，默认 **600 Hz** |
+| `coords.rs` | AC ↔ Godot / Vettura 物理帧转换（`ac_to_godot`），原 `vettura-core` 合并而来（当时整 crate 实际只有它被调用） |
+| `units.rs` | SI 单位约定与 `GRAVITY`（全仓唯一来源） |
 | `tyre_model.rs` | `SlipCurve`：Magic Formula（Pac89，移植自 Project Chrono）滑移曲线拟合，按 AC 数据的峰值点/衰减点求 B/C/E |
 | `backends/simple.rs` | 力基线占位后端：端到端联调与无求解器环境用，常量均为占位值 |
 | `backends/chrono/` + `cpp/` | Chrono::Vehicle 适配（feature `chrono` 门控，**默认关闭**）：C ABI 桥（非 cxx）、spec → Chrono JSON；Chrono 缺席时 build.rs 自动 stub，任意机器可编译 |
@@ -28,8 +30,9 @@ let state = sim.backend().state();    // 读位姿/车轮状态
 
 ## 边界（不放入）
 
-- AC 字段名与解析（`assets/physics_mapping.rs`）；
-- 赛道碰撞与多车世界（`world/`，Jolt 侧）；
+- AC 字段名与解析（`assets/physics_mapping.rs`）——SI 转换发生在该资产边界；
+- 渲染与 Godot 资源（`gdext/`）；
+- 赛道碰撞与多车世界（`world/`，Jolt 侧）；赛道数据在 `track/`；
 - 文件 IO：核心不读文件，输入由上层构造好结构体传入；
 - Godot 类型。
 

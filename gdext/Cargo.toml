@@ -22,7 +22,6 @@ tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 vettura-assets.workspace = true
 vettura-audio.workspace = true
-vettura-core.workspace = true
 vettura-kn5.workspace = true
 vettura-physics.workspace = true
 vettura-world.workspace = true

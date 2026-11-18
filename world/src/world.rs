@@ -8,7 +8,6 @@
 //! collider materials.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use glam::{Quat, Vec3};
 use oxijolt::{
@@ -19,10 +18,10 @@ use vettura_physics::{Controls, Pose, VehicleSpec, VehicleState};
 
 use crate::debris::{DebrisHandle, DebrisShape, DebrisSnapshot, DebrisSpec};
 use crate::frame::{j2p, j2p_q, j2p_r, p2j, p2j_q, p2j_r};
-use crate::groove::GrooveMap;
-use crate::surface::{SurfaceId, SurfaceMap, SurfaceProperties};
 use crate::vehicle::{DriveInput, VehicleHandle, VehicleRuntime, VehicleSnapshot, VehicleTuning};
-use crate::weather::Weather;
+use vettura_track::GrooveMap;
+use vettura_track::Weather;
+use vettura_track::{SurfaceId, SurfaceMap, SurfaceProperties};
 
 /// Errors from world construction, vehicle creation, or stepping.
 #[derive(Debug, thiserror::Error)]
@@ -47,13 +46,6 @@ pub enum WorldError {
     UnknownDebris,
     #[error("surfaces cannot be added after a vehicle exists; build the SurfaceMap first")]
     SurfacesLocked,
-    #[error("track i/o error at {path}: {source}")]
-    TrackIo {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-    #[error("invalid track data: {0}")]
-    TrackFormat(String),
 }
 
 /// Result alias for this crate.
@@ -880,6 +872,21 @@ impl World {
         Ok(())
     }
 
+    /// 把车放到比赛温度（发动机/机油/轮胎/刹车都在工作窗口）。
+    ///
+    /// 商业竞速游戏的 AI 永远从这个状态出发——它前面已经跑过暖胎圈。AI 圈速
+    /// 探针、比赛起步、benchmark 都该先调它，否则测到的是「冷车 ECU 限扭 +
+    /// 冷胎掉抓地」的假象（实测慢 20%+）。
+    pub fn warm_up_vehicle(&mut self, handle: VehicleHandle) -> WorldResult<()> {
+        let vehicle = self
+            .vehicles
+            .iter_mut()
+            .find(|vehicle| vehicle.handle == handle)
+            .ok_or(WorldError::UnknownVehicle)?;
+        vehicle.warm_up();
+        Ok(())
+    }
+
     /// Road undulation height at a point travelled along `heading`, metres.
     ///
     /// The value comes from the surface under the point (AC's `SIN_HEIGHT` /
@@ -1485,7 +1492,7 @@ fn tag_track_object(id: TrackObjectId) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surface::SurfaceKind;
+    use vettura_track::SurfaceKind;
 
     fn settle(world: &mut World, steps: usize) {
         for _ in 0..steps {
