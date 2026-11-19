@@ -138,7 +138,7 @@ uv run pack_fmod.py --platform macos --dest ../dist/Vettura.app --offline
 | Windows | 与 `Vettura.exe`、`vettura_native.dll` 同目录 | Windows DLL 搜索顺序 |
 | Linux | 与可执行文件、`libvettura_native.so` 同目录（或 `../lib`） | `$ORIGIN` / `$ORIGIN/../lib` rpath |
 
-DSP 插件的查找顺序（`vettura-audio/src/runtime.rs::plugin_dirs`）：
+DSP 插件的查找顺序（`vettura-audio/src/runtime/plugins.rs::plugin_dirs`）：
 `VETTURA_FMOD_PLUGIN_DIR` → exe 同目录 / `Frameworks` / `fmod` → 工作目录 `fmod/` →
 build.rs 烘焙的开发缓存。也就是说**发行包不依赖 `.cache/`**。
 

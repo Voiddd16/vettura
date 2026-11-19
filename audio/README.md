@@ -9,7 +9,9 @@ bank 里的 FMOD 封装由 FMOD Engine 自己解码，Rust 侧只做"发现 + �
 | --- | --- |
 | `guids.rs` | 解析 `sfx/GUIDs.txt`：事件名 ↔ GUID 表（`SoundEvent`） |
 | `manifest.rs` | `SoundManifest`：定位 `sfx/<car_id>.bank`，事件表落位 |
-| `runtime.rs` | `AudioEngine`：`Studio::create` → `load_bank_memory` → `get_event` → `create_instance/start` → 每帧 `update`；3D 听者与车辆参数（rpm/load…）注入，候选参数名自适应不同 mod |
+| `runtime.rs` | `AudioEngine` 门面：`Studio::create` → `load_bank_memory` → `get_event` → `create_instance/start` → 每帧 `update`；3D 听者与车辆参数（rpm/load…）注入，候选参数名自适应不同 mod |
+| `runtime/engine.rs` | `FmodEngine`：真正调用 libfmod 的实现（仅 `fmod_sdk_found` 时编译），含参数名探测与 3D 属性转换 |
+| `runtime/plugins.rs` | bank 插件（FMOD Distance Filter）的搜索顺序与注册（仅 `fmod_sdk_found` 时编译） |
 | `error.rs` | `AudioError`（含 `NotLinked`） |
 
 ## 版本与兼容规则（细节见 `docs/audio.md`）
