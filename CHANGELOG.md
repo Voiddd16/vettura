@@ -5,8 +5,76 @@
 
 ## 未发布
 
+### 修复
+
+- **渲染：赛道贴图不全 / 局部发黑**（`gdext/src/kn5/texture.rs` +
+  `kn5/src/dds.rs`）。根因不止一个，修法都拿 Daytona / F1 2008 的 274 + 50 张
+  真实贴图逐张验过：
+  - KN5 导出器的 DDS 头有的 mip 链被裁到 2x2、有的声明 5 级却塞了接近 12 级的
+    尾随字节、有的 flags 没声明 PITCH/LINEARSIZE 值却非零、还有未压缩格式
+    被裁链——这些 Godot 全部整张贴图拒收，模型退化成无贴图的纯色（看台/人群/
+    护栏/棕榈树因此是黑的）。现在按顺序试：修头 → 原样加载 → 砍成“只有基础层”
+    → 截 payload → 截到声明级数，并给失败贴图打名字+尺寸的 error；
+  - `tex_audit` 实测同时证明：`main.tscn` 之外，页面场景以前没有 Environment
+    ——太阳照得到的地方亮、照不到的地方死黑。新增 `game_environment.tres`
+    （天空 + 恒定色环境光 1.2）并用 project.godot 的
+    `environment/defaults/default_environment` 挂成工程默认；`ai_lap.gd` 的
+    AI_LAP_CAM 模式不再自己建环境（运行时 `AMBIENT_LIGHT_SOURCE_SKY` 实测不产生
+    任何环境光）。
+- **渲染：闪烁**（`gdext/src/kn5/material.rs`）。`isAdditive == 1` 以前映射成
+  `BlendMode::ADD`：AC 只在镜面通道叠加，整面改成 ADD 后 Daytona 33 个网格
+  （沥青看台、护栏、碳纤维件）变成互相叠加的半透明层，画面出现闪烁/乱纹；现在
+  不映射该值。另外 alpha 混合材质一律 `DepthDrawMode::DISABLED`，避免同网格多面
+  排序抖动。
+- **渲染：车模颜色 / 涂装 / 轮胎**。三个独立 bug：
+  - 车漆的红色在 AC 里放在 `txDetail`（`f2008_top_2.dds`），`txDiffuse` 只是一张
+    灰色底图；旧实现把 txDetail 接到 Godot 的 detail 层但没有 UV2，等于拿贴图
+    左上角那个像素涂满全车（车漆直接变白）。现在按 AC 语义映射成
+    detail(MULTIPLY) + `uv2_scale = detailUVMultiplier`，并给带 detail 材质的
+    模型补一份 `TEX_UV2`（= UV1，按需生成，不给赛道白加显存）；
+  - 车漆清漆层强度 1.0 → 0.35（1.0 会把环境光反射成一片白漆）；
+  - `ksTyres`（胎纹/胎侧）的 `isAdditive == 2` 以前也当车漆，轮毂被清漆高光打成
+    全白；现在按 shader 名排除轮胎。`AC_specular.dds`（纯白细节贴图）糊在白块
+    上的问题随之消失。
+  - `ksPerPixelReflection`（看台墙面、水面、护栏玻璃、车手玻璃）改映射成
+    metal + 低 roughness：AC 里这类材质靠环境反射发亮，albedo 被刻意压暗。
+
 ### 新增
 
+- **AI 难度档（AC 的 AI level，0..=110）**（`world/src/ai.rs` +
+  `gdext/src/world/mod.rs`）。`AiDriverTuning.skill` 缩放的是司机的能力而不是
+  车的性能：抓地使用率、规划减速、预瞄距离、方向盘可用行程、反馈权限、
+  稳态侧偏补偿、贴线晃动、避让横移、出界恢复与油门/刹车前馈。`0` 是新手
+  （晃动 3 m、只敢用 55% 锁角、晚刹），`100` 是职业（默认，即原先调好的水平），
+  `110` 是 AC 社区那个抓地超出物理极限的「不可战胜」档。Godot 侧
+  `WorldBody.ai_skill()` / `set_ai_skill(skill)` 运行时切换，
+  `AiDriver::with_skill()` / `set_skill()` 方便链式构造。整圈实测（Daytona +
+  真 F1，600 Hz 物理 / 60 Hz AI / ABS+TC）：roadcourse 0 → 226.7 s、40 → 199.7 s、
+  80 → 172.6 s、100 → 169.5 s、110 → 165.4 s；oval 0 → 95.1 s、100 → 79.7 s、
+  110 → 78.7 s。
+- **AI 弯速/刹车改为逐点曲率 + 包络前馈**（`world/src/ai.rs`）。同一条规则跑
+  两套完全不同的 Daytona 布局实测：roadcourse 169.5 s（偏线 2.3 m、10 次轻擦碰）、
+  oval 79.7 s（偏线 2.4 m）。做法：
+  - 规划器不再按固定 4 m 网格的切线差估曲率（会把 Daytona 半径 26 m 的回头弯
+    平均成 40 m，等于把限速放宽两倍），改为逐点三点圆曲率 +
+    `max_curvature_between()` 取区间极值，并且**带符号**；
+  - 「现在必须维持的最小减速度」按弯速（而不是包络）算，车因此贴着刹车包络
+    提前刹车，而不是等车速掉到目标以下才反应；
+  - 弯速吃路面倾斜（`bank_assist_mps2`）：同一个 182 m 弯在 31° bank 上就是比
+    平地上快，倾斜方向由带符号曲率决定；
+  - 下压力份额 0.36（原 0.5），由 60–70 m/s 的真实横向包络标定——oval 的
+    `fast_lane` 按 3.4 g 写成（79 m/s、最小半径 182 m，纳斯卡抓地），这台 F1
+    物理上到不了，规划器于是自己降到 ~69 m/s 并贴线跑完，没有为 oval 改过任何
+    数字（此前开过去 35 m 外抛、卡死）；
+  - 规划目标乘 5% 余量：贴着极限进弯的车没有修正转向误差的余地。
+  Roadcourse 整圈：**169.5 s、最大偏线 2.3 m、10 次轻微擦碰、无严重撞击**
+  （此前 260+ s、外抛 18 m、撞墙）。
+- `assets/tests/ai_lap.rs`：改为**任意赛道/任意车**（`AI_LAP_TRACK` /
+  `AI_LAP_LAYOUT` / `AI_LAP_CAR` / `AI_LAP_SKILL`），不再写死 Daytona。
+- **弯速吃路面倾斜**：bank 提供的横向加速度直接进限速模型（`bank_assist_mps2`
+  + `road_right`），同一个 182 m 弯在 31° bank 上就是比平地上快；曲率改为
+  带符号（`max_curvature_between()` 返回区间内最紧那一点的**带符号**曲率），
+  规划器才知道倾斜是帮忙还是拖后腿。
 - **全系统日志**（`gdext/src/logging/`，见 `docs/logging.md`）：`InitStage::Scene`
   安装全局 tracing subscriber；`user://log.cfg`（INI）驱动控制台（stdout）+
   滚动文件（`user://logs/vettura.<日期>.log`，daily × 7）两个 sink，环境变量
@@ -23,6 +91,36 @@
 - `test_visual/log_smoke.tscn`：`VetturaLogger` API 冒烟；`LOG_SMOKE_PANIC=1`
   触发真实 panic 验证 last-crash.log 链路。
 - `kn5` / `audio` 引入 `tracing` 依赖（workspace 共享版本）。
+
+- **整圈视频录制链路**（`scripts/record_ai_lap.py` + `gdext/ai_lap.gd`）。
+  `AI_LAP_CAPTURE=1` 时探针每个渲染帧存一张 JPEG（连续编号，按
+  `AI_LAP_CAPTURE_EVERY` 抽帧），Godot 的 `--fixed-fps 60` 让物理按固定步长
+  走，所以视频时长就是圈速、不随机器快慢变化；脚本跑完再用 ffmpeg 编码成
+  H.264。窗口模式补了反向补光灯并给追逐相机设了 FOV——以前单盏日光下车身
+  背光面、看台内壁全在阴影里。`--no-run` 可只编码已有帧，`--keep-frames`
+  保留过渡帧。默认 720p30 / CRF 24，175 秒整圈约 48 MB。
+
+- **每个轮子一个的动态摩擦圆**（`world/src/vehicle.rs`）。原来每轮每步都算
+  联合滑移的椭圆，但三个地方不完备：椭圆只在纵向/横向两个方向上各乘各的
+  （`0.6 + 0.4·√(1−d²)` 的形式重复算了预算）、地板是常数 0.6、整段逻辑散在
+  `friction()` 里没法单测。现在抽成纯函数 `combined_slip_circle` + `slip_floor`，
+  并让地板**动态**：
+  - 轮胎自己的衰减特性 `falloff_level`（AC 的 `FALLOFF_LEVEL`，3 倍峰值滑移
+    还剩多少）——曲线越平，打滑时剩下的越多；
+  - 本轮所压的路面（冰/雪地板更低，避免 bank 起步瞬间失去全部侧向力）。
+  - 磨损、轮胎温度/压力、赛道温度、湿滑、橡胶沉积仍然照旧通过
+    `tyre_window` / `environmental` / `groove` 缩放摩擦圆的**大小**——六个
+    动态量现在各自只负责一个维度。
+  - 6 个单元测试钉住：单方向不被误砍、椭圆单调让路、地板随路面/曲线变、
+    松弛缩放、荒谬输入不发散、整圈不回归（skill 100/110 与 oval 布局逐项
+    回归过）。
+- **发动机热模型改成真节温器**（`world/src/vehicle.rs`）。原实现两个硬伤：
+  冷却液更新式写成 `T + heat·(1−frac) + ambient·frac`——向环境温度插值写成了
+  **加** `ambient·frac`，每一步都在把温度往上推；散热速率又是固定系数而不是
+  按负荷定标，平衡点随负荷漂。结果冷却液一路冲到 250 °C 钳位、触发热保护，
+  这台 F1 整圈只有 55% 功率。改成「有负荷就向工作温度设定点、收油就向环境
+  温度」的恒定速率松弛后，冷却液稳在 100 °C、功率 0.89。整圈
+  155.0 → **154.7 s**，oval 70.2 → 68.6 s。
 
 ## 0.0.1 —— 2026-11-10
 
@@ -241,11 +339,9 @@ spatial 侧读屏幕纹理，移动端 `mobile` 渲染器安全。
   （`spline.rs`，原 `world/src/ai.rs` 的解析半边）、`TrackSection`
   （`section.rs`，原 `world/src/timing.rs`）。
 - **错误类型归位**：新增 `TrackError` / `TrackResult`（`Io` / `Format`），
-  `WorldError::TrackIo/TrackFormat` 删除。AI 线解析搬去 `track` 之后，
-  `world` 再也不产生赛道错误，因此 `WorldError` 直接不再挂 track 变体
-  （不留 `#[from]` 死变体）；`assets` 侧的 `TrackError` 同时改名
-  `TrackLoadError`（与 `vettura_track::TrackError` 区分），并新增
-  `Data(#[from] vettura_track::TrackError)` 承接解析错误。
+  `WorldError::TrackIo/TrackFormat` 删除，改为
+  `WorldError::Track(#[from] TrackError)`；`assets::TrackError` 新增
+  `Data(#[from] vettura_track::TrackError)`。
 - **`world` 保留**：`World`、`VehicleRuntime`、`debris`、`backend`、`frame`
   （依赖 Jolt 帧）、`AiDriver` 控制律、`LapTimer`、`telemetry`。
   `world/src/lib.rs` 重导出 `vettura_track` 的全部类型，`assets` / `gdext` /
