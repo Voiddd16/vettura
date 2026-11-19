@@ -135,4 +135,22 @@ impl FileResources {
     pub fn decoded_texture_count(&self) -> usize {
         self.textures.borrow().iter().flatten().count()
     }
+
+    /// 模型里是否有材质真的会用 `txDetail` / `txNormalDetail`。
+    ///
+    /// Godot 的 detail 层采样第二套 UV（`UV2`）；只有确实要生成细节层的模型才
+    /// 额外写一份 `TEX_UV2`，否则白费每顶点 8 字节（Daytona 那种百万三角的
+    /// 赛道就是几 MB）。判断只依赖 `useDetail` 与槽位，和材质是否创建无关，
+    /// 所以在网格构建时就能问。
+    pub fn needs_uv2(&self) -> bool {
+        const DETAIL_SLOTS: [&str; 2] = ["txDetail", "txNormalDetail"];
+        self.kn5.materials.iter().any(|material| {
+            material.property("useDetail").unwrap_or(1.0) > 0.5
+                && material.samples.iter().any(|sample| {
+                    DETAIL_SLOTS
+                        .iter()
+                        .any(|slot| sample.slot_name.eq_ignore_ascii_case(slot))
+                })
+        })
+    }
 }

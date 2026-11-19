@@ -18,7 +18,7 @@ use vettura_kn5::{BlendMode, DepthMode, Material, Transform, transform_to_mat4};
 ///
 /// 等价于绕 Y 轴旋转 180°，是**正常旋转**（行列式 `+1`）：对顶点/法线/切线
 /// 只需乘这一个 `S`（见 [`super::mesh`]），不需要翻转绕序或手性；和
-/// `vettura_core::coords::ac_to_godot` 对 vec3 的定义保持一致。
+/// `vettura_physics::coords::ac_to_godot` 对 vec3 的定义保持一致。
 ///
 /// 注意这与 AcTools 的做法不同：Content Manager 渲染 KN5 时把 DirectX 的
 /// 左手空间当作目标，只镜像 X（行列式 `-1`），所以必须用 `ToIndicesFixX()`
@@ -117,12 +117,17 @@ pub struct MaterialParams {
     /// `ksAlphaRef`；`alpha_tested` 时 Godot 走 alpha scissor。
     pub alpha_scissor: f32,
     pub alpha_tested: bool,
-    /// `BlendMode::AlphaBlend` → 半透明混合。
+    /// `txDetail` 的平铺倍率（AC 的 `detailUVMultiplier`，写进材质的
+    /// `uv2_scale`）。`0` / 缺失视为不使用细节层。
+    pub detail_uv_scale: f32,
+    /// `ksOpacity` / `alpha < 1` → 半透明混合（**不是** `BlendMode::AlphaBlend`，
+    /// KN5 的 blend 标志信号用，见 [`is_alpha_blended`]）。
     pub alpha_blended: bool,
     /// `BlendMode::AlphaToCoverage`。
     pub alpha_to_coverage: bool,
-    /// `isAdditive == 1` → 叠加混合；`isAdditive == 2` 在 AC 里表示车漆。
-    pub additive: bool,
+    /// `ksOpacity` / `alpha` 里的整体不透明度；小于 1 时走半透明混合。
+    pub opacity: f32,
+    /// `isAdditive == 2` 且不是轮胎 shader → 车漆（清漆层）。
     pub car_paint: bool,
     /// `DepthMode::Off` / `NoWrite`。
     pub depth_test_disabled: bool,
@@ -137,7 +142,11 @@ pub struct MaterialTextures {
     pub normal: Option<String>,
     /// `txMaps`：AC 把 AO / mask 打包在一起，这里按环境光遮蔽使用。
     pub maps: Option<String>,
+    /// `txDetail`：**车漆/涂装的颜色层**。AC 的 `txDiffuse` 对车漆材质常常是
+    /// 一张灰色底图，真正的红色来自 `txDetail`（`f2008_top_2.dds` 均值
+    /// (0.45, 0.096, 0.094)），shader 按 `uv * detailUVMultiplier` 乘回去。
     pub detail: Option<String>,
+    /// `txNormalDetail`：细节法线。
     pub detail_normal: Option<String>,
 }
 
@@ -148,16 +157,29 @@ impl MaterialParams {
     /// 语义参考 Content Manager 的 `Kn5MaterialDark` / `Kn5MaterialDarkMaps`
     /// （`AcTools.Render/Kn5SpecificForwardDark/Materials`）。
     pub fn from_material(material: &Material) -> Self {
+        // AC 的光照模型是 `tex * (ksAmbient * ambient + ksDiffuse * diffuse *
+        // NdotL)`，Godot 只有一路 `albedo * (ambient + sun * NdotL)`。
+        // 用一个折中系数把两个 AC 系数并进去：ambient 项按典型环境光占比
+        // （约 1/3）折算。Daytona 的建筑材质常用 0.1/0.1，旧公式
+        // `d*(a+1)*0.5` 会把它压到 0.055，整栋楼漆黑一片。
         let diffuse = material
             .property("ksDiffuse")
             .unwrap_or(1.0)
             .clamp(0.0, 4.0);
-        let ambient = material.property("ksAmbient").unwrap_or(0.0);
-        // AC 的最终结果是 `diffuse·ambient·texture`；Godot 只有一路乘法，
-        // 把两者合并进 albedo_color。
-        let albedo_scale = (diffuse * (ambient.max(0.0) + 1.0) * 0.5).clamp(0.0, 4.0);
+        let ambient = material
+            .property("ksAmbient")
+            .unwrap_or(0.0)
+            .clamp(0.0, 4.0);
+        let albedo_scale = (0.75 * diffuse + 0.25 * ambient).clamp(0.05, 4.0);
 
-        let opacity = material.property("ksOpacity");
+        // `ksPerPixelReflection`（护栏玻璃、看台墙面、水面、车手玻璃）在 AC 里
+        // 是“反射环境”的材质：albedo 被刻意压暗，亮度来自环境反射。Godot 没有
+        // 纯反射材质，金属度 1.0 是最接近的表达（金属表面对天空/环境反射）。
+        // 这类材质的 albedo 不再往下压，否则反射也被染色到看不见。
+        let reflective = material.shader.eq_ignore_ascii_case("ksPerPixelReflection");
+        let metallic = if reflective { 0.85 } else { 0.0 };
+
+        let opacity = material_opacity(material);
         let emission_values = material.property_values("ksEmissive");
         let emission_rgb = emission_values
             .map(|value| value.value_c)
@@ -169,25 +191,43 @@ impl MaterialParams {
             // AcTools 的 AlphaTest 用固定 0.5。
             .unwrap_or(0.5);
 
+        // 细节层（`txDetail`）：车漆的涂装色、碳纤维/座舱的细纹理都在这里。
+        // `useDetail = 0` 的材质（轮毂盖之类）AC 直接用关掉。
+        let use_detail = material.property("useDetail").unwrap_or(1.0) > 0.5;
+        let detail_uv_scale = material.property("detailUVMultiplier").unwrap_or(1.0);
+
+        // AC 的 `isAdditive`：1 = 叠加、2 = 车漆。只有 2 才有意义，而且轮胎
+        // shader（`ksTyres`）也用 2——胎纹不该刷一层车漆，否则整个轮毂会被
+        // 清漆高光打成白色。
+        let car_paint = material.property("isAdditive") == Some(2.0)
+            && !material.shader.to_ascii_lowercase().contains("tyres");
+
+        let albedo_multiplier = if reflective {
+            (diffuse.max(0.5)).clamp(0.0, 4.0)
+        } else {
+            albedo_scale
+        };
+
         Self {
             albedo: Color::from_rgba(
-                albedo_scale,
-                albedo_scale,
-                albedo_scale,
-                opacity.unwrap_or(1.0).clamp(0.0, 1.0),
+                albedo_multiplier,
+                albedo_multiplier,
+                albedo_multiplier,
+                opacity,
             ),
             roughness: roughness_from_specular_exp(material.property("ksSpecularEXP")),
-            metallic: 0.0,
+            metallic,
             specular: material.property("ksSpecular").unwrap_or(0.5),
             normal_scale: material.property("normalMult").unwrap_or(1.0).max(0.0),
             emission: Color::from_rgb(emission_rgb[0], emission_rgb[1], emission_rgb[2]),
             emission_enabled: emission_rgb.iter().any(|channel| *channel > 0.0),
             alpha_scissor,
             alpha_tested: material.alpha_tested,
-            alpha_blended: material.blend_mode == BlendMode::AlphaBlend,
+            alpha_blended: is_alpha_blended(material, opacity),
             alpha_to_coverage: material.blend_mode == BlendMode::AlphaToCoverage,
-            additive: property_is_additive(material),
-            car_paint: material.property("isAdditive") == Some(2.0),
+            detail_uv_scale: if use_detail { detail_uv_scale } else { 0.0 },
+            opacity,
+            car_paint,
             depth_test_disabled: material.depth_mode == DepthMode::Off,
             depth_opaque_only: material.depth_mode == DepthMode::NoWrite,
             textures: MaterialTextures {
@@ -206,11 +246,27 @@ impl MaterialParams {
     }
 }
 
-/// AC 的 `isAdditive`：0/缺失 = 普通，1 = 叠加，2 = 车漆。
-fn property_is_additive(material: &Material) -> bool {
+/// 整体不透明度：`ksOpacity`（通用 shader）或 `alpha`（`ksPerPixelAlpha`）。
+///
+/// AC 的人群（`$alpha = 0.1`）等材质靠这个变淡；缺失视为完全不透明。
+fn material_opacity(material: &Material) -> f32 {
     material
-        .property("isAdditive")
-        .is_some_and(|value| value != 0.0 && value != 2.0)
+        .property("ksOpacity")
+        .or_else(|| material.property("alpha"))
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0)
+}
+
+/// 是否真的要半透明混合。
+///
+/// **不要把 `BlendMode::AlphaBlend` 直接当成“半透明”**：KN5 的 AlphaBlend 是
+/// 导出器写的混合标志，而 AC 的 diffuse 贴图 alpha 通道存的是别的东西——
+/// `daytona longbuilding_b` 那栋楼 alpha 均值只有 0.37，接上 Godot 的 ALPHA
+/// 之后整栋楼变成一层半透明黑纱。真正代表“整体透明”的是
+/// `ksOpacity` / `alpha`（人群 0.1 那种），裁剪交给 `alpha_tested`
+/// （→ ALPHA_SCISSOR）和 `AlphaToCoverage`（→ ALPHA_HASH）。
+fn is_alpha_blended(_material: &Material, opacity: f32) -> bool {
+    opacity < 1.0
 }
 
 /// `ksSpecularEXP` 越大约镜面越锐利；用常见的 `roughness = sqrt(2/(exp+2))`
@@ -286,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn point_conversion_matches_vettura_core() {
+    fn point_conversion_matches_physics_coords() {
         let converted = ac_to_godot_point(1.0, 2.0, 3.0);
         assert_eq!(converted, Vector3::new(-1.0, 2.0, -3.0));
     }
@@ -366,15 +422,17 @@ mod tests {
         );
 
         let params = MaterialParams::from_material(&material);
-        assert!((params.albedo.r - 0.28).abs() < 1e-6);
+        // 0.75*diffuse + 0.25*ambient = 0.75*0.4 + 0.25*0.4 = 0.4。
+        assert!((params.albedo.r - 0.4).abs() < 1e-6);
         assert_eq!(params.albedo.a, 1.0);
         assert_eq!(params.specular, 0.4);
         assert!((params.roughness - (2.0f32 / 202.0).sqrt()).abs() < 1e-6);
-        // isAdditive == 2 → 车漆，不是叠加混合。
+        // isAdditive == 2 且不是轮胎 shader → 车漆，不是叠加混合。
         assert!(params.car_paint);
-        assert!(!params.additive);
         assert!(!params.uses_alpha());
         assert!(!params.depth_opaque_only);
+        assert!(params.metallic.is_finite());
+        assert_eq!(params.metallic, 0.0);
         assert_eq!(
             params.textures.diffuse.as_deref(),
             Some("f2008_suspcar_diffuse.dds")
@@ -387,18 +445,55 @@ mod tests {
     }
 
     #[test]
-    fn alpha_blend_and_additive_are_detected() {
+    fn reflection_shaders_become_metallic() {
+        let mut material = material_with(&[("ksDiffuse", 0.1), ("ksAmbient", 0.1)], &[]);
+        material.shader = "ksPerPixelReflection".to_owned();
+        let params = MaterialParams::from_material(&material);
+        assert!(params.metallic > 0.5);
+        // 反射材质的 albedo 不再被压缩到 0.055，否则反射也被染色到看不见。
+        assert!(params.albedo.r >= 0.5);
+    }
+
+    #[test]
+    fn tyre_shader_is_not_car_paint() {
+        let mut material = material_with(&[("isAdditive", 2.0)], &[]);
+        material.shader = "ksTyres".to_owned();
+        let params = MaterialParams::from_material(&material);
+        assert!(!params.car_paint);
+    }
+
+    #[test]
+    fn alpha_blend_is_detected() {
+        // `BlendMode::AlphaBlend` 本身**不**代表表面要半透明：KN5 的 diffuse 贴图
+        // alpha 常常是别的东西（Daytona 看台那栋楼 alpha 均值 0.37，接上 ALPHA
+        // 混合会变成一层黑纱）。真正生效的是 ksOpacity / alpha。
         let mut material = material_with(&[("ksSpecularEXP", 90.0)], &[]);
         material.blend_mode = BlendMode::AlphaBlend;
         let params = MaterialParams::from_material(&material);
-        assert!(params.alpha_blended);
-        assert!(params.uses_alpha());
+        assert!(!params.alpha_blended);
+        assert!(!params.uses_alpha());
 
-        let mut material = material_with(&[("isAdditive", 1.0)], &[]);
-        material.depth_mode = DepthMode::NoWrite;
+        let mut material = material_with(&[("alpha", 0.1)], &[]);
         let params = MaterialParams::from_material(&material);
-        assert!(params.additive);
-        assert!(params.depth_opaque_only);
+        assert!((params.opacity - 0.1).abs() < 1e-6);
+        // 不透明度 < 1 的材质同样走半透明。
+        assert!(params.alpha_blended);
+    }
+
+    #[test]
+    fn alpha_test_and_coverage_cut_out() {
+        let mut material = material_with(&[("ksAlphaRef", 0.4)], &[]);
+        material.alpha_tested = true;
+        let params = MaterialParams::from_material(&material);
+        assert!(params.alpha_tested);
+        assert!(params.uses_alpha());
+        assert!((params.alpha_scissor - 0.4).abs() < 1e-6);
+
+        let mut material = material_with(&[], &[]);
+        material.blend_mode = BlendMode::AlphaToCoverage;
+        let params = MaterialParams::from_material(&material);
+        assert!(params.alpha_to_coverage);
+        assert!(params.uses_alpha());
     }
 
     #[test]

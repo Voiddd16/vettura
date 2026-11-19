@@ -258,25 +258,56 @@ var car: VehicleBody = world.spawn_vehicle_from_path(
      倒转绕序）。
 
 3. **贴图**
-   - 内嵌 DDS 原样交给 `Image::load_dds_from_buffer`；
-   - **mip 链不完整的 KN5 DDS** 会被 Godot 拒绝（导出器常裁剪到 2x2），此时改成
-     “只有基础层”再解压缩、重新生成 mip，法线类贴图开启 `renormalize`；
-   - 解码结果按贴图名缓存。
+   - 内嵌 DDS 原样交给 `Image::load_dds_from_buffer`；解码结果按贴图名缓存；
+   - **KN5 导出器的 DDS 头千奇百怪**，Godot 会整张贴图拒绝。修复链按顺序试
+     （`gdext/src/kn5/texture.rs`，每一级都拿 Daytona/F1 2008 真实贴图验过）：
+     0. 修自相矛盾的头（flags 没声明 PITCH/LINEARSIZE、值却非零 —— Daytona
+        274 张里 42 张，看台/人群因此全黑）；
+     1. 原样加载（完整链的保留压缩格式与原有 mip，省显存）；
+     2. 失败则把头改成“只有基础层”（`strip_mip_levels`，payload 原样留着：
+        Godot 对 mipcount=1 的输入只按基础层算账）；
+     3. 再失败则把 payload 截到基础层大小；
+     4. 再失败则截到“头部声明级数”刚好容纳的大小（救声明 5 级却塞了接近 12 级
+        数据的那类贴图）；
+   - 退化路径会解压成 RGBA8 并让 Godot 重新生成 mip，法线类贴图开启
+     `renormalize`；贴图名写进 Godot 材质名，出问题一眼定位。
 
 4. **材质**：`ksDiffuse/ksAmbient/ksSpecular/ksSpecularEXP/ksEmissive/ksAlphaRef`、
    `txDiffuse/txNormal/txMaps/txDetail/txNormalDetail` 与
    `BlendMode/DepthMode/isAdditive` 映射到 `StandardMaterial3D`，语义参考
-   Content Manager 的 `Kn5MaterialDark*`。
+   Content Manager 的 `Kn5MaterialDark*`。踩过的坑都在 `kn5/material.rs` 的注释里，
+   要点：
+   - **车漆的红色来自 `txDetail`**：AC 的 `txDiffuse` 对车漆材质常常是一张灰色
+     底图（`f2008_top_2_diffuse.dds`），涂装色在 `txDetail`
+     （`f2008_top_2.dds`，均值 (0.45, 0.096, 0.094)），shader 按
+     `uv * detailUVMultiplier` 乘回去。映射为 Godot 的 detail(MULTIPLY) +
+     `uv2_scale` + 网格补一份 `TEX_UV2`（只在真有 detail 材质时生成）；
+   - **`BlendMode::AlphaBlend` 不等于“表面要半透明”**：KN5 的 diffuse 贴图
+     alpha 常常是别的东西（Daytona 看台那栋楼 alpha 均值 0.37，接上 ALPHA 混合
+     会变成一层黑纱）。代表“整体透明”的是 `ksOpacity` / `alpha`；
+   - **`isAdditive == 1` 不是“整面叠加”**：AC 只在镜面通道做叠加，映射成
+     `BlendMode::ADD` 会让沥青看台、碳纤维这类深色 albedo 变黑并互相闪烁；
+     `isAdditive == 2`（且不是 `ksTyres`）才是车漆 → 清漆层，但清漆强度要压到
+     0.35，否则环境反射把红车漆刷成白车；
+   - `ksPerPixelReflection`（护栏玻璃、看台墙面、水面、车手玻璃）在 AC 里靠
+     环境反射发亮，映射成 metal + 低 roughness。
 
 5. **模型节点**：见上面 `instantiate()`；dummy 名保留，物理层可以按名字挂载。
+
+6. **环境光**：`project.godot` 用 `environment/defaults/default_environment`
+   指向 `game_environment.tres`（天空 + 恒定色环境光）。没有它，`main.tscn`
+   （只有一盏日光）太阳照不到的地方全是死黑——看台内壁、车身底面、马路阴影。
+   注意：运行时用代码建的 `AMBIENT_SOURCE_SKY` 环境实测不产生任何环境光，只有
+   显式颜色照得亮；这是 Godot 4.7 的行为，写在这里省得再踩。
 
 ### 待接
 
 - `ResourceFormatLoader`：让 `.kn5` 能像普通场景资源那样拖进编辑器；
-- 模型缓存（同一 `.kn5` 反复加载时复用解析结果）；
 - 按材质合并 surface，降低 draw call；
 - 贴图内存策略（现在退化路径会解压成未压缩 RGBA8）；
-- AC 专有 shader（树、草、玻璃、发光贴花）与 `layer` 语义。
+- AC 专有 shader（树、草、玻璃、发光贴花）与 `layer` 语义；
+- 皮肤（skin）系统：AC 的涂装是按 skin 换 `txDiffuse` 的贴图，现在只用 KN5
+  内嵌的那一套。
 
 ## 冒烟测试
 
@@ -305,10 +336,33 @@ var car: VehicleBody = world.spawn_vehicle_from_path(
    应包含 panic 消息 + backtrace + 环形缓冲转储（命令见
    [`logging.md`](logging.md) §10）。
 
+4. **AI 整圈**：`gdext/ai_lap.tscn` 让 `AiDriver` 遥控真车沿 `fast_lane.ai`
+   跑完整一圈，逐秒打印遥测，结束打印 `[ai-lap] PASS`。见
+   [`architecture.md`](architecture.md) 的「AI 司机与 AC 难度档」。
+
+## 录一整圈 AI 驾驶视频
+
+`scripts/record_ai_lap.py`：Godot 抓帧 + ffmpeg 编码，不需要录屏权限。
+
+```bash
+uv run scripts/record_ai_lap.py                # 完整一圈，720p30 / H.264 CRF 24
+uv run scripts/record_ai_lap.py --every 3      # 抓帧抽稀（20fps 视频）
+uv run scripts/record_ai_lap.py --skill 60     # 换 AI 难度档（0..=110）
+uv run scripts/record_ai_lap.py --keep-frames  # 保留 JPEG 帧目录
+```
+
+- 帧落在 `user://ai_lap_frames`（macOS 在
+  `~/Library/Application Support/Godot/app_userdata/Vettura/ai_lap_frames`），
+  编码后默认清理；
+- 物理走 `--fixed-fps 60`，所以视频时长 = 圈速，与机器快慢无关；
+- 环境变量 `AI_LAP_TRACK` / `AI_LAP_LAYOUT` / `AI_LAP_CAR` 可换赛道与车；
+- 产物落在 `build/ai_lap_<track>_<layout>_<时间戳>.mp4`。Daytona roadcourse
+  175 秒一圈实测约 48 MB。
+
 ## 注意事项
 
 - Godot 是 `+X` 右、`+Y` 上、`-Z` 前；KN5 是 `+X` 左、`+Y` 上、`+Z` 前；
-- 统一使用 `vettura_core::coords::ac_to_godot`（`kn5::convert` 里的实现与它等价）；
+- 统一使用 `vettura_physics::coords::ac_to_godot`（`kn5::convert` 里的实现与它等价）；
 - KN5 顶点可能上百万，转换时避免逐顶点 `Variant` 调用，使用
   `PackedVector3Array` 等批量类型；
 - DDS 贴图可能 12MB+，注意显存和加载时间（退化路径会解压成 RGBA8）；

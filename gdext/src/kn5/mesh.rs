@@ -28,7 +28,11 @@ const ARRAY_TYPE_COUNT: usize = 13;
 ///
 /// 切线按 Godot 约定写成 4 个 float（`xyz` + 副切线符号）；KN5 只存 3 个分量，
 /// 符号取 `+1.0`。
-pub fn static_array_mesh(mesh: &Mesh, name: &str) -> Option<Gd<ArrayMesh>> {
+///
+/// `need_uv2`：模型里存在用 `txDetail` 的材质时为 `true`，此时额外写一份
+/// `TEX_UV2`（= UV1，平铺倍率由材质的 `uv2_scale` 给）。Godot 的 detail 层采样
+/// 第二套 UV，没有 UV2 时整张贴图会糊成一个颜色。
+pub fn static_array_mesh(mesh: &Mesh, name: &str, need_uv2: bool) -> Option<Gd<ArrayMesh>> {
     if mesh.vertices.is_empty() || mesh.indices.is_empty() {
         godot_warn!("skipping empty mesh node '{}'", name);
         return None;
@@ -65,15 +69,24 @@ pub fn static_array_mesh(mesh: &Mesh, name: &str) -> Option<Gd<ArrayMesh>> {
     set(
         &mut arrays,
         ArrayType::TEX_UV,
-        PackedVector2Array::from(uvs),
+        PackedVector2Array::from(uvs.clone()),
     );
+    if need_uv2 {
+        set(
+            &mut arrays,
+            ArrayType::TEX_UV2,
+            PackedVector2Array::from(uvs),
+        );
+    }
     set_indices(&mut arrays, &mesh.indices);
 
     Some(surface_from_arrays(arrays))
 }
 
 /// 蒙皮网格 → 带 `BONES/WEIGHTS` 的 `ArrayMesh`（无骨骼时退化为静态表面）。
-pub fn skinned_array_mesh(mesh: &SkinnedMesh, name: &str) -> Option<Gd<ArrayMesh>> {
+///
+/// `need_uv2` 语义同 [`static_array_mesh`]。
+pub fn skinned_array_mesh(mesh: &SkinnedMesh, name: &str, need_uv2: bool) -> Option<Gd<ArrayMesh>> {
     if mesh.vertices.is_empty() || mesh.indices.is_empty() {
         godot_warn!("skipping empty skinned mesh node '{}'", name);
         return None;
@@ -120,8 +133,15 @@ pub fn skinned_array_mesh(mesh: &SkinnedMesh, name: &str) -> Option<Gd<ArrayMesh
     set(
         &mut arrays,
         ArrayType::TEX_UV,
-        PackedVector2Array::from(uvs),
+        PackedVector2Array::from(uvs.clone()),
     );
+    if need_uv2 {
+        set(
+            &mut arrays,
+            ArrayType::TEX_UV2,
+            PackedVector2Array::from(uvs),
+        );
+    }
     if !mesh.bones.is_empty() {
         set(&mut arrays, ArrayType::BONES, PackedInt32Array::from(bones));
         set(
@@ -156,7 +176,8 @@ pub fn static_mesh_instance(
     mesh: &Mesh,
     resources: &FileResources,
 ) -> Option<Gd<MeshInstance3D>> {
-    let array_mesh = static_array_mesh(mesh, name)?;
+    let need_uv2 = resources.needs_uv2();
+    let array_mesh = static_array_mesh(mesh, name, need_uv2)?;
     finish_instance(
         name,
         array_mesh,
@@ -172,7 +193,8 @@ pub fn skinned_mesh_instance(
     mesh: &Arc<SkinnedMesh>,
     resources: &FileResources,
 ) -> Option<Gd<MeshInstance3D>> {
-    let array_mesh = skinned_array_mesh(mesh, name)?;
+    let need_uv2 = resources.needs_uv2();
+    let array_mesh = skinned_array_mesh(mesh, name, need_uv2)?;
     let mut instance = finish_instance(
         name,
         array_mesh,
@@ -321,8 +343,8 @@ pub fn array_mesh_for(kn5: &Kn5, node_name: &str) -> Option<Gd<ArrayMesh>> {
     };
 
     match &node.kind {
-        NodeKind::Mesh(mesh) => static_array_mesh(mesh, &node.name),
-        NodeKind::SkinnedMesh(mesh) => skinned_array_mesh(mesh, &node.name),
+        NodeKind::Mesh(mesh) => static_array_mesh(mesh, &node.name, true),
+        NodeKind::SkinnedMesh(mesh) => skinned_array_mesh(mesh, &node.name, true),
         NodeKind::Dummy { .. } => None,
     }
 }
