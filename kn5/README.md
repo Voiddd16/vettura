@@ -10,8 +10,10 @@ Assetto Corsa `.kn5` 模型容器读取器。二进制布局参考社区广泛�
 
 | 文件 | 职责 |
 | --- | --- |
-| `lib.rs` | 入口：`Kn5::from_path` / `parse` / `parse_shared`（共享字节、零拷贝） |
-| `model.rs` | 数据模型：节点树（dummy / mesh / skinned）、材质、贴图、顶点结构 |
+| `lib.rs` | 入口与公开重导出；`MAGIC` / 节点深度上限常量 |
+| `parse.rs` | `Kn5::from_path` / `parse` / `parse_shared`（共享字节、零拷贝）与各区块解析（贴图 / 材质 / 节点树） |
+| `model.rs` + `model/` | 数据模型：`Kn5` 容器 + 节点树（dummy / mesh / skinned）、材质、贴图、顶点结构（按子领域拆成 `model/{texture,material,node,mesh}.rs`） |
+| `tests.rs` + `tests/parse.rs` | 解析行为单元测试：字节流构造辅助与用例 |
 | `reader.rs` | 带边界检查的小端字节游标；每次读取要么成功推进、要么返回带偏移的 `Error::Eof` |
 | `dds.rs` | 内嵌 DDS 解码（DXT 系 → RGBA）；KN5 mip 链不完整时兜底补齐 |
 | `synth.rs` | 合成车模生成器（合法 DXT1 DDS + 截断 mip 链）：bench / 测试 / `kn5-inspect --synth` 共用，不依赖真车资产 |

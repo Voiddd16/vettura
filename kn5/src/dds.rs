@@ -266,6 +266,41 @@ pub fn fix_orphan_pitch_value(data: &[u8]) -> Option<Vec<u8>> {
     Some(patched)
 }
 
+/// 把 payload 截到“头部声明的 mip 级数”刚好容纳的大小。
+///
+/// KN5 的导出器常在声明 N 级的同时多写给低层 mip 的尾随字节（`trees_new.dds`：
+/// 2048² DXT5 声明 5 级，实际塞了接近 12 级的数据），Godot 对“声明 N 级但
+/// 数据超长”的头部整张贴图拒绝（'Expected … got … instead'）。返回只保留
+/// `dwMipMapCount` 级数据、像素按字节切分的副本；本来就没有定界差异时返回
+/// `None`。
+pub fn truncate_to_declared_mips(data: &[u8]) -> Option<Vec<u8>> {
+    let layout = layout(data).ok()?;
+    let declared = layout.declared_levels.max(1).min(layout.max_levels());
+    let wanted: usize = (0..declared).map(|level| layout.level_bytes(level)).sum();
+    let end = layout.payload_offset.saturating_add(wanted);
+    if end >= data.len() {
+        return None;
+    }
+
+    Some(data[..end].to_vec())
+}
+
+/// 把 payload 截到“只有基础层”的大小（与 [`strip_mip_levels`] 配合使用）。
+///
+/// Godot 接受“mipmapcount = 1 + 更长 payload”（经验数据：22/30 张 Daytona
+/// 的坏贴图这样就能过），但仍有几张只认“长度精确等于基础层”的输入，所以
+/// 截断版本也留着作为最后的手段。压缩按 4x4 块算、未压缩按 `w*h*4` 算——
+/// Godot 自己就是按这个口径（不认 KN5 里 3 字节/像素的 RGB 写法）。
+pub fn truncate_to_base_level(data: &[u8]) -> Option<Vec<u8>> {
+    let layout = layout(data).ok()?;
+    let wanted = layout.level_bytes(0);
+    let end = layout.payload_offset.saturating_add(wanted);
+    if end >= data.len() {
+        return None;
+    }
+    Some(data[..end].to_vec())
+}
+
 /// DDS 头部检查失败的原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DdsError {
@@ -458,6 +493,51 @@ mod tests {
         assert_eq!(fixed[24..], bytes[24..]);
         // 修正后不再需要二次修正（幂等）。
         assert!(fix_orphan_pitch_value(&fixed).is_none());
+    }
+
+    #[test]
+    fn truncate_to_declared_mips_drops_extra_payload() {
+        // `trees_new.dds`：2048² DXT5，头部声明 5 级 mip，实际塞了接近 12 级的
+        // 数据。Godot 按声明的级数核账，多余字节整张贴图拒收。
+        let mut bytes = dds_header(2048, 2048, 5, b"DXT5");
+        let declared: usize = (0..5)
+            .map(|level| layout(&bytes).unwrap().level_bytes(level))
+            .sum();
+        bytes.resize(128 + declared + 5488, 0); // 完整 5 级 + 5488 字节尾随垃圾
+
+        let layout = layout(&bytes).expect("合法 DDS");
+        assert_eq!(layout.declared_levels, 5);
+        // 声明的 5 级 + 尾随垃圾 > Godot 给 5 级的预算。
+        assert!(layout.payload_len > declared);
+
+        let trimmed = truncate_to_declared_mips(&bytes).expect("payload 超长应当被截断");
+        // 只保留“5 级 mip”刚到容纳得下的字节数，头部一个字节都不动。
+        assert_eq!(trimmed.len(), 128 + declared);
+        assert_eq!(&trimmed[..128], &bytes[..128]);
+    }
+
+    #[test]
+    fn truncate_to_declared_mips_keeps_exact_files_intact() {
+        let mut bytes = dds_header(64, 64, 7, b"DXT5");
+        let layout = layout(&bytes).expect("合法 DDS");
+        let wanted: usize = (0..layout.declared_levels)
+            .map(|level| layout.level_bytes(level))
+            .sum();
+        bytes.resize(128 + wanted, 0);
+
+        // 长度刚好等于声明级数所需 → 不动。
+        assert!(truncate_to_declared_mips(&bytes).is_none());
+    }
+
+    #[test]
+    fn truncate_to_base_level_keeps_only_level_zero() {
+        let mut bytes = dds_header(512, 1024, 5, b"DXT5");
+        bytes.resize(128 + 2_793_472, 0);
+
+        let trimmed = truncate_to_base_level(&bytes).expect("应截到基础层");
+        // 512x1024 DXT5 的基础层：128x256 个 4x4 块，每块 16 字节。
+        let expected = 128 + 128 * 256 * 16;
+        assert_eq!(trimmed.len(), expected);
     }
 
     #[test]
