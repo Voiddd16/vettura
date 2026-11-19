@@ -44,3 +44,7 @@ import/blender/enabled=false
 rendering_device/driver.windows="d3d12"
 renderer/rendering_method="mobile"
 textures/vram_compression/import_etc2_astc=true
+
+; 全局默认环境：天空背景 + 恒定环境光填充（见 game_environment.tres 的注释）。
+; 没有它，太阳照不到的地方全是死黑。
+environment/defaults/default_environment="res://game_environment.tres"

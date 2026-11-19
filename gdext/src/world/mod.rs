@@ -25,8 +25,9 @@ use godot::prelude::*;
 use vettura_assets::TrackModule;
 use vettura_physics::Pose;
 use vettura_world::{
-    AiDriver, LapTimer, TELEMETRY_CONFIG_PATH, TelemetryConfig, TelemetryProtocol, TelemetrySample,
-    TelemetryScope, TelemetrySink, VehicleHandle, VehicleSample, World,
+    AiDriver, DEFAULT_AI_SKILL, LapTimer, TELEMETRY_CONFIG_PATH, TelemetryConfig,
+    TelemetryProtocol, TelemetrySample, TelemetryScope, TelemetrySink, VehicleHandle,
+    VehicleSample, World,
 };
 
 use crate::ac_car::AcCar;
@@ -375,6 +376,50 @@ impl WorldBody {
         PackedFloat32Array::from(vec![input.throttle, input.brake, input.steering])
     }
 
+    /// 把 `index` 号车放到比赛温度：发动机/机油到工作温度，轮胎到最佳抓地温度，
+    /// 刹车片到最佳效率温度。
+    ///
+    /// 商业竞速游戏的 AI 永远从这个状态出发——发车格上它前面已经跑过暖胎圈。
+    /// 不暖胎的代价实测极大：这台 F1 在冷机下只有 55% 功率、变速箱还会因为冷胎
+    /// 高滑移拒绝升挡，圈速直接慢 20% 以上。要建模暖胎过程就让他自己跑几分钟。
+    #[func]
+    pub fn warm_up_vehicle(&mut self, index: i64) -> bool {
+        let Some(world) = self.world.as_mut() else {
+            return false;
+        };
+        let Some(vehicle) = self.vehicles.get(index.max(0) as usize) else {
+            return false;
+        };
+        let Some(handle) = vehicle.bind().handle() else {
+            return false;
+        };
+        world.warm_up_vehicle(handle).is_ok()
+    }
+
+    /// 当前 AI 难度档位（AC 的 AI level），`0..=110`。
+    ///
+    /// 没有 AI 司机（赛道没有 `fast_lane.ai`）时返回默认档。
+    #[func]
+    pub fn ai_skill(&self) -> i64 {
+        self.ai
+            .as_ref()
+            .map_or(DEFAULT_AI_SKILL.round() as i64, |driver| {
+                driver.skill().round() as i64
+            })
+    }
+
+    /// 运行时切换 AI 难度档位（AC 的 AI level）：`0`（新手）～ `110`（Pro）。
+    ///
+    /// 它缩放的是司机的能力而不是车的性能：抓地使用率、刹车时机、预瞄距离、
+    /// 方向盘可用行程、贴线精度、避让幅度。`110` 是 AC 社区里那个抓地超出
+    /// 物理极限的「不可战胜」档。
+    #[func]
+    pub fn set_ai_skill(&mut self, skill: i64) {
+        if let Some(driver) = self.ai.as_mut() {
+            driver.set_skill(skill as f32);
+        }
+    }
+
     /// 当前进行中的圈速，秒。起点线尚未越过时为 `0`。
     #[func]
     pub fn lap_time_s(&self) -> f32 {
@@ -399,6 +444,14 @@ impl WorldBody {
             .as_ref()
             .and_then(LapTimer::best_lap_s)
             .unwrap_or(-1.0)
+    }
+
+    /// 上一个完整圈是否是有效圈（没有倒车/离线cut）。
+    #[func]
+    pub fn last_lap_valid(&self) -> bool {
+        self.lap_timer
+            .as_ref()
+            .is_some_and(LapTimer::was_last_lap_valid)
     }
 
     /// 已完成且计数的圈数。

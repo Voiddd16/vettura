@@ -1,0 +1,30 @@
+[gd_resource type="Environment" load_steps=2 format=3]
+
+; 全局默认环境：天空背景 + 环境光填充。
+;
+; 为什么需要它：`test_visual/main.tscn`（主场景）以前只有一盏日光，没有任何
+; Environment。Godot 在没有 WorldEnvironment 时回落到工程的默认环境，默认环境
+; 的背景是接近黑色的 clear color、环境光为 0——于是太阳照得到的地方亮、照不到的
+; 地方一片死黑（看台内壁、车身底面、马路阴影全都看不见），也就是“有的地方是黑的”。
+;
+; 环境光用 AMBIENT_SOURCE_COLOR（恒定色）而不是 SKY/BG：实测本机 Godot 4.7 里
+; 运行时用代码 `AMBIENT_SOURCE_SKY` 建出来的天空（ai_lap.gd 的 AI_LAP_CAM 模式）
+; 不产生任何环境光，只有显式颜色才照得亮。用资源文件 + Sky 的方式虽然能亮，但
+; 为了让工程里“无论有没有 WorldEnvironment 节点”都拿到可靠的环境光，这里显式
+; 给一个偏冷的天空色常量，能量 1.2 刚好把阴影区提亮到可见而不过曝。
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
+sky_top_color = Color(0.385, 0.513, 0.8, 1)
+sky_horizon_color = Color(0.75, 0.8, 0.9, 1)
+ground_horizon_color = Color(0.6, 0.65, 0.7, 1)
+ground_bottom_color = Color(0.35, 0.35, 0.4, 1)
+sun_angle_max = 30.0
+
+[resource]
+background_mode = 2
+sky = SubResource("ProceduralSkyMaterial_sky")
+ambient_light_source = 2
+ambient_light_color = Color(0.55, 0.6, 0.68, 1)
+ambient_light_energy = 1.2
+reflected_light_source = 2
+tonemap_mode = 0

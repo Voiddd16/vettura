@@ -23,9 +23,19 @@ extends Node3D
 ## /Applications/Godot.app/Contents/MacOS/Godot --path . res://gdext/ai_lap.tscn
 ## ```
 ##
+## 抓整圈视频帧（配合 scripts/record_ai_lap.py；每 AI_LAP_CAPTURE_EVERY 帧存一张
+## JPEG，跑完后由 ffmpeg 编码成 mp4）：
+##
+## ```bash
+## AI_LAP_CAPTURE=1 AI_LAP_CAM=1 \
+## /Applications/Godot.app/Contents/MacOS/Godot --path . res://gdext/ai_lap.tscn --fixed-fps 60
+## ```
+##
 ## 环境变量：AI_LAP_MAX_S（圈时上限/最长跑动秒数）、AI_LAP_LAPS（目标圈数）、
 ## AI_LAP_CAM=1（窗口模式下加追逐相机+日光）、AI_LAP_REQUIRE_LAP=0（短跑录视频
-## 时不要求完成整圈）。
+## 时不要求完成整圈）、AI_LAP_CAPTURE=1（抓帧）、AI_LAP_CAPTURE_EVERY（隔几帧
+## 抓一次，默认 2 → 30fps 视频）、AI_LAP_CAPTURE_DIR（帧输出目录，默认
+## user://ai_lap_frames）。
 
 const CAR_DIR := "res://mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
 const TRACK_DIR := "res://mods/daytona_2017"
@@ -76,6 +86,12 @@ var _last_reset_s := -10.0
 var _cam: Camera3D
 var _require_lap := true
 
+## 录视频抓帧：AI_LAP_CAPTURE=1 时每个渲染帧存一张 JPEG，由外部 ffmpeg 编码。
+var _capture_dir := ""
+var _capture_every := 2
+var _capture_frame := 0
+var _capture_saved := 0
+
 func _ready() -> void:
 	_max_lap_s = _env_float("AI_LAP_MAX_S", MAX_LAP_S_DEFAULT)
 	_target_laps = int(_env_float("AI_LAP_LAPS", TARGET_LAPS_DEFAULT))
@@ -98,6 +114,11 @@ func _ready() -> void:
 		push_error("[ai-lap] spawn_vehicle_from_path failed")
 		get_tree().quit(1)
 		return
+	# 比赛温度：AI 代表的是「已经暖过胎的职业车手」，不是冷车起步。
+	# 不暖胎时实测圈速慢 20%+（冷机 ECU 限扭到 55% 功率、冷胎掉一档抓地，
+	# 变速箱还会因为冷胎高滑移拒绝升挡）。
+	if not _world.warm_up_vehicle(0):
+		push_warning("[ai-lap] warm_up_vehicle failed, lap will be cold")
 	print("[ai-lap] spawned=", _car.name, " wheels=", _car.bound_wheels(),
 			" vehicles=", _world.vehicle_count())
 	_start = _car.position
@@ -105,28 +126,53 @@ func _ready() -> void:
 	if _env_float("AI_LAP_CAM", 0.0) > 0.5 and DisplayServer.get_name() != "headless":
 		_setup_visual()
 
-## 赛道与车模都不自带灯光：窗口模式下补一盏日光 + 天空环境，否则画面一片死黑。
+	if _env_float("AI_LAP_CAPTURE", 0.0) > 0.5:
+		_capture_dir = OS.get_environment("AI_LAP_CAPTURE_DIR")
+		if _capture_dir.is_empty():
+			_capture_dir = "user://ai_lap_frames"
+		_capture_every = maxi(1, int(_env_float("AI_LAP_CAPTURE_EVERY", 2.0)))
+		# 清掉上一批帧，避免新旧混在一起。
+		var absolute := ProjectSettings.globalize_path(_capture_dir)
+		var dir := DirAccess.open(absolute)
+		if dir == null:
+			var made := DirAccess.make_dir_recursive_absolute(absolute)
+			if made != OK:
+				push_error("[ai-lap] cannot create capture dir %s (err %d)" % [absolute, made])
+				_capture_dir = ""
+		else:
+			for file in dir.get_files():
+				if file.ends_with(".jpg"):
+					dir.remove(file)
+		if not _capture_dir.is_empty():
+			print("[ai-lap] capture frames -> %s every %d frame" % [absolute, _capture_every])
+
+## 赛道与车模都不自带灯光：窗口模式下补一盏日光即可。
+## 天空与环境光走工程默认环境（`game_environment.tres` +
+## project.godot 的 `environment/defaults/default_environment`）——以前这里自己
+## 用代码建 `AMBIENT_SOURCE_SKY` 的环境，实测不产生任何环境光，太阳照不到的
+## 地方（看台内壁、车身底面）全是一片死黑。
+##
+## 录视频用两盏灯：主光（带阴影）+ 反向补光。单盏日光下车身背光的一面、
+## 看台内壁、轮胎全在阴影里，录出来的画面一半是黑的；补光只影响这个探针的
+## 窗口模式，不动工程默认环境。
 func _setup_visual() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-48.0, -125.0, 0.0)
-	sun.light_energy = 1.4
+	sun.light_energy = 2.2
 	sun.shadow_enabled = true
 	add_child(sun)
 
-	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	env.sky = Sky.new()
-	env.sky.sky_material = ProceduralSkyMaterial.new()
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.6
-	var world_env := WorldEnvironment.new()
-	world_env.environment = env
-	add_child(world_env)
+	var fill := DirectionalLight3D.new()
+	fill.rotation_degrees = Vector3(-18.0, 55.0, 0.0)
+	fill.light_energy = 0.7
+	fill.shadow_enabled = false
+	add_child(fill)
 
 	_cam = Camera3D.new()
 	add_child(_cam)
 	_cam.current = true
-	print("[ai-lap] visual mode: chase cam + sun + sky")
+	_cam.fov = 72.0
+	print("[ai-lap] visual mode: chase cam + sun + fill (sky/ambient from project default_environment)")
 
 ## 追逐相机：跟在车后上方（物理帧 -Z 为车头，+Z 是车尾方向）。
 func _update_chase_cam() -> void:
@@ -136,6 +182,29 @@ func _update_chase_cam() -> void:
 	var origin := _car.global_position
 	_cam.global_position = origin + basis.z * 4.5 + Vector3(0.0, 2.0, 0.0)
 	_cam.look_at(origin - basis.z * 14.0 + Vector3(0.0, 1.0, 0.0), Vector3.UP)
+
+## 每个渲染帧抓一张图。放在 _process 而不是 _physics_process：渲染帧率决定的
+## 是视频帧率，物理帧率（60 Hz）决定的是车怎么动，两者本来就不必一致。
+func _process(_delta: float) -> void:
+	if _capture_dir.is_empty():
+		return
+	if _capture_frame % _capture_every != 0:
+		_capture_frame += 1
+		return
+	var image := get_viewport().get_texture().get_image()
+	if image == null:
+		_capture_frame += 1
+		return
+	# 用「已保存张数」编号而不是渲染帧号：每隔几帧抓一次会跳号，而 ffmpeg
+	# 的序列解码器一遇到断号就停（实测 5250 张只编出 1 帧）。
+	var path := "%s/f%05d.jpg" % [_capture_dir, _capture_saved]
+	var err := image.save_jpg(ProjectSettings.globalize_path(path), 0.85)
+	if err != OK:
+		if _capture_saved == 0:
+			push_error("[ai-lap] cannot save frame %s (err %d)" % [path, err])
+	else:
+		_capture_saved += 1
+	_capture_frame += 1
 
 func _physics_process(delta: float) -> void:
 	if _car == null or _world == null:
@@ -219,6 +288,9 @@ func _finish() -> void:
 	print("[ai-lap] finished t=%.1f moved=%.1f m max_speed=%.1f km/h laps=%d last=%.2f best=%.2f max_airborne=%.2f s"
 			% [_elapsed, moved, _max_speed_kmh, _world.laps(), _world.last_lap_s(),
 				_world.best_lap_s(), _max_airborne_s])
+	if not _capture_dir.is_empty():
+		print("[ai-lap] captured frames=%d (every %d) dir=%s"
+				% [_capture_saved, _capture_every, ProjectSettings.globalize_path(_capture_dir)])
 
 	if _require_lap and _world.laps() < _target_laps:
 		push_error("[ai-lap] AI failed to complete %d lap(s) in %.0f s (rescues=%d)" % [_target_laps, _max_lap_s, _rescues])

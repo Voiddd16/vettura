@@ -65,7 +65,7 @@ func _check_touch() -> void:
 
 	# 左侧刹车/右侧油门是同一个 HUD 文本域里的两个状态位，直接看文本最省事。
 	var info := _main.get_node("HUD/Panel/Columns/Column/InfoLabel") as Label
-	if info.text.find("油门（右半屏）：ON") == -1 or info.text.find("刹车（左半屏）：ON") == -1:
+	if info.text.find("油门（右半屏 / W）：ON") == -1 or info.text.find("刹车（左半屏 / S）：ON") == -1:
 		_fail("HUD did not reflect touch state: %s" % info.text)
 
 	# 松手后状态必须能回落，否则真机上手指离开后车会永远算在加油。
