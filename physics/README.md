@@ -8,7 +8,7 @@ AC 参数映射住在 `vettura-assets`，物理核心可以用合成车测试，
 
 | 文件 | 职责 |
 | --- | --- |
-| `spec.rs` | `VehicleSpec` 全家桶：质量/惯量、车轮、悬架（含主动悬架、heave 第三弹簧）、发动机（涡轮/热/ERS）、传动、轮胎（热/压/磨）、气动（逐翼/DRS）、刹车、燃油 |
+| `spec/` | `VehicleSpec` 全家桶：质量/惯量、车轮、悬架（含主动悬架、heave 第三弹簧）、发动机（涡轮/热/ERS）、传动、轮胎（热/压/磨）、气动（逐翼/DRS）、刹车、燃油 |
 | `state.rs` | `VehicleState` / `WheelState`：位姿、速度、四轮状态、转速、挡位 |
 | `controls.rs` | `Controls` / `ShiftBlip`：油门、刹车、离合、转向、换挡、手刹、DRS、ABS/TC 请求 |
 | `backend.rs` | `VehicleBackend` trait：`step(dt, controls)`——所有求解器（Simple / Chrono / 将来自研）的唯一契约 |
