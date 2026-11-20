@@ -156,6 +156,8 @@ fn ai_lap_stays_on_track() {
     let mut max_speed_mps = 0.0f32;
     let mut max_airborne_s = 0.0f32;
     let mut airborne_s = 0.0f32;
+    let mut max_lateral_g = 0.0f32;
+    let mut max_lateral_g_speed = 0.0f32;
     let mut impact_count = 0usize;
     let mut max_impact_mps = 0.0f32;
     let mut last_print_s = -1.0f32;
@@ -204,6 +206,11 @@ fn ai_lap_stays_on_track() {
             airborne_s = 0.0;
         }
         max_speed_mps = max_speed_mps.max(snapshot.forward_speed_mps.max(0.0));
+        let lateral_g = snapshot.angular_velocity.y.abs() * snapshot.forward_speed_mps.abs() / 9.81;
+        if lateral_g > max_lateral_g {
+            max_lateral_g = lateral_g;
+            max_lateral_g_speed = snapshot.forward_speed_mps;
+        }
         let projection = driver.last_projection();
         if let Some(projection) = projection {
             max_lateral_m = max_lateral_m.max(projection.lateral_m.abs());
@@ -213,19 +220,25 @@ fn ai_lap_stays_on_track() {
         if elapsed_s - last_print_s >= 1.0 {
             last_print_s = elapsed_s;
             let projection = projection.expect("first projection");
+            let line_speed = line
+                .sample_at_distance(projection.along_m)
+                .map(|sample| sample.speed_mps.unwrap_or(f32::NAN))
+                .unwrap_or(f32::NAN);
             println!(
-                "[ai-lap-test] t={:6.1} lapT={:6.2} along={:7.1} lat={:6.2} y={:5.2}/{:5.2} spd={:6.1} \
-                 thr={:.2} brk={:.2} steer={:+.2} ct={} lap={} tyreT={:.0} engMul={:.2} coolant={:.1}",
+                "[ai-lap-test] t={:6.1} lapT={:6.2} along={:7.1} lat={:6.2} linev={:5.1} \
+                 y={:5.2}/{:5.2} spd={:6.1} thr={:.2} brk={:.2} steer={:+.2} latg={:4.2} ct={} lap={} tyreT={:.0} engMul={:.2} coolant={:.1}",
                 elapsed_s,
                 timer.lap_time_s(),
                 projection.along_m,
                 projection.lateral_m,
+                line_speed,
                 snapshot.reference_position.y,
                 projection.position.y,
                 snapshot.forward_speed_mps,
                 input.throttle,
                 input.brake,
                 input.steering,
+                lateral_g,
                 contacts,
                 timer.laps(),
                 snapshot.tyre_temperatures_c.iter().sum::<f32>() / 4.0,
@@ -240,13 +253,15 @@ fn ai_lap_stays_on_track() {
     let snapshot = world.snapshot(car).expect("final snapshot");
     println!(
         "[ai-lap-test] done t={:.1} laps={} lap={:.2} best={:.2} max_lat={:.2} m \
-         max_speed={:.1} m/s max_airborne={:.2} s impacts={} max_impact={:.1} m/s pos={:?}",
+         max_speed={:.1} m/s max_lat_g={:.2} @ {:.1} m/s max_airborne={:.2} s impacts={} max_impact={:.1} m/s pos={:?}",
         elapsed_s,
         timer.laps(),
         lap_s,
         best_s,
         max_lateral_m,
         max_speed_mps,
+        max_lateral_g,
+        max_lateral_g_speed,
         max_airborne_s,
         impact_count,
         max_impact_mps,

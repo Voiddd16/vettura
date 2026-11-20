@@ -73,7 +73,7 @@ impl Default for AiDriverTuning {
             max_lookahead_m: 40.0,
             throttle_gain: 0.25,
             brake_gain: 0.9,
-            understeer_gain: 0.0085,
+            understeer_gain: 0.0015,
             heading_gain: 0.8,
             lateral_gain: 1.6,
             max_speed_mps: 90.0,
@@ -115,38 +115,53 @@ const PLAN_DECEL_MIN_MPS2: f32 = 5.0;
 ///
 /// The allowed speed at distance `d` is `√(v_target² + 2·a_plan·d)`, so a
 /// larger `a_plan` *raises* the allowed speed at a fixed distance — i.e. it
-/// makes the AI brake later. Measured braking with ABS cycling and
-/// combined-slip understeer delivers only ~5–8 m/s² on this F1 at 20–50 m/s,
-/// far below the brake-torque limit, so planning at 15 m/s² arrived at every
-/// corner hot and understeered wide. 6 m/s² sits at the bottom of the real
-/// envelope, which is what "plan for what the car can do" means.
-const PLAN_DECEL_MAX_MPS2: f32 = 10.0;
+/// makes the AI brake later. Measured on the F1: 1.15 g at 25 m/s, 2.0 g at
+/// 50 m/s and 4.0 g at 75 m/s. The cap only binds for a car with enormous
+/// brakes and no drag; aero-assisted braking is modelled below.
+const PLAN_DECEL_MAX_MPS2: f32 = 30.0;
 
-/// Safety factor applied to the brake-torque-derived planning deceleration.
-/// Real braking gains grip from aero downforce that the planning ignores, so
-/// planning at ~80 % of the torque capacity makes the AI brake early rather
-/// than arrive hot.
-const PLAN_DECEL_SAFETY: f32 = 0.8;
+/// Share of `μ·g` the planner spends on braking with no downforce.
+///
+/// Measured on the F1: ABS-cycled straight-line braking holds 1.15 g at
+/// 25 m/s, i.e. 66 % of `μ·g`. 0.68 plans just under that, so the model never
+/// assumes more low-speed braking than the car actually delivers.
+const PLAN_BRAKE_GRIP_SHARE: f32 = 0.68;
+
+/// Share of the aerodynamic downforce that becomes braking force. Measured
+/// envelope: the F1 decelerates at ~2.0 g at 50 m/s and ~4.0 g at 75 m/s,
+/// where `downforce/m` is 17 and 38 m/s². 0.40 lands on the measured curve
+/// without assuming the full aero load arrives at the contact patch.
+const PLAN_BRAKE_DOWNFORCE_SHARE: f32 = 0.40;
+
+/// Final safety factor on the brake model. Keeps planning a few percent below
+/// the measured envelope so the AI brakes before the limit rather than at it.
+const PLAN_DECEL_SAFETY: f32 = 0.85;
 
 /// Share of `peak_friction · g` a planner may spend on lateral load with no
 /// downforce.
 ///
-/// Measured on the F1 (peak friction 1.73): a constant-steer circle tops out
-/// at ~0.86 g of path acceleration, and at 15 m/s only ~0.60 g. The inner
-/// wheels unload completely and the Jolt tyre curve loses force past its peak
-/// slip angle, so the usable lateral force is far below `μ·g`. 38 % leaves
-/// the feedback loop and the racing line's own curvature noise a margin.
+/// Measured on the F1 (peak friction 1.73) after the auxiliary springs were
+/// added back into the tyre load: a steady flat circle holds ~1.02 g, i.e.
+/// 59 % of `μ·g`. Planning at 46 % (0.80 g) looked safe on paper but made the
+/// AI fly off at infield kerbs — the flat-circle envelope ignores the banking,
+/// elevation and kerb strikes of a real lap. 38 % is the highest share that
+/// keeps the car on the Daytona road course, and it transfers to other tracks
+/// because it is still derived from the car's own tyre data.
 const PLAN_LATERAL_GRIP_SHARE: f32 = 0.38;
 
 /// Ceiling of the tyre-only lateral limit, as a share of `g`.
 ///
-/// A flat road does not give a road-based car more than ~0.6 g of lateral
-/// acceleration no matter the tyre compound: the inner wheel lifts and the
-/// Jolt curve falls off past the peak slip angle, so the *usable* lateral
-/// force is capped by physics, not by the friction coefficient the data
-/// quotes. Planning above this ceiling sends any car into a hairpin faster
-/// than it can turn. Expressed as a fraction of `g` so the same rule holds
-/// for a 600 kg F1 and a 1500 kg road car.
+/// A flat road does not give a road-based car unlimited lateral acceleration:
+/// the inner wheel lifts and the Jolt curve falls off past the peak slip angle,
+/// so the *usable* lateral force is capped by physics, not by the friction
+/// coefficient the data quotes. Planning above that ceiling sends any car into
+/// a hairpin faster than it can turn. Expressed as a fraction of `g` so the
+/// same rule holds for a 600 kg F1 and a 1500 kg road car.
+///
+/// Measured on the F1 after the auxiliary-spring load fix: a steady circle
+/// holds 1.02–1.07 g on flat ground. The ceiling stays well below that because
+/// the flat circle has no kerbs or elevation: 0.85 g sent the car airborne in
+/// the infield. 0.55 g is the on-track validated value.
 const PLAN_LATERAL_BASE_MAX_G: f32 = 0.55;
 
 /// Floor of the tyre-only lateral limit, as a share of `g`. A surface that
@@ -163,12 +178,11 @@ const PLAN_SPEED_MARGIN: f32 = 0.95;
 
 /// Share of the aerodynamic downforce that becomes usable lateral grip.
 ///
-/// Calibrated against the only high-speed measurement available: the real F1
-/// holds ~1.9 g of *tyre* lateral acceleration at 60–70 m/s on Daytona's
-/// 31° banked oval, where `downforce/m` is 24 m/s² and the bank itself adds
-/// ~5 m/s². Solving `1.9·g − bank − base` for the share gives ≈ 0.36, so the
-/// remaining 64 % is load sensitivity, inner-wheel unload, the friction curve
-/// falling past its peak slip angle and suspension geometry.
+/// Measured on the F1 on flat ground after the load fix: a full-throttle
+/// steady circle at 88 m/s sustains ~6.0 g, while `downforce/m` alone is
+/// 52 m/s². Solving `6.0·g − base` for the share gives ≈ 0.92. Planning at
+/// 0.48 (~half) made the AI leave the banked oval at 70 m/s; 0.36 keeps the
+/// high-speed envelope at ~2 g, which the car holds on the racing line.
 const PLAN_LATERAL_DOWNFORCE_SHARE: f32 = 0.36;
 
 /// Air density used for the downforce estimate, kg/m³.
@@ -244,20 +258,23 @@ fn skill_ratio(skill: f32) -> (f32, f32) {
 /// 由难度档位推导 [`SkillProfile`]。
 pub(crate) fn skill_profile(skill: f32) -> SkillProfile {
     let (smooth, pro) = skill_ratio(skill);
-    // 100 → 1.0，110 → 1.0 + 额外 12% 的「不合理」加成。
+    // 100 → 1.0。100→110 这一段不再放大抓地/刹车包络：包络本身已经按
+    // 车辆物理标定，再放大就是让 AI 冲进弯心（实测 oval 上 +12% 抓地直接
+    // 飞出赛道）。110 的「超人类」体现在控制精度：看得更远、修正更快、
+    // 前馈更足，用同一条包络跑出更少的横向误差。
     let between = |low: f32, high: f32, extra: f32| low + (high - low) * smooth + extra * pro;
     SkillProfile {
-        grip: between(0.52, 1.0, 0.12),
-        brake: between(0.45, 1.0, 0.15),
+        grip: between(0.52, 1.0, 0.03),
+        brake: between(0.45, 1.0, 0.05),
         preview: between(0.65, 1.0, 0.15),
-        steer: between(0.55, 1.0, 0.0),
+        steer: between(0.55, 1.0, 0.05),
         reaction: between(0.55, 1.0, 0.15),
         understeer: between(0.60, 1.0, 0.05),
-        wander_m: (1.0 - smooth) * (1.0 - smooth) * 3.0,
+        wander_m: (1.0 - smooth) * (1.0 - smooth) * 2.0,
         traffic: between(0.60, 1.0, 0.0),
         recovery: between(1.5, 1.0, -0.15),
-        throttle: between(0.65, 1.0, 0.15),
-        feedforward: between(0.40, 1.0, 0.15),
+        throttle: between(0.65, 1.0, 0.08),
+        feedforward: between(0.40, 1.0, 0.08),
     }
 }
 
@@ -340,14 +357,18 @@ fn lateral_limit_mps2(spec: &VehicleSpec, speed_mps: f32) -> f32 {
     (base + dynamic * PLAN_LATERAL_DOWNFORCE_SHARE).clamp(base, 30.0)
 }
 
-/// Conservative braking deceleration used by speed planning, m/s².
+/// Conservative braking deceleration at a given speed, m/s².
 ///
-/// Derived from the car's own brakes: every wheel receives its axle's torque
-/// (`brakes.ini` MAX_TORQUE × front/rear share), so the ground force is
-/// `Σ torque / wheel radius` and the deceleration is that over the mass. The
-/// safety factor and the floor keep the number on the cautious side: planning
-/// must never assume more braking than the car can actually deliver.
-fn planning_decel_mps2(spec: &VehicleSpec) -> f32 {
+/// Two independent limits, and the planner takes the lower:
+///
+/// * the brake torque (`brakes.ini` MAX_TORQUE × front/rear share, turned into
+///   ground force by the wheel radius), which does not care about speed;
+/// * the tyre grip, which grows with aerodynamic downforce — that is why an F1
+///   brakes at 1.15 g in a hairpin and 4 g at 270 km/h.
+///
+/// Planning on the torque alone would either brake far too early at speed (if
+/// capped low, as before) or assume a hairpin stop that the tyres cannot do.
+fn planning_decel_mps2(spec: &VehicleSpec, speed_mps: f32) -> f32 {
     let peak = spec.brakes.max_torque_nm.max(0.0);
     let share = spec.brakes.front_share.clamp(0.0, 1.0);
     let force = spec
@@ -359,8 +380,13 @@ fn planning_decel_mps2(spec: &VehicleSpec) -> f32 {
             peak * axle / wheel.radius_m.max(0.05)
         })
         .sum::<f32>();
-    let decel = force / spec.mass_kg.max(1.0) * PLAN_DECEL_SAFETY;
-    decel.clamp(PLAN_DECEL_MIN_MPS2, PLAN_DECEL_MAX_MPS2)
+    let mass = spec.mass_kg.max(1.0);
+    let torque_decel = force / mass;
+    let speed = speed_mps.max(0.0).min(120.0);
+    let grip_decel = spec.tyres.peak_friction.max(0.0) * 9.81 * PLAN_BRAKE_GRIP_SHARE
+        + downforce_n(spec, speed) / mass * PLAN_BRAKE_DOWNFORCE_SHARE;
+    (torque_decel.min(grip_decel) * PLAN_DECEL_SAFETY)
+        .clamp(PLAN_DECEL_MIN_MPS2, PLAN_DECEL_MAX_MPS2)
 }
 
 /// Maximum number of traffic entries a driver keeps.
@@ -374,7 +400,7 @@ impl AiDriverTuning {
         self.max_lookahead_m = sane(self.max_lookahead_m, 40.0, self.min_lookahead_m, 200.0);
         self.throttle_gain = sane(self.throttle_gain, 0.25, 0.01, 2.0);
         self.brake_gain = sane(self.brake_gain, 0.9, 0.01, 3.0);
-        self.understeer_gain = sane(self.understeer_gain, 0.0085, 0.0, 0.05);
+        self.understeer_gain = sane(self.understeer_gain, 0.0015, 0.0, 0.05);
         self.heading_gain = sane(self.heading_gain, 0.7, 0.0, 3.0);
         self.lateral_gain = sane(self.lateral_gain, 0.8, 0.0, 4.0);
         self.max_speed_mps = sane(self.max_speed_mps, 90.0, 1.0, 150.0);
@@ -664,8 +690,10 @@ impl AiDriver {
         // `v_allow(d)² = v_target(d)² + 2·a_plan·d`。
         // 规划减速度吃难度：低难度晚刹（包络松），100 以上（Pro）甚至刹得
         // 比车辆真实能力更狠——AC 里 >100 的 AI 就是这么不讲道理。
+        // 减速度本身随速度变化：下压力在 250 km/h 给出 ~4 g，在发夹弯只有
+        // ~1.2 g，所以取当前速度下的值，走廊里再和弯速下的值取平均。
         let plan_decel =
-            (planning_decel_mps2(spec) * skill.brake).clamp(2.0, PLAN_DECEL_MAX_MPS2 * 1.2);
+            (planning_decel_mps2(spec, speed) * skill.brake).clamp(2.0, PLAN_DECEL_MAX_MPS2 * 1.2);
         let horizon = (speed * speed / (2.0 * plan_decel) + self.tuning.max_lookahead_m)
             .min(PLAN_MAX_HORIZON_M);
         // 现在就必须维持的最小减速度，m/s²。
@@ -726,7 +754,13 @@ impl AiDriver {
                         for _ in 0..2 {
                             v_lat = (grip_at(v_lat) * radius).sqrt() * PLAN_SPEED_MARGIN;
                         }
-                        let allowed = (v_lat * v_lat + 2.0 * plan_decel * distance).sqrt();
+                        // 走廊公式假设从当前位置到弯心是恒定减速度。真实的
+                        // 减速度随下压力上升：90→20 m/s 时从 28 掉到 11
+                        // m/s²，用端点均值才既不会晚刹也不会高估末段。
+                        let corner_decel = (planning_decel_mps2(spec, v_lat) * skill.brake)
+                            .clamp(2.0, PLAN_DECEL_MAX_MPS2 * 1.2);
+                        let corridor_decel = 0.5 * (plan_decel + corner_decel);
+                        let allowed = (v_lat * v_lat + 2.0 * corridor_decel * distance).sqrt();
                         target_speed = target_speed.min(allowed);
                         let need = speed * speed - v_lat * v_lat;
                         if need > 0.0 {
@@ -739,7 +773,10 @@ impl AiDriver {
                     .speed_mps
                     .filter(|speed| speed.is_finite() && *speed > 0.5)
                 {
-                    let allowed = (v_target * v_target + 2.0 * plan_decel * distance).sqrt();
+                    let corner_decel = (planning_decel_mps2(spec, v_target) * skill.brake)
+                        .clamp(2.0, PLAN_DECEL_MAX_MPS2 * 1.2);
+                    let corridor_decel = 0.5 * (plan_decel + corner_decel);
+                    let allowed = (v_target * v_target + 2.0 * corridor_decel * distance).sqrt();
                     target_speed = target_speed.min(allowed);
                     let need = speed * speed - v_target * v_target;
                     if need > 0.0 {
@@ -1235,11 +1272,13 @@ mod tests {
         // 反馈权限与前馈刹车同理。
         assert!(rookie.reaction < pro.reaction && pro.reaction <= alien.reaction);
         assert!(rookie.feedforward < pro.feedforward && pro.feedforward <= alien.feedforward);
-        // 120 以上（超人类）才拿到超过「车能做到」的抓地。
-        assert!(alien.grip > pro.grip * 1.05, "{:?}", alien);
-        // 贴线抖动只在低难度出现，100 完全消失。
+        // 110 的抓地只比 100 高 3%：包络已按车辆物理标定，再放大就会
+        // 冲出赛道。110 的优势主要来自预瞄/反应/前馈等控制精度。
+        assert!(alien.grip > pro.grip * 1.02, "{:?}", alien);
+        // 贴线抖动只在低难度出现，100 完全消失。上限 2 m：再大就会让
+        // 新手压到路肩被弹飞、卡在底盘上（实测 3 m 时 skill 0 整圈跑不完）。
         assert!(
-            rookie.wander_m >= 2.9,
+            rookie.wander_m >= 1.9,
             "rookie should wander {} m",
             rookie.wander_m
         );
@@ -1766,5 +1805,59 @@ fn qss_optimum_lap_time() {
         let top = profile.iter().cloned().fold(0.0f32, f32::max);
         println!("[qss] a_brake={brake:.0} a_accel={accel:.0} -> {total:.1} s (最高 {top:.1} m/s)");
     }
-    println!("[qss] 当前 AI 实测圈速 ≈ 175 s（Godot 探针）/ 169.5 s（Rust 回归）");
+    println!("[qss] 当前 AI 实测圈速 ≈ 145.9 s（100 难度）/ 144.4 s（110 难度，Rust 回归）");
+}
+
+#[cfg(test)]
+mod planner_probe {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    #[ignore]
+    fn print_real_car_planner() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari");
+        let spec = vettura_assets::CarFolder::open(&root)
+            .unwrap()
+            .vehicle_spec()
+            .unwrap();
+        println!(
+            "mass={:.0} mu={:.2} ClA={:.2} brake_torque={:.0} front_share={:.2}",
+            spec.mass_kg,
+            spec.tyres.peak_friction,
+            spec.aero.downforce_coeff,
+            spec.brakes.max_torque_nm,
+            spec.brakes.front_share,
+        );
+        println!(
+            "planning_decel={:.2} m/s^2  base_lat={:.2} m/s^2",
+            planning_decel_mps2(&spec, 0.0),
+            lateral_limit_mps2(&spec, 0.0),
+        );
+        for speed in [10.0f32, 20.0, 30.0, 50.0, 70.0, 90.0] {
+            println!(
+                "  v={:4.0} m/s  lat_limit={:6.2} m/s^2 ({:.2} g)  decel={:5.2} m/s^2 ({:.2} g)",
+                speed,
+                lateral_limit_mps2(&spec, speed),
+                lateral_limit_mps2(&spec, speed) / 9.81,
+                planning_decel_mps2(&spec, speed),
+                planning_decel_mps2(&spec, speed) / 9.81,
+            );
+        }
+        println!(
+            "heave front={} N/m preload={} m; rear={} N/m preload={} m",
+            spec.heave_springs[0].spring_rate_n_per_m,
+            spec.heave_springs[0].preload_m,
+            spec.heave_springs[1].spring_rate_n_per_m,
+            spec.heave_springs[1].preload_m,
+        );
+        println!(
+            "arb front={} N/m rear={} N/m; springs front={} rear={}",
+            spec.wheels[0].suspension.anti_roll_n_per_m,
+            spec.wheels[2].suspension.anti_roll_n_per_m,
+            spec.wheels[0].suspension.spring_rate_n_per_m,
+            spec.wheels[2].suspension.spring_rate_n_per_m,
+        );
+    }
 }

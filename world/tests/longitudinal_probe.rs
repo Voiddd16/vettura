@@ -24,9 +24,15 @@ fn real_car_spec() -> Option<vettura_physics::VehicleSpec> {
     CarFolder::open(&root).ok()?.vehicle_spec().ok()
 }
 
+/// 物理步长与 `World` 固定步一致；每个采样点之间必须真的走完这段时间，
+/// 否则测到的是「一步之后的速度差」，既不是包络也不是稳态。
 const DT: f32 = 1.0 / 600.0;
 
-/// 从静止开始全油门，每 0.5 s 记一行：速度、加速度、挡位。
+fn aids_enabled() -> bool {
+    std::env::var("PROBE_AIDS").map_or(true, |value| value != "off")
+}
+
+/// 从静止开始全油门，每 1 s 记一行：速度、这一秒的平均加速度、挡位。
 #[test]
 #[ignore]
 fn full_throttle_acceleration() {
@@ -47,7 +53,8 @@ fn full_throttle_acceleration() {
     world
         .warm_up_vehicle(car)
         .expect("warm up the car before measuring");
-    let aids = std::env::var("PROBE_AIDS").map_or(true, |v| v != "off");
+    let aids = aids_enabled();
+    // 起步瞬间 TC 会压制油门，先跑 2 s 让车动起来，再开始记包络。
     for _ in 0..(2.0 / DT) as usize {
         world
             .set_controls(
@@ -62,41 +69,40 @@ fn full_throttle_acceleration() {
             .unwrap();
         world.step_exact(DT).unwrap();
     }
-    println!("full throttle: from rest, 10 s");
-    let mut previous = 0.0f32;
-    for step in 0..20 {
-        world
-            .set_controls(
-                car,
-                vettura_physics::Controls {
-                    throttle: 1.0,
-                    tc: aids,
-                    abs: aids,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        world.step_exact(DT).unwrap();
+    println!("full throttle: from rest, 20 s (aids={aids})");
+    let mut previous = world.snapshot(car).unwrap().forward_speed_mps;
+    for second in 0..20 {
+        for _ in 0..(1.0 / DT) as usize {
+            world
+                .set_controls(
+                    car,
+                    vettura_physics::Controls {
+                        throttle: 1.0,
+                        tc: aids,
+                        abs: aids,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            world.step_exact(DT).unwrap();
+        }
         let snapshot = world.snapshot(car).unwrap();
         let speed = snapshot.forward_speed_mps;
-        if step % 2 == 1 {
-            let accel = (speed - previous) / 1.0;
-            println!(
-                "t={:5.1} speed={:6.1} m/s ({:6.1} km/h) accel={:5.2} m/s^2 gear={} rpm={:6.0} coolant={:5.1}",
-                2.0 + 0.5 * step as f32,
-                speed,
-                speed * 3.6,
-                accel,
-                snapshot.gear,
-                snapshot.engine_rpm,
-                world.engine_temperatures_c(car).unwrap().0,
-            );
-            previous = speed;
-        }
+        println!(
+            "t={:4.1} speed={:6.1} m/s ({:6.1} km/h) accel={:5.2} m/s^2 gear={} rpm={:6.0} coolant={:5.1}",
+            3.0 + second as f32,
+            speed,
+            speed * 3.6,
+            speed - previous,
+            snapshot.gear,
+            snapshot.engine_rpm,
+            world.engine_temperatures_c(car).unwrap().0,
+        );
+        previous = speed;
     }
 }
 
-/// 直线全刹车（ABS 开）从各初速刹到 5 m/s，记录减速。
+/// 直线全刹车（ABS 开）从各初速刹到 5 m/s，记录减速度包络。
 #[test]
 #[ignore]
 fn straight_line_braking() {
@@ -104,74 +110,80 @@ fn straight_line_braking() {
         eprintln!("skipping: mods/ 不存在");
         return;
     };
-    for start in [30.0f32, 50.0, 70.0] {
+    let aids = aids_enabled();
+    for start in [25.0f32, 50.0, 75.0] {
         let mut world = World::new(SurfaceMap::new()).unwrap();
-        // 先把车推到目标速度，再开始测刹车。
         let handle = world
             .add_vehicle(spec.clone(), vettura_physics::Pose::default())
             .unwrap();
+        world.warm_up_vehicle(handle).expect("warm up");
+        // 全油门推到目标速度，同样用固定步长，避免一次 50 ms 的巨步。
         let mut speed = 0.0f32;
-        let mut elapsed = 0.0f32;
-        while elapsed < 40.0 {
-            let controls = vettura_physics::Controls {
-                throttle: if speed < start { 1.0 } else { 0.0 },
-                brake: if speed > start + 1.0 { 1.0 } else { 0.0 },
-                tc: true,
-                abs: true,
-                ..Default::default()
-            };
-            world.set_controls(handle, controls).unwrap();
-            world.step_exact(0.05).unwrap();
+        for _ in 0..(60.0 / DT) as usize {
+            world
+                .set_controls(
+                    handle,
+                    vettura_physics::Controls {
+                        throttle: 1.0,
+                        tc: aids,
+                        abs: aids,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            world.step_exact(DT).unwrap();
             speed = world.snapshot(handle).unwrap().forward_speed_mps;
-            elapsed += 0.05;
             if speed >= start {
                 break;
             }
         }
-        world.step_exact(1.0 / 60.0).unwrap();
-        let mut samples = Vec::new();
-        let mut elapsed = 0.0;
-        while elapsed < 8.0 {
+        let reached = speed;
+        let mut samples: Vec<(f32, f32)> = Vec::new();
+        let mut elapsed = 0.0f32;
+        while elapsed < 10.0 {
             world
                 .set_controls(
                     handle,
                     vettura_physics::Controls {
                         throttle: 0.0,
                         brake: 1.0,
-                        tc: true,
-                        abs: true,
+                        tc: aids,
+                        abs: aids,
                         ..Default::default()
                     },
                 )
                 .unwrap();
             world.step_exact(DT).unwrap();
-            samples.push((elapsed, world.snapshot(handle).unwrap().forward_speed_mps));
             elapsed += DT;
+            samples.push((elapsed, world.snapshot(handle).unwrap().forward_speed_mps));
             if samples.last().unwrap().1 < 5.0 {
                 break;
             }
         }
         println!(
-            "braking from {start:.0} m/s (ABS on), {} samples",
-            samples.len()
+            "braking from {reached:.1} m/s (aids={aids}), {:.2} s to 5 m/s",
+            elapsed
         );
-        // 每 0.05 s 打一行：窗口瞬时减速度就是 (t0-t1) 之间的平均。
-        let mut printed = -1.0;
-        for pair in samples.windows(2) {
-            let (t0, v0) = pair[0];
-            let (t1, v1) = pair[1];
-            if t0 - printed < 0.049 {
-                continue;
-            }
-            printed = t0;
+        // 每 0.1 s 打一行：窗口平均减速度（窗口两端的速度差 / 时间差）。
+        let window = 0.1f32;
+        let mut anchor = 0usize;
+        let mut report_at = window;
+        while anchor + 1 < samples.len() {
+            let Some(next) = (anchor..samples.len()).find(|&i| samples[i].0 >= report_at) else {
+                break;
+            };
+            let (t0, v0) = samples[anchor];
+            let (t1, v1) = samples[next];
             let decel = (v0 - v1) / (t1 - t0).max(1.0e-6);
             println!(
                 "  t={:5.2} speed={:6.1} decel={:5.2} m/s^2 ({:.2} g)",
-                t0,
-                v0,
+                t1,
+                v1,
                 decel,
                 decel / 9.81
             );
+            anchor = next;
+            report_at += window;
         }
     }
 }

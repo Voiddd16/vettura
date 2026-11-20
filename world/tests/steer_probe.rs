@@ -1,9 +1,14 @@
-//! 转向能力诊断：真实车辆在平地上恒定方向盘输入下的稳态转弯半径。
+//! 转向能力诊断：真实车辆在平地上全油门、恒定方向盘输入下的稳态转弯包络。
 //!
 //! AI 速度规划的横向极限（[`vettura_world::ai`] 里的
-//! `PLAN_LATERAL_GRIP_SHARE` / `PLAN_LATERAL_BASE_MAX_MPS2`）就是从这里测得
-//! 的：每个「目标速度 × 方向盘比例」组合跑 8 秒，输出稳态半径、侧向 g、四轮
-//! 载荷与侧向力。调 AI 弯速前先跑这个确认抓地包络。
+//! `PLAN_LATERAL_GRIP_SHARE` / `PLAN_LATERAL_BASE_MAX_G` /
+//! `PLAN_LATERAL_DOWNFORCE_SHARE`）就是从这里测得的：每个舵角从静止全油门
+//! 加速，让车在圆上自己找平衡点（推力 = 阻力 + 侧向饱和），输出稳态速度、
+//! 半径、横向 g、四轮载荷与侧向力。
+//!
+//! 这个探针必须跑在**修好辅助弹簧载荷**之后：车身重量有一半由 heave/渐进
+//! 弹簧以外力形式承担，若轮胎回调看不到这部分载荷，测出来的包络只有真实
+//! 值的一半。
 //!
 //! ```bash
 //! cargo test -p vettura-world --test steer_probe -- --ignored --nocapture
@@ -30,118 +35,89 @@ fn real_car_spec() -> Option<VehicleSpec> {
     )
 }
 
+const DT: f32 = 1.0 / 600.0;
+
 #[test]
 #[ignore]
-fn constant_steer_circle() {
+fn sustained_circle_envelope() {
     let Some(spec) = real_car_spec() else {
         eprintln!("skipping: mods/ 车目录不存在");
         return;
     };
     println!(
-        "spec: wheelbase={:.2} mass={:.0} lock={:.1} peak_friction={:.2}",
-        spec.wheelbase_m, spec.mass_kg, spec.max_steer_angle_deg, spec.tyres.peak_friction
+        "spec: wheelbase={:.2} mass={:.0} lock={:.1} peak_friction={:.2} ClA={:.2} cg={:.3}",
+        spec.wheelbase_m,
+        spec.mass_kg,
+        spec.max_steer_angle_deg,
+        spec.tyres.peak_friction,
+        spec.aero.downforce_coeff,
+        spec.cg_height_m,
     );
-    const DT: f32 = 1.0 / 600.0;
-    for target_speed in [20.0f32, 30.0, 40.0, 50.0, 60.0, 70.0] {
-        for steer in [0.2f32, 0.4, 0.6, 0.8] {
-            let mut world = World::new(SurfaceMap::new()).unwrap();
-            let car = world
-                .add_vehicle(
-                    spec.clone(),
-                    Pose {
-                        position: Vec3::Y * 0.05,
-                        ..Pose::default()
+    // 小舵角 = 大半径高速弯，大舵角 = 低速发夹。每个组合从静止全油门跑
+    // 25 s，最后 5 s 当作稳态。
+    for steer in [0.04f32, 0.07, 0.10, 0.15, 0.22, 0.32, 0.48] {
+        let mut world = World::new(SurfaceMap::new()).unwrap();
+        let car = world
+            .add_vehicle(
+                spec.clone(),
+                Pose {
+                    position: Vec3::Y * 0.05,
+                    ..Pose::default()
+                },
+            )
+            .unwrap();
+        world.warm_up_vehicle(car).expect("warm up");
+        let mut steady_sum = 0.0f32;
+        let mut steady_samples = 0u32;
+        for step in 0..(25.0 / DT) as usize {
+            world
+                .set_controls(
+                    car,
+                    Controls {
+                        throttle: 1.0,
+                        brake: 0.0,
+                        steering: steer,
+                        abs: true,
+                        tc: true,
+                        ..Controls::default()
                     },
                 )
                 .unwrap();
-            for _ in 0..(0.5 / DT) as usize {
-                world.step_exact(DT).unwrap();
-            }
-            {
+            world.step_exact(DT).unwrap();
+            if step as f32 * DT >= 20.0 {
                 let snap = world.snapshot(car).unwrap();
-                let loads: Vec<f32> = snap.wheels.iter().map(|w| w.load_n).collect();
-                let latf: Vec<f32> = snap.wheels.iter().map(|w| w.lateral_force_n).collect();
-                println!(
-                    "static loads={loads:?} lateral_forces={latf:?} mass={} weight={:.0}",
-                    spec.mass_kg,
-                    spec.mass_kg * 9.81
-                );
+                steady_sum += snap.angular_velocity.y.abs() * snap.forward_speed_mps.abs();
+                steady_samples += 1;
             }
-            let mut lat_accel_max = 0.0f32;
-            let mut speed = 0.0f32;
-            let mut steady_g = 0.0f32;
-            let mut elapsed = 0.0f32;
-            let mut steady_accel_sum = 0.0f32;
-            let mut steady_samples = 0u32;
-            for _ in 0..(8.0 / DT) as usize {
-                let elapsed_last_3s = elapsed >= 5.0;
-                let snap = world.snapshot(car).unwrap();
-                speed = snap.forward_speed_mps;
-                let err = target_speed - speed;
-                let throttle = (err * 0.5 + 0.3).clamp(0.0, 1.0);
-                let brake = if err < -1.0 {
-                    (-err * 0.2).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                world
-                    .set_controls(
-                        car,
-                        Controls {
-                            throttle,
-                            brake,
-                            steering: steer,
-                            abs: true,
-                            tc: true,
-                            ..Controls::default()
-                        },
-                    )
-                    .unwrap();
-                world.step_exact(DT).unwrap();
-                let snap = world.snapshot(car).unwrap();
-                let lateral_accel = snap.angular_velocity.y.abs() * snap.forward_speed_mps.abs();
-                // 最后 3 秒的均值就是稳态横向加速度，比全程最大值更接近规划器要的数。
-                if elapsed_last_3s {
-                    steady_accel_sum += lateral_accel;
-                    steady_samples += 1;
-                }
-                if snap.forward_speed_mps > 1.0 {
-                    lat_accel_max = lat_accel_max.max(lateral_accel);
-                }
-            }
-            let snap = world.snapshot(car).unwrap();
-            let wheel_angle_deg = snap.wheels[0].steer_angle.to_degrees();
-            let yaw_rate = snap.angular_velocity.y;
-            let radius = if yaw_rate.abs() > 1.0e-4 {
-                snap.forward_speed_mps / yaw_rate.abs()
-            } else {
-                f32::INFINITY
-            };
-            let load: f32 = snap.wheels.iter().map(|w| w.load_n).sum();
-            let lat_force: f32 = snap.wheels.iter().map(|w| w.lateral_force_n).sum();
-            println!(
-                "target={:4.0} steer={:.2}  wheel={:6.1}deg speed={:6.1} yaw_rate={:7.3} radius={:7.1} lat_g={:5.2} steady_g={:5.2} slipF={:.2}/{:.2} slipR={:.2}/{:.2} load={:6.0} latF={:7.0} mu={:5.2}\n  wheels load={:?}\n  wheels lat={:?}",
-                target_speed,
-                steer,
-                wheel_angle_deg,
-                snap.forward_speed_mps,
-                yaw_rate,
-                radius,
-                lat_accel_max / 9.81,
-                steady_g,
-                snap.wheels[0].slip_angle,
-                snap.wheels[1].slip_angle,
-                snap.wheels[2].slip_angle,
-                snap.wheels[3].slip_angle,
-                load,
-                lat_force,
-                lat_force / load.max(1.0),
-                snap.wheels.iter().map(|w| w.load_n).collect::<Vec<_>>(),
-                snap.wheels
-                    .iter()
-                    .map(|w| w.lateral_force_n)
-                    .collect::<Vec<_>>(),
-            );
         }
+        let snap = world.snapshot(car).unwrap();
+        let speed = snap.forward_speed_mps;
+        let yaw_rate = snap.angular_velocity.y.abs();
+        let radius = if yaw_rate > 1.0e-4 {
+            speed / yaw_rate
+        } else {
+            f32::INFINITY
+        };
+        let steady_lat = steady_sum / steady_samples.max(1) as f32;
+        let contacts = snap.wheels.iter().filter(|wheel| wheel.contact).count();
+        let load: f32 = snap.wheels.iter().map(|wheel| wheel.load_n).sum();
+        let lat_force: f32 = snap
+            .wheels
+            .iter()
+            .map(|wheel| wheel.lateral_force_n.abs())
+            .sum();
+        println!(
+            "steer={:.2} wheel={:5.1}deg v={:5.1} m/s R={:6.1} m lat_g={:4.2} steady_g={:4.2} \
+             mu={:.2} contacts={} load={:.0}N",
+            steer,
+            snap.wheels[0].steer_angle.to_degrees(),
+            speed,
+            radius,
+            speed * yaw_rate / 9.81,
+            steady_lat / 9.81,
+            lat_force / load.max(1.0),
+            contacts,
+            load,
+        );
     }
 }

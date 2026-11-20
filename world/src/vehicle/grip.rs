@@ -44,6 +44,16 @@ pub(crate) struct GripState {
     relaxation_lateral_bits: [AtomicU32; 4],
     /// Relaxation multiplier on the longitudinal force per wheel, `0..=1`.
     relaxation_longitudinal_bits: [AtomicU32; 4],
+    /// Extra vertical load per wheel from the auxiliary springs, newtons.
+    ///
+    /// Jolt's `suspension_impulse` only carries its own linear spring/damper/
+    /// anti-roll bar. AC cars also have progressive springs, bump/rebound
+    /// stops, a heave (third) spring and active actuators; those are applied
+    /// as external forces on the chassis, so their share of the load never
+    /// reaches the tyre callback. Without adding it back here the tyre would
+    /// think it is loaded with only the linear spring — on this F1 that is
+    /// 47 % of the real corner weight, i.e. roughly half the grip.
+    extra_load_bits: [AtomicU32; 4],
     speed_bits: AtomicU32,
     wetness_bits: AtomicU32,
     track_temperature_bits: AtomicU32,
@@ -97,6 +107,19 @@ impl GripState {
         };
         self.relaxation_longitudinal_bits[index].store(long.to_bits(), Ordering::Relaxed);
         self.relaxation_lateral_bits[index].store(lat.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Publish the auxiliary-spring load one wheel carries, newtons.
+    ///
+    /// Published every step for all four wheels (zero when the wheel has no
+    /// contact) so a wheel that leaves the ground cannot keep a stale load.
+    pub(crate) fn publish_extra_load(&self, index: usize, newtons: f32) {
+        let value = if newtons.is_finite() {
+            newtons.clamp(-300_000.0, 300_000.0)
+        } else {
+            0.0
+        };
+        self.extra_load_bits[index].store(value.to_bits(), Ordering::Relaxed);
     }
 
     /// Publish the rubber multiplier under one wheel.
@@ -158,6 +181,7 @@ impl GripState {
             ],
             relaxation_lateral_bits: std::array::from_fn(|_| AtomicU32::new(1.0f32.to_bits())),
             relaxation_longitudinal_bits: std::array::from_fn(|_| AtomicU32::new(1.0f32.to_bits())),
+            extra_load_bits: std::array::from_fn(|_| AtomicU32::new(0.0f32.to_bits())),
             lateral_demand_bits: [
                 AtomicU32::new(0.0f32.to_bits()),
                 AtomicU32::new(0.0f32.to_bits()),
@@ -271,10 +295,16 @@ impl GripState {
             relaxation_lateral,
         );
 
-        // Load sensitivity: the tyre raises less friction per newton the
-        // heavier it is loaded. Jolt hands the solver's suspension impulse, so
-        // the load is available right here.
-        let load_n = input.suspension_impulse / input.delta_time.max(1.0e-6);
+        // Total vertical load on this wheel: Jolt's linear spring plus the
+        // auxiliary springs (progressive, stops, heave, active). Jolt caps the
+        // tyre impulse at `coefficient × suspension_impulse`, and its impulse
+        // only knows the linear spring, so the coefficient is scaled by
+        // `total / linear` to make the tyre see the real corner weight.
+        let delta_time = input.delta_time.max(1.0e-6);
+        let linear_load = (input.suspension_impulse / delta_time).max(0.0);
+        let extra_load = f32::from_bits(self.extra_load_bits[index].load(Ordering::Relaxed));
+        let load_n = (linear_load + extra_load).max(0.0);
+        let load_boost = load_boost(linear_load, load_n);
         let load_long = tyres.load_friction_multiplier(load_n, true);
         let load_lateral = tyres.load_friction_multiplier(load_n, false);
 
@@ -282,8 +312,57 @@ impl GripState {
             (self.tyre_peak_friction * environmental * groove * tyre_window).clamp(0.0, 8.0);
         let base = input.default_friction();
         TireFriction {
-            longitudinal: base.longitudinal * scale * circle_long * load_long,
-            lateral: base.lateral * scale * circle_lateral * load_lateral,
+            longitudinal: base.longitudinal * scale * circle_long * load_long * load_boost,
+            lateral: base.lateral * scale * circle_lateral * load_lateral * load_boost,
         }
+    }
+}
+
+/// `total / linear` load factor for the tyre callback's impulse cap.
+///
+/// Jolt always multiplies the returned coefficient by its own linear-spring
+/// impulse, so a car whose auxiliary springs carry part of the weight has to
+/// scale the coefficient up by the same ratio. The floor on `linear_load`
+/// keeps a barely-touching wheel (or an airborne one) from producing an
+/// unbounded factor; the upper clamp stops a degenerate bump-stop spike from
+/// asking for more grip than any tyre could make.
+fn load_boost(linear_load: f32, total_load: f32) -> f32 {
+    if linear_load <= 20.0 || !linear_load.is_finite() {
+        return 1.0;
+    }
+    (total_load / linear_load).clamp(0.0, 4.0)
+}
+
+#[cfg(test)]
+mod load_boost_tests {
+    use super::load_boost;
+
+    #[test]
+    fn no_auxiliary_spring_is_neutral() {
+        // Jolt's linear spring carries everything: the coefficient must not move.
+        assert_eq!(load_boost(1_500.0, 1_500.0), 1.0);
+    }
+
+    #[test]
+    fn heave_spring_doubles_the_cap() {
+        // Half the weight on the linear spring, half on a heave spring.
+        assert_eq!(load_boost(1_500.0, 3_000.0), 2.0);
+    }
+
+    #[test]
+    fn barely_loaded_wheel_is_not_amplified() {
+        // An airborne wheel: no meaningful linear load, so no boost, otherwise
+        // a stray auxiliary force would invent grip out of nothing.
+        assert_eq!(load_boost(5.0, 400.0), 1.0);
+        assert_eq!(load_boost(0.0, 0.0), 1.0);
+    }
+
+    #[test]
+    fn degenerate_inputs_are_clamped() {
+        // A bump-stop spike can ask for a lot; the cap keeps it physical.
+        assert_eq!(load_boost(100.0, 10_000.0), 4.0);
+        assert_eq!(load_boost(f32::NAN, 1_000.0), 1.0);
+        // Negative total load (extension pulling down) never boosts.
+        assert_eq!(load_boost(1_000.0, -100.0), 0.0);
     }
 }

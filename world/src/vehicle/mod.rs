@@ -957,7 +957,14 @@ impl VehicleRuntime {
                 water_depth_m: surface_sample.water_depth_m,
                 suspension_length_m: state.suspension_length,
                 hit_hard_point: state.hit_hard_point,
-                load_n: (state.suspension_lambda * force_scale).max(0.0),
+                // Jolt's lambda only covers its own linear spring; the
+                // auxiliary springs (progressive, stops, heave, active) are
+                // external forces. The tyre's real normal load is the sum, and
+                // that is what wear, temperature and telemetry should see.
+                load_n: (state.suspension_lambda * force_scale
+                    + self.suspension_force_n[index]
+                    + 0.5 * self.heave_force_n[index / 2])
+                    .max(0.0),
                 longitudinal_force_n,
                 lateral_force_n,
                 slip_ratio,
@@ -1393,6 +1400,16 @@ impl VehicleRuntime {
         self.suspension_force_n = forces;
         self.active_suspension_force_n = active_forces;
         self.heave_force_n = heave_forces;
+
+        // The tyre callback runs inside Jolt's solver and only sees the linear
+        // spring's impulse. Publish the auxiliary springs' share per wheel so
+        // the friction it computes uses the real corner weight (a heave spring
+        // is shared by the axle, so each wheel carries half).
+        for wheel in Wheel::ALL {
+            let index = wheel.index();
+            let heave = 0.5 * heave_forces[index / 2];
+            self.grip.publish_extra_load(index, forces[index] + heave);
+        }
         Ok(())
     }
 

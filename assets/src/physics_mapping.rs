@@ -103,9 +103,15 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
                 // quarter of it is where the bump stop has to take over.
                 progressive_rate_n_per_m2: axle.progressive_rate.unwrap_or(0.0).max(0.0),
                 bump_stop_rate_n_per_m: axle.bump_stop_rate.unwrap_or(0.0).max(0.0),
-                bump_stop_travel_m: (axle.travel.unwrap_or(0.08) * 0.75).max(0.005),
+                bump_stop_travel_m: axle
+                    .bumpstop_up
+                    .unwrap_or_else(|| axle.travel.unwrap_or(0.08) * 0.75)
+                    .clamp(0.01, 0.25),
                 rebound_stop_rate_n_per_m: 0.0,
-                rebound_stop_travel_m: (axle.travel.unwrap_or(0.08) * 0.75).max(0.005),
+                rebound_stop_travel_m: axle
+                    .bumpstop_dn
+                    .unwrap_or_else(|| axle.travel.unwrap_or(0.08) * 0.75)
+                    .clamp(0.01, 0.25),
                 // AC authors static camber per axle; the gain and thrust stay
                 // at the model defaults because AC does not publish them.
                 static_camber_deg: axle.static_camber.unwrap_or(0.0).clamp(-15.0, 15.0),
@@ -903,6 +909,8 @@ struct AxleData {
     damper_bump: Option<f32>,
     damper_rebound: Option<f32>,
     travel: Option<f32>,
+    bumpstop_up: Option<f32>,
+    bumpstop_dn: Option<f32>,
     anti_roll: Option<f32>,
     peak_friction: Option<f32>,
     progressive_rate: Option<f32>,
@@ -933,6 +941,14 @@ impl AxleData {
             travel: suspensions
                 .get_f32(axle, "PACKER_RANGE")
                 .or_else(|| suspensions.get_f32(axle, "BUMPSTOP_UP")),
+            // `BUMPSTOP_UP`/`BUMPSTOP_DN` are the distances from the
+            // suspension's design zero to the two end stops. `PACKER_RANGE`
+            // is often inconsistent with `SPRING_RATE` (this F1 quotes 0.04 m
+            // of total travel while its static compression alone is 0.037 m),
+            // so the end stops are the trustworthy source for how much bump
+            // and droop the suspension really has.
+            bumpstop_up: suspensions.get_f32(axle, "BUMPSTOP_UP"),
+            bumpstop_dn: suspensions.get_f32(axle, "BUMPSTOP_DN"),
             anti_roll: suspensions.get_f32("ARB", axle),
             peak_friction: tyres
                 .get_f32(axle, "DY0")

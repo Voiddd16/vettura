@@ -164,12 +164,27 @@ pub(crate) fn wheel_geometries(spec: &VehicleSpec) -> [WheelGeometry; 4] {
             wheel_spec.suspension.spring_rate_n_per_m.max(1_000.0),
             wheel_vertical_rate(spec),
         );
-        let static_compression = (spring_force_scale / spring).clamp(0.001, travel * 0.45);
-        let max_length = (static_compression + travel * 0.5).max(0.02);
-        let min_length = (max_length - travel - 0.001)
-            .max(0.005)
-            .min(max_length - 0.001);
-        let rest_length = max_length - static_compression;
+        // 线性弹簧在静载下的压缩量。注意这里用整个角载荷（`spring_force_scale`）
+        // 而不是实际值——heave/第三弹簧会分担一部分，所以真实压缩更小，车会
+        // 比几何假设多高几厘米，这正好留给 bump 使用。
+        let static_compression = (spring_force_scale / spring).clamp(0.002, 0.15);
+        // 悬挂长度在接触点处等于 `rest_length`（见 `mount` 的推导），所以
+        // `rest_length - min_length` 就是真实的 bump 可用行程。
+        //
+        // AC 的 `PACKER_RANGE` 与 `SPRING_RATE` 经常不自洽：本车前轴
+        // `PACKER_RANGE=0.04`，而静载压缩就要 0.037，等于静置就快顶到
+        // bump stop，1 g 就顶死并弹飞。`BUMPSTOP_UP/DN` 才是真实的上下
+        // 止点行程，所以 bump 行程取两者中较大的一个。
+        let bump_room = wheel_spec
+            .suspension
+            .bump_stop_travel_m
+            .max(travel * 0.5)
+            .clamp(0.01, 0.20);
+        let min_length = 0.005f32;
+        let rest_length = bump_room + min_length;
+        // Jolt 的弹簧只能推不能拉，所以拉伸行程最多就是静载压缩量；再往上
+        // 由 `rebound_stop` 提供下拉。
+        let max_length = rest_length + static_compression;
         WheelGeometry {
             rest_length,
             max_length,
@@ -401,4 +416,34 @@ const TAG_VEHICLE: u64 = 1 << 32;
 
 pub(crate) fn tag_vehicle(handle: VehicleHandle) -> u64 {
     TAG_VEHICLE | (handle.0 & 0xffff_ffff)
+}
+
+#[cfg(test)]
+mod geometry_probe {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    #[ignore]
+    fn print_real_car_geometry() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari");
+        let spec = vettura_assets::CarFolder::open(&root)
+            .unwrap()
+            .vehicle_spec()
+            .unwrap();
+        println!("mass={} cg={}", spec.mass_kg, spec.cg_height_m);
+        for (index, geometry) in wheel_geometries(&spec).iter().enumerate() {
+            println!(
+                "wheel {index}: radius={:.3} rest={:.4} min={:.4} max={:.4} mount={:?} travel={:.3} spring={:.0}",
+                geometry.radius,
+                geometry.rest_length,
+                geometry.min_length,
+                geometry.max_length,
+                geometry.mount,
+                spec.wheels[index].suspension.travel_m,
+                spec.wheels[index].suspension.spring_rate_n_per_m,
+            );
+        }
+    }
 }
