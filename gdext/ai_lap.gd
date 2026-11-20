@@ -49,7 +49,7 @@ const TRACK_LAYOUT := "roadcourse"
 ## Y 在 DRIVEREYES+CG（1.23）之上再抬 0.22 m 越过车头。换车时可用
 ## AI_LAP_EYE_X/Y/Z 覆盖。
 const EYE_X_DEFAULT := -0.367
-const EYE_Y_DEFAULT := 1.450
+const EYE_Y_DEFAULT := 1.000
 const EYE_Z_DEFAULT := 0.157
 
 ## 圈时上限（秒）。Daytona roadcourse ≈ 5.7 km，AI 目标速度受 fast_lane.ai
@@ -101,7 +101,7 @@ var _cam: Camera3D
 var _require_lap := true
 ## AI_LAP_VIEW: "chase"（车后常规视角，默认）或 "cockpit"（驾驶位）。
 var _view := "chase"
-var _eye_offset := Vector3(-0.367, 1.450, 0.157)
+var _eye_offset := Vector3(-0.367, 1.000, 0.157)
 
 ## 可由环境变量指定的资源路径 / AI 难度。
 var _car_dir := CAR_DIR
@@ -202,11 +202,27 @@ func _setup_visual() -> void:
 	add_child(fill)
 
 	_cam = Camera3D.new()
-	add_child(_cam)
 	_cam.current = true
 	# 驾驶位视角窄一点更符合真实镜头；追逐视角保持原来的广角。
 	_cam.fov = 70.0 if _view == "cockpit" else 72.0
 	_cam.near = 0.05
+	if _view == "cockpit" and _car != null:
+		# 驾驶位相机挂成车身节点的子对象，位置是固定局部坐标：这样它和车厢
+		# 完全刚性，加速/刹车俯仰时不会相对座椅前后漂移，也不会穿出车顶。
+		# 相机默认朝局部 -Z（车头），无需每帧重算世界位姿。
+		_car.add_child(_cam)
+		_cam.position = _eye_offset
+		_cam.rotation_degrees = Vector3(-2.0, 0.0, 0.0)
+		# 座舱里日光被车顶挡住，仪表/方向盘全黑。给车节点挂一盏短程点光源，
+		# 只照亮驾驶位附近的内饰（范围 3 m），窗外路面不受影响。
+		var cabin := OmniLight3D.new()
+		cabin.light_energy = 8.0
+		cabin.omni_range = 3.0
+		cabin.shadow_enabled = false
+		cabin.position = _eye_offset + Vector3(0.0, 0.35, -0.15)
+		_car.add_child(cabin)
+	else:
+		add_child(_cam)
 	print("[ai-lap] visual mode: %s cam + sun + fill (sky/ambient from project default_environment)" % _view)
 
 ## 追逐相机：跟在车后上方（物理帧 -Z 为车头，+Z 是车尾方向）。
@@ -217,16 +233,6 @@ func _update_chase_cam() -> void:
 	var origin := _car.global_position
 	_cam.global_position = origin + basis.z * 4.5 + Vector3(0.0, 2.0, 0.0)
 	_cam.look_at(origin - basis.z * 14.0 + Vector3(0.0, 1.0, 0.0), Vector3.UP)
-
-## 驾驶位相机：眼睛固定在车身坐标系的 DRIVEREYES 处（略抬高以越过车头），
-## 朝车头（-Z）看。up 用世界 Y：人的地平感不随车身侧倾，倾斜赛道上画面更可读。
-func _update_cockpit_cam() -> void:
-	if _cam == null or _car == null:
-		return
-	var basis := _car.global_transform.basis
-	var origin := _car.global_position
-	_cam.global_position = origin + basis * _eye_offset
-	_cam.look_at(origin + basis * Vector3(_eye_offset.x, _eye_offset.y, -20.0), Vector3.UP)
 
 ## 每个渲染帧抓一张图。放在 _process 而不是 _physics_process：渲染帧率决定的
 ## 是视频帧率，物理帧率（60 Hz）决定的是车怎么动，两者本来就不必一致。
@@ -309,9 +315,8 @@ func _physics_process(delta: float) -> void:
 				% [_world.laps(), _world.last_lap_s(), _world.best_lap_s(),
 					str(_world.last_sector_times_s()), str(_world.last_lap_valid())])
 
-	if _view == "cockpit":
-		_update_cockpit_cam()
-	else:
+	# 驾驶位相机是车身子对象，局部变换固定，不需要每帧更新世界位姿。
+	if _view != "cockpit":
 		_update_chase_cam()
 
 	if _world.laps() >= _target_laps or _elapsed >= _max_lap_s:

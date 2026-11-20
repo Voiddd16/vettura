@@ -2,7 +2,8 @@
 //!
 //! 物理层（`TrackModule`）只吃碰撞几何，渲染层则需要 `*mesh*.kn5` 这类带贴图
 //! 的视觉模型。这里按 `models.ini` 的放置表逐个加载：跳过 `collision*.kn5`
-//! （物理已经装好），文件缺失或解析失败只给 warning 并跳过——赛道目录里
+//! （物理已经装好）与 `acstobjects.kn5`（AC 编辑器用的起终点/维修区标记，
+//! 比赛视图里不显示），文件缺失或解析失败只给 warning 并跳过——赛道目录里
 //! 引用不存在的灯效模型（如 Daytona 的 `daytonalightson.kn5`）很常见，
 //! 不应该让整条赛道加载失败。
 //!
@@ -35,6 +36,13 @@ pub(crate) fn visual_models_instance(
     let mut skipped = 0usize;
     for entry in track.models() {
         if entry.is_collider() {
+            continue;
+        }
+        // `acstobjects.kn5` 是 AC 编辑器放的实例标记（起终点/维修区 digital
+        // marker），共用一张 node.dds 图集，里面有红色禁止通行符号。AC 自己
+        // 在比赛视图里不显示它们；我们这边会渲染成终点线附近一排巨大的
+        // 黑底红杠牌子。跳过这个文件，其它视觉模型照常加载。
+        if entry.file.eq_ignore_ascii_case("acstobjects.kn5") {
             continue;
         }
         let path = track.root().join(&entry.file);
