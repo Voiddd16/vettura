@@ -27,6 +27,13 @@
 - **整圈实测**（Daytona 真 F1，600 Hz 物理 / 60 Hz AI / ABS+TC）：roadcourse
   0/50/100/110 = **196.0 / 165.9 / 145.9 / 144.4 s**（此前 207.6/176.0/154.7/149.4 s），
   100/110 档偏线仅 0.68/0.69 m、零腾空；oval 110 档 **61.8 s**（此前 68.6 s）。
+- **整圈录制支持驾驶位视角与换车**（`gdext/ai_lap.gd` + `scripts/record_ai_lap.py`）。
+  录制脚本的 `--car` / `--track` / `--skill` 之前被 Godot 端硬编码吞掉；现在
+  GDScript 真正读取这些环境变量（支持裸模组名 / `res://` 路径），新增
+  `AI_LAP_VIEW=chase|cockpit` 与 `--view`，驾驶位相机按车的 `DRIVEREYES` 定位
+  （可用 `AI_LAP_EYE_X/Y/Z` 覆盖）。Porsche 992 GT3 R + skill 110 实录两段：
+  `build/ai_lap_porsche_992_gt3r_{chase,cockpit}.mp4`，均为 1280×720 30fps、
+  165.2 s、圈速 165.14 s。
 - **诊断探针**（`world/tests/{launch,longitudinal,steer}_probe.rs`）全部改为
   ignored 测试，测静载、自由落体、加减速包络、稳态圆；`ai_lap` 增加每轮
   横向 g 与授权线速列。

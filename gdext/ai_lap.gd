@@ -32,14 +32,25 @@ extends Node3D
 ## ```
 ##
 ## 环境变量：AI_LAP_MAX_S（圈时上限/最长跑动秒数）、AI_LAP_LAPS（目标圈数）、
-## AI_LAP_CAM=1（窗口模式下加追逐相机+日光）、AI_LAP_REQUIRE_LAP=0（短跑录视频
+## AI_LAP_CAM=1（窗口模式下加相机+日光）、AI_LAP_REQUIRE_LAP=0（短跑录视频
 ## 时不要求完成整圈）、AI_LAP_CAPTURE=1（抓帧）、AI_LAP_CAPTURE_EVERY（隔几帧
 ## 抓一次，默认 2 → 30fps 视频）、AI_LAP_CAPTURE_DIR（帧输出目录，默认
-## user://ai_lap_frames）。
+## user://ai_lap_frames）、AI_LAP_VIEW（chase=车后/cockpit=驾驶位）、
+## AI_LAP_CAR/AI_LAP_TRACK/AI_LAP_LAYOUT（车与赛道，支持裸模组名或 res:// 路径）、
+## AI_LAP_SKILL（0..=110）、AI_LAP_EYE_X/Y/Z（驾驶位相机偏移）。
 
 const CAR_DIR := "res://mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
 const TRACK_DIR := "res://mods/daytona_2017"
 const TRACK_LAYOUT := "roadcourse"
+
+## 驾驶位相机的默认眼睛位置。AC 的 `DRIVEREYES` 相对车辆 CG、+X 为左、+Z 为前；
+## 物理帧 X/Z 取反、Y 要加 CG 高度。默认按 Porsche 992 GT3 R：
+## DRIVEREYES=(0.367, 0.910, -0.157)，CG=0.320（前轮半径 0.340 + BASEY -0.020）。
+## Y 在 DRIVEREYES+CG（1.23）之上再抬 0.22 m 越过车头。换车时可用
+## AI_LAP_EYE_X/Y/Z 覆盖。
+const EYE_X_DEFAULT := -0.367
+const EYE_Y_DEFAULT := 1.450
+const EYE_Z_DEFAULT := 0.157
 
 ## 圈时上限（秒）。Daytona roadcourse ≈ 5.7 km，AI 目标速度受 fast_lane.ai
 ## 调速；正常 F1 圈时 100–150 s。超过这个值判定 AI 没能完成圈。
@@ -49,6 +60,9 @@ const MAX_LAP_S_DEFAULT := 300.0
 ## 完成几圈收工（默认一圈；可用 AI_LAP_LAPS 覆盖）。
 const TARGET_LAPS_DEFAULT := 1
 const TARGET_LAPS := 1
+
+## AI 难度：AC 的 AI level，0..=110（100 = 职业，默认）。
+const DEFAULT_AI_SKILL := 100
 
 ## 全程 ABS / TC 开：验的是「链路」，不是物理边界。
 const ABS_ON := true
@@ -85,6 +99,14 @@ var _last_reset_s := -10.0
 ## 窗口模式视觉：AI_LAP_CAM=1 且非 headless 时加追逐相机 + 日光 + 天空环境。
 var _cam: Camera3D
 var _require_lap := true
+## AI_LAP_VIEW: "chase"（车后常规视角，默认）或 "cockpit"（驾驶位）。
+var _view := "chase"
+var _eye_offset := Vector3(-0.367, 1.450, 0.157)
+
+## 可由环境变量指定的资源路径 / AI 难度。
+var _car_dir := CAR_DIR
+var _track_dir := TRACK_DIR
+var _track_layout := TRACK_LAYOUT
 
 ## 录视频抓帧：AI_LAP_CAPTURE=1 时每个渲染帧存一张 JPEG，由外部 ffmpeg 编码。
 var _capture_dir := ""
@@ -96,11 +118,20 @@ func _ready() -> void:
 	_max_lap_s = _env_float("AI_LAP_MAX_S", MAX_LAP_S_DEFAULT)
 	_target_laps = int(_env_float("AI_LAP_LAPS", TARGET_LAPS_DEFAULT))
 	_require_lap = _env_float("AI_LAP_REQUIRE_LAP", 1.0) > 0.5
+	_car_dir = _res_path(_env_text("AI_LAP_CAR", CAR_DIR))
+	_track_dir = _res_path(_env_text("AI_LAP_TRACK", TRACK_DIR))
+	_track_layout = _env_text("AI_LAP_LAYOUT", TRACK_LAYOUT)
+	_view = _env_text("AI_LAP_VIEW", "chase").to_lower()
+	_eye_offset = Vector3(
+		_env_float("AI_LAP_EYE_X", EYE_X_DEFAULT),
+		_env_float("AI_LAP_EYE_Y", EYE_Y_DEFAULT),
+		_env_float("AI_LAP_EYE_Z", EYE_Z_DEFAULT)
+	)
 
 	_world = WorldBody.new()
 	add_child(_world)
 
-	if not _world.load_track(TRACK_DIR, TRACK_LAYOUT):
+	if not _world.load_track(_track_dir, _track_layout):
 		push_error("[ai-lap] load_track failed")
 		get_tree().quit(1)
 		return
@@ -109,11 +140,13 @@ func _ready() -> void:
 			" sectors=", _world.sector_count())
 	print("[ai-lap] telemetry_enabled=", _world.is_telemetry_enabled())
 
-	_car = _world.spawn_vehicle_from_path(CAR_DIR)
+	_car = _world.spawn_vehicle_from_path(_car_dir)
 	if _car == null:
-		push_error("[ai-lap] spawn_vehicle_from_path failed")
+		push_error("[ai-lap] spawn_vehicle_from_path failed: " + _car_dir)
 		get_tree().quit(1)
 		return
+	_world.set_ai_skill(int(_env_float("AI_LAP_SKILL", DEFAULT_AI_SKILL)))
+	print("[ai-lap] car=", _car_dir, " ai_skill=", _world.ai_skill())
 	# 比赛温度：AI 代表的是「已经暖过胎的职业车手」，不是冷车起步。
 	# 不暖胎时实测圈速慢 20%+（冷机 ECU 限扭到 55% 功率、冷胎掉一档抓地，
 	# 变速箱还会因为冷胎高滑移拒绝升挡）。
@@ -171,8 +204,10 @@ func _setup_visual() -> void:
 	_cam = Camera3D.new()
 	add_child(_cam)
 	_cam.current = true
-	_cam.fov = 72.0
-	print("[ai-lap] visual mode: chase cam + sun + fill (sky/ambient from project default_environment)")
+	# 驾驶位视角窄一点更符合真实镜头；追逐视角保持原来的广角。
+	_cam.fov = 70.0 if _view == "cockpit" else 72.0
+	_cam.near = 0.05
+	print("[ai-lap] visual mode: %s cam + sun + fill (sky/ambient from project default_environment)" % _view)
 
 ## 追逐相机：跟在车后上方（物理帧 -Z 为车头，+Z 是车尾方向）。
 func _update_chase_cam() -> void:
@@ -182,6 +217,16 @@ func _update_chase_cam() -> void:
 	var origin := _car.global_position
 	_cam.global_position = origin + basis.z * 4.5 + Vector3(0.0, 2.0, 0.0)
 	_cam.look_at(origin - basis.z * 14.0 + Vector3(0.0, 1.0, 0.0), Vector3.UP)
+
+## 驾驶位相机：眼睛固定在车身坐标系的 DRIVEREYES 处（略抬高以越过车头），
+## 朝车头（-Z）看。up 用世界 Y：人的地平感不随车身侧倾，倾斜赛道上画面更可读。
+func _update_cockpit_cam() -> void:
+	if _cam == null or _car == null:
+		return
+	var basis := _car.global_transform.basis
+	var origin := _car.global_position
+	_cam.global_position = origin + basis * _eye_offset
+	_cam.look_at(origin + basis * Vector3(_eye_offset.x, _eye_offset.y, -20.0), Vector3.UP)
 
 ## 每个渲染帧抓一张图。放在 _process 而不是 _physics_process：渲染帧率决定的
 ## 是视频帧率，物理帧率（60 Hz）决定的是车怎么动，两者本来就不必一致。
@@ -264,7 +309,10 @@ func _physics_process(delta: float) -> void:
 				% [_world.laps(), _world.last_lap_s(), _world.best_lap_s(),
 					str(_world.last_sector_times_s()), str(_world.last_lap_valid())])
 
-	_update_chase_cam()
+	if _view == "cockpit":
+		_update_cockpit_cam()
+	else:
+		_update_chase_cam()
 
 	if _world.laps() >= _target_laps or _elapsed >= _max_lap_s:
 		_finish()
@@ -281,6 +329,19 @@ func _env_float(name: String, fallback: float) -> float:
 	if text.is_empty():
 		return fallback
 	return text.to_float()
+
+func _env_text(name: String, fallback: String) -> String:
+	var text := OS.get_environment(name)
+	return text if not text.is_empty() else fallback
+
+## 允许 --car/--track 传 `res://mods/...`、`mods/...` 或裸模组名 `daytona_2017`。
+func _res_path(path: String) -> String:
+	if path.begins_with("res://"):
+		return path
+	var clean := path.trim_prefix("/")
+	if clean.begins_with("mods/"):
+		return "res://" + clean
+	return "res://mods/" + clean
 
 func _finish() -> void:
 	var moved := _start.distance_to(_car.position)
