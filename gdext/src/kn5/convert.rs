@@ -177,7 +177,9 @@ impl MaterialParams {
         // 纯反射材质，金属度 1.0 是最接近的表达（金属表面对天空/环境反射）。
         // 这类材质的 albedo 不再往下压，否则反射也被染色到看不见。
         let reflective = material.shader.eq_ignore_ascii_case("ksPerPixelReflection");
-        let metallic = if reflective { 0.85 } else { 0.0 };
+        // 玻璃是电介质，不能走金属的 0.85——半透明金属在 Godot 里会黑成一片。
+        let glass = is_glass(material);
+        let metallic = if reflective && !glass { 0.85 } else { 0.0 };
 
         let opacity = material_opacity(material);
         let emission_values = material.property_values("ksEmissive");
@@ -246,10 +248,34 @@ impl MaterialParams {
     }
 }
 
+/// AC 车窗玻璃的固定不透明度。
+///
+/// 车窗 shader（`ksWindscreen` / `ksPerPixelReflection` 的车窗材质）不写
+/// `ksOpacity`，Diffuse 贴图 alpha 存的也不是透明度，所以默认被当成完全
+/// 不透明——从座舱里看出去就是一整块黑板。给它们一个固定的低 alpha，
+/// 既让挡风玻璃透光，又不受贴图 alpha 内容影响。
+const GLASS_OPACITY: f32 = 0.30;
+
+/// 是否为车窗/挡风玻璃材质。
+///
+/// 只认专门的 `ksWindscreen` shader 和名字里带 window/glass 的材质；不能只看
+/// `BlendMode::AlphaBlend`——赛道的 `mel_pit_building_b_02` 也是 AlphaBlend，
+/// 但它是一栋楼，按玻璃处理会变成半透明黑纱。
+fn is_glass(material: &Material) -> bool {
+    if material.shader.eq_ignore_ascii_case("ksWindscreen") {
+        return true;
+    }
+    let name = material.name.to_ascii_lowercase();
+    name.contains("window") || name.contains("glass")
+}
+
 /// 整体不透明度：`ksOpacity`（通用 shader）或 `alpha`（`ksPerPixelAlpha`）。
 ///
 /// AC 的人群（`$alpha = 0.1`）等材质靠这个变淡；缺失视为完全不透明。
 fn material_opacity(material: &Material) -> f32 {
+    if is_glass(material) {
+        return GLASS_OPACITY;
+    }
     material
         .property("ksOpacity")
         .or_else(|| material.property("alpha"))

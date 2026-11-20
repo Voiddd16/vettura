@@ -27,6 +27,12 @@
 - **整圈实测**（Daytona 真 F1，600 Hz 物理 / 60 Hz AI / ABS+TC）：roadcourse
   0/50/100/110 = **196.0 / 165.9 / 145.9 / 144.4 s**（此前 207.6/176.0/154.7/149.4 s），
   100/110 档偏线仅 0.68/0.69 m、零腾空；oval 110 档 **61.8 s**（此前 68.6 s）。
+- **车窗/挡风玻璃透光**（`gdext/src/kn5/convert.rs`）。AC 的车窗 shader
+  （`ksWindscreen` / 名为 window/glass 的 `ksPerPixelReflection`）不写
+  `ksOpacity`，Diffuse 贴图 alpha 也不是透明度，转换时被当成完全不透明，
+  座舱里看出去是一整块黑板。现在给这类材质固定 0.30 alpha（同时让
+  `alpha_blended` 生效、关闭金属度，避免半透明金属发黑）。判定只认 shader 名
+  和材质名，不碰同样用 AlphaBlend 的赛道建筑（如 `mel_pit_building_b_02`）。
 - **座舱相机刚性化 + 去掉终点标记牌**（`gdext/ai_lap.gd` +
   `gdext/src/world/track_models.rs`）。座舱相机原来是世界坐标每帧重算，车身
   俯仰时会相对座椅前后漂移、在 bank 上穿出车顶；现在作为车身节点的子对象
