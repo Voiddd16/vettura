@@ -107,6 +107,20 @@ impl Default for SuspensionSpec {
     }
 }
 
+/// Bleeder（高速旁路阀）的最低介入速度，m/s。
+///
+/// AC 模组里 `DAMP_FAST_BUMPTHRESHOLD` 常低到 0.06 m/s，连落地滚转这种
+/// 低频振荡都触发 bleeder，让阻尼掉到主阻尼的 1/3，侧倾就来回弹不衰减
+/// （实测 0.15 m 小跳后车身 ±0.15 m/s、±1.5° 摆 0.8 s）。真车的旁路阀
+/// 要明显更高的悬挂速度才开，这里给一个物理下限。
+const MIN_BLEED_THRESHOLD_MPS: f32 = 0.5;
+
+/// Bleeder 打开时至少保留多少主阻尼。
+///
+/// 即便是全开的高速阀也要经过节流孔，阻尼不可能掉到主阻尼的三分之一；
+/// 留 60% 保证弯中/落地时的侧倾振荡仍有足够阻尼衰减。
+const MIN_BLEED_DAMPER_SHARE: f32 = 0.6;
+
 impl SuspensionSpec {
     /// Force from the progressive spring and the two end stops, newtons.
     ///
@@ -218,22 +232,35 @@ impl SuspensionSpec {
         } else {
             0.0
         };
-        if velocity < 0.0 {
-            let threshold = self.fast_bump_threshold_mps.clamp(0.0, 5.0);
-            if self.fast_bump_damper_ns_per_m > 0.0 && -velocity > threshold {
-                self.fast_bump_damper_ns_per_m.max(0.0)
-            } else {
-                self.damper_bump_ns_per_m.max(0.0)
-            }
+        let slow = if velocity < 0.0 {
+            self.damper_bump_ns_per_m.max(0.0)
         } else if velocity > 0.0 {
-            let threshold = self.fast_rebound_threshold_mps.clamp(0.0, 5.0);
-            if self.fast_rebound_damper_ns_per_m > 0.0 && velocity > threshold {
-                self.fast_rebound_damper_ns_per_m.max(0.0)
-            } else {
-                self.damper_rebound_ns_per_m.max(0.0)
-            }
+            self.damper_rebound_ns_per_m.max(0.0)
         } else {
-            0.0
+            return 0.0;
+        };
+        let (fast, authored_threshold) = if velocity < 0.0 {
+            (
+                self.fast_bump_damper_ns_per_m.max(0.0),
+                self.fast_bump_threshold_mps,
+            )
+        } else {
+            (
+                self.fast_rebound_damper_ns_per_m.max(0.0),
+                self.fast_rebound_threshold_mps,
+            )
+        };
+        if fast <= 0.0 {
+            return slow;
+        }
+        let threshold = authored_threshold
+            .max(MIN_BLEED_THRESHOLD_MPS)
+            .clamp(0.0, 5.0);
+        if velocity.abs() > threshold {
+            // 高速阀介入，但保留主阻尼的一部分，避免侧倾振荡失去阻尼。
+            fast.max(slow * MIN_BLEED_DAMPER_SHARE)
+        } else {
+            slow
         }
     }
 }

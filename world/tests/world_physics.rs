@@ -1868,6 +1868,9 @@ fn cornering_load_makes_the_outside_wheel_lean_further_in() {
 
 #[test]
 fn a_two_rate_damper_changes_the_suspension_it_outputs() {
+    // Drop the car from a height so the suspension actually enters the fast
+    // regime: the bleeder only opens above a physical minimum velocity, which
+    // a steady corner or gentle start never reaches (see MIN_BLEED_THRESHOLD_MPS).
     let run = |fast: f32| -> (f32, f32) {
         let spec = {
             let mut spec = VehicleSpec::default();
@@ -1880,39 +1883,36 @@ fn a_two_rate_damper_changes_the_suspension_it_outputs() {
             spec
         };
         let mut world = World::new(SurfaceMap::new()).unwrap();
-        let car = world.add_vehicle(spec, Pose::default()).unwrap();
-        settle(&mut world, car);
-        world
-            .set_controls(
-                car,
-                Controls {
-                    throttle: 1.0,
-                    ..Controls::default()
+        let car = world
+            .add_vehicle(
+                spec,
+                Pose {
+                    position: Vec3::Y * 1.5,
+                    ..Default::default()
                 },
             )
             .unwrap();
-        step(&mut world, 240 * 3);
-        // Corner hard: pitch and roll keep the dampers in the fast regime.
+        // Sample the landing impulse: first second after touchdown.
         let mut force_sum = 0.0;
         let mut samples = 0;
         for _ in 0..240 {
-            world
-                .set_controls(
-                    car,
-                    Controls {
-                        throttle: 0.5,
-                        steering: 0.8,
-                        ..Controls::default()
-                    },
-                )
-                .unwrap();
-            step(&mut world, 1);
+            world.step_exact(DT).unwrap();
+            let contacts = world
+                .snapshot(car)
+                .unwrap()
+                .wheels
+                .iter()
+                .filter(|wheel| wheel.contact)
+                .count();
+            if contacts == 0 {
+                continue;
+            }
             let force = world.suspension_force_n(car).unwrap();
             force_sum += force.iter().fold(0.0f32, |sum, value| sum + value.abs()) / 4.0;
             samples += 1;
         }
         (
-            force_sum / samples as f32,
+            force_sum / samples.max(1) as f32,
             world.snapshot(car).unwrap().speed_mps,
         )
     };

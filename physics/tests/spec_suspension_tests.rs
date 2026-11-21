@@ -141,12 +141,14 @@ fn two_rate_dampers_switch_at_their_threshold_and_stay_symmetric_by_default() {
         fast_rebound_threshold_mps: 0.05,
         ..SuspensionSpec::default()
     };
-    // Below the threshold the slow rates still apply.
+    // Below the physical minimum threshold the slow rates still apply, even
+    // when the authored threshold is a very low 0.05 m/s.
     assert!((two_rate.damper_rate_ns_per_m(-0.05) - 4_000.0).abs() < 1e-6);
     assert!((two_rate.damper_rate_ns_per_m(0.05) - 6_000.0).abs() < 1e-6);
-    // Above it the bleeder takes over in both directions.
-    assert!((two_rate.damper_rate_ns_per_m(-0.5) - 1_000.0).abs() < 1e-6);
-    assert!((two_rate.damper_rate_ns_per_m(0.5) - 1_500.0).abs() < 1e-6);
+    // Above the threshold the bleeder takes over, but never drops below 60%
+    // of the slow rate — otherwise a landing roll oscillation has no damping.
+    assert!((two_rate.damper_rate_ns_per_m(-1.0) - 2_400.0).abs() < 1e-3);
+    assert!((two_rate.damper_rate_ns_per_m(1.0) - 3_600.0).abs() < 1e-3);
     // A fast rate of zero is "off", so the slow rate stays in charge.
     let off = SuspensionSpec {
         fast_bump_damper_ns_per_m: 0.0,

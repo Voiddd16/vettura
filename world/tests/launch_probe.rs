@@ -15,8 +15,12 @@ use vettura_assets::CarFolder;
 use vettura_world::{SurfaceMap, World};
 
 fn real_car_spec() -> Option<vettura_physics::VehicleSpec> {
+    let car = std::env::var("PROBE_CAR").unwrap_or_else(|_| {
+        "F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari".into()
+    });
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari");
+        .join("../mods")
+        .join(car);
     if !root.is_dir() {
         return None;
     }
@@ -110,6 +114,77 @@ fn free_fall_gravity() {
         "free fall 0.5 s: drop={drop_m:.3} m → g={:.2} m/s²",
         2.0 * drop_m / 0.25
     );
+}
+
+/// 落地诊断：从高处垂直落下（无横向速度、无初始滚转），看会不会自己产生
+/// 左右弹跳（横向速度 / 滚转角 / 侧倾力矩）。如果物理正确，vx 与 roll
+/// 应始终接近 0，车只在垂向压缩回弹。
+#[test]
+#[ignore]
+fn landing_bounce() {
+    let Some(spec) = real_car_spec() else {
+        eprintln!("skipping: mods/ 车目录不存在");
+        return;
+    };
+    let height = std::env::var("DROP_HEIGHT")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(2.0);
+    let roll_deg = std::env::var("DROP_ROLL")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    let lateral = std::env::var("DROP_VX")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    // 侧倾绕车体前向轴（物理帧 forward=-Z），用绕 Z 的四元数表示。
+    let orientation = glam::Quat::from_rotation_z(roll_deg.to_radians());
+    let mut world = World::new(SurfaceMap::new()).unwrap();
+    let car = world
+        .add_vehicle(
+            spec.clone(),
+            vettura_physics::Pose {
+                position: Vec3::Y * height,
+                orientation,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    world
+        .set_vehicle_velocity(car, Vec3::X * lateral, Vec3::ZERO)
+        .unwrap();
+    println!(
+        "drop from {height:.1}m roll={roll_deg:.1}deg vx={lateral:.2} mass={:.0} cg={:.3}",
+        spec.mass_kg, spec.cg_height_m
+    );
+    let mut landed = false;
+    let mut landing_t = 0.0;
+    for step in 0..(3.0 / DT) as usize {
+        world.step_exact(DT).unwrap();
+        let snap = world.snapshot(car).unwrap();
+        let contacts = snap.wheels.iter().filter(|wheel| wheel.contact).count();
+        if !landed && contacts > 0 {
+            landed = true;
+            landing_t = step as f32 * DT;
+        }
+        if landed && (step as f32 * DT - landing_t) % 0.05 < DT * 0.5 {
+            let right = snap.orientation * Vec3::X;
+            let roll_deg = right.y.asin().to_degrees();
+            let load: f32 = snap.wheels.iter().map(|w| w.load_n).sum();
+            println!(
+                "t={:5.2} y={:6.3} vy={:6.2} vx={:6.3} roll={:6.2}deg yawRate={:6.2} ct={} load={:6.0}",
+                step as f32 * DT - landing_t,
+                snap.reference_position.y,
+                snap.linear_velocity.y,
+                snap.linear_velocity.x,
+                roll_deg,
+                snap.angular_velocity.y,
+                contacts,
+                load,
+            );
+        }
+    }
 }
 
 #[test]
