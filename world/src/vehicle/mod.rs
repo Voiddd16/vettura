@@ -1159,12 +1159,20 @@ impl VehicleRuntime {
             if suspension.rebound_stop_rate_n_per_m > 0.0 && extension > rebound_travel {
                 force -= suspension.rebound_stop_rate_n_per_m * (extension - rebound_travel);
             }
-            // Droop 恢复力：Jolt 的弹簧只能推不能拉，悬挂一旦伸过静止长度就
-            // 完全失去拉力。内侧轮会在车身刚 roll 一两度时直接到底、离地，
-            // 之后防倾杆（Jolt 要求两轮接地才工作）失效，roll 刚度只剩外侧
-            // 单侧弹簧，极限弯里就会一路滚到翻车搁浅。真实车有 droop stop /
-            // 第三弹簧的拉伸侧把轮子压回地面；这里补上这段拉力，只在伸长时
-            // 作用，静止与压缩段完全不变，所以正常驾驶的手感不受影响。
+            // Droop 恢复力（对 Jolt 模型缺陷的补偿，非 AC 原始数据）。
+            //
+            // Jolt 的悬挂弹簧只能推不能拉：悬挂一旦伸过 `max_length` 就完全
+            // 失去拉力，而 `max_length - 静置长度` 只等于静载压缩量（F1 约
+            // 1.5 cm）。内侧轮因此在车身刚 roll 一两度时就到底、离地，随后
+            // 防倾杆（Jolt 要求两轮都接地才工作）失效，roll 刚度只剩外侧单
+            // 侧弹簧，极限弯里会一路滚到翻车搁浅。真实车靠 droop stop /
+            // helper spring 的拉伸侧把轮子压回地面，Jolt 没有这段。
+            //
+            // 这里补上拉力：只在伸长段作用，静止与压缩段完全不变，所以正常
+            // 驾驶的力-位移曲线不受影响。系数 0.5 是实测的**防翻下限**——0.3
+            // 时 F1 在 1.2 g 的中速弯仍会翻，0.5 时 1.95 g 才稳；再往上加只会
+            // 让侧倾比真实更小，没有收益。它只改变「弹簧脱开之后」的区间，
+            // 不放大抓地、不改变静载与载荷转移的斜率。
             if extension > 0.0 {
                 force -= 0.5 * suspension.spring_rate_n_per_m * extension;
             }
