@@ -1159,6 +1159,15 @@ impl VehicleRuntime {
             if suspension.rebound_stop_rate_n_per_m > 0.0 && extension > rebound_travel {
                 force -= suspension.rebound_stop_rate_n_per_m * (extension - rebound_travel);
             }
+            // Droop 恢复力：Jolt 的弹簧只能推不能拉，悬挂一旦伸过静止长度就
+            // 完全失去拉力。内侧轮会在车身刚 roll 一两度时直接到底、离地，
+            // 之后防倾杆（Jolt 要求两轮接地才工作）失效，roll 刚度只剩外侧
+            // 单侧弹簧，极限弯里就会一路滚到翻车搁浅。真实车有 droop stop /
+            // 第三弹簧的拉伸侧把轮子压回地面；这里补上这段拉力，只在伸长时
+            // 作用，静止与压缩段完全不变，所以正常驾驶的手感不受影响。
+            if extension > 0.0 {
+                force -= 0.5 * suspension.spring_rate_n_per_m * extension;
+            }
 
             let previous = self.previous_suspension_lengths[index];
             let velocity = if previous > 1.0e-4 {
