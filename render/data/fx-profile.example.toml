@@ -1,0 +1,49 @@
+# 复制到 user://fx.toml 或作为场景默认配置使用。
+# quality: off / low / medium / high / ultra
+quality = "high"
+
+# 空数组 = 全部启用；这里只开常用模块。
+enabled = [
+  "vettura.fx.weather",
+  "vettura.fx.particles",
+  "vettura.fx.rain",
+  "vettura.fx.grass",
+  "vettura.fx.lighting",
+  "vettura.fx.brake_disc",
+  "vettura.fx.extra.bloom",
+  "vettura.fx.extra.sharpen",
+]
+
+# 显式关闭某个模块（优先级高于 enabled）。
+disabled = [
+  "vettura.fx.extra.ssr",
+]
+
+[configs."vettura.fx.weather"]
+time_of_day = 14.0
+time_scale = 1.0
+rain = 0.0
+wetness = 0.0
+wind_speed = 3.0
+fog = 0.0
+
+[configs."vettura.fx.rain"]
+intensity = 1.0
+windshield = true
+spray = true
+puddles = true
+
+[configs."vettura.fx.grass"]
+density = 1.0
+draw_distance = 120.0
+wind = true
+
+[configs."vettura.fx.lighting"]
+max_lights = 32
+car_lights = 4
+track_lights = 0
+shadows = true
+
+[configs."vettura.fx.brake_disc"]
+glow_threshold = 450.0
+max_emissive = 1.0

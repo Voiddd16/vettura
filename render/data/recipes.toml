@@ -1,0 +1,149 @@
+# Vettura 材质配方（AC shader → 原生材质家族）
+#
+# 这里是“覆盖率”与“语义分类”的唯一来源；真正写 Godot 材质的代码在 gdext。
+# 规则按 priority 从高到低匹配，第一个命中的非 fallback recipe 生效。
+# match 内的多个字段是 AND；同一字段的多个值是 OR（ASCII 大小写不敏感）。
+
+[[recipe]]
+id = "vettura.core.car_paint"
+priority = 140
+family = "car_paint"
+[recipe.match]
+shader = ["ksPerPixel", "ksPerPixelNM"]
+has_property = ["isAdditive"]
+[recipe.textures]
+albedo = "txDiffuse"
+normal = "txNormal"
+detail = "txDetail"
+detail_normal = "txNormalDetail"
+[recipe.parameters]
+roughness = 0.35
+
+[[recipe]]
+id = "vettura.core.pbr_multimap"
+priority = 130
+family = "multi_map"
+[recipe.match]
+shader = ["ksPerPixelMultiMap", "ksPerPixelMultiMap_damage", "ksPerPixelMultiMap_emissive"]
+[recipe.textures]
+albedo = "txDiffuse"
+normal = "txNormal"
+ao = "txMaps"
+detail = "txDetail"
+detail_normal = "txNormalDetail"
+[recipe.parameters]
+roughness = 0.5
+
+[[recipe]]
+id = "vettura.core.reflective"
+priority = 125
+family = "reflective"
+[recipe.match]
+shader = ["ksPerPixelReflection", "ksPerPixelReflection_damage"]
+[recipe.textures]
+albedo = "txDiffuse"
+normal = "txNormal"
+[recipe.parameters]
+roughness = 0.12
+metallic = 0.85
+
+[[recipe]]
+id = "vettura.core.multilayer_fresnel"
+priority = 124
+family = "reflective"
+[recipe.match]
+shader = ["ksMultilayer_fresnel_nm"]
+[recipe.textures]
+albedo = "txDiffuse"
+normal = "txNormal"
+[recipe.parameters]
+roughness = 0.6
+
+[[recipe]]
+id = "vettura.core.glass"
+priority = 120
+family = "glass"
+[recipe.match]
+shader = ["ksWindscreen", "ksGlass", "ksPerPixelAlpha"]
+[recipe.textures]
+albedo = "txDiffuse"
+normal = "txNormal"
+[recipe.parameters]
+opacity = 0.3
+
+[[recipe]]
+id = "vettura.core.emissive"
+priority = 115
+family = "emissive"
+[recipe.match]
+shader = ["ksEmissive", "ksPerPixelMultiMap_emissive"]
+[recipe.textures]
+albedo = "txDiffuse"
+[recipe.parameters]
+emission = 1.0
+
+[[recipe]]
+id = "vettura.core.brake_disc"
+priority = 114
+family = "brake_disc"
+[recipe.match]
+shader = ["ksBrakeDisc", "ksBrakeDisc_glow"]
+[recipe.textures]
+albedo = "txDiffuse"
+normal = "txNormal"
+[recipe.parameters]
+emission = 0.0
+
+[[recipe]]
+id = "vettura.core.tyres"
+priority = 113
+family = "pbr"
+[recipe.match]
+shader = ["ksTyres", "ksTyresV6"]
+[recipe.textures]
+albedo = "txDiffuse"
+normal = "txNormal"
+[recipe.parameters]
+roughness = 0.9
+
+[[recipe]]
+id = "vettura.core.foliage"
+priority = 112
+family = "foliage"
+[recipe.match]
+shader = ["ksTree", "ksGrass", "ksFlags", "ksFlag"]
+[recipe.textures]
+albedo = "txDiffuse"
+[recipe.parameters]
+alpha_test = 1.0
+
+[[recipe]]
+id = "vettura.core.decal"
+priority = 111
+family = "decal"
+[recipe.match]
+shader = ["ksSkidMarks", "ksDecal", "ksDecalMesh"]
+[recipe.textures]
+albedo = "txDiffuse"
+[recipe.parameters]
+depth_write = 0.0
+
+[[recipe]]
+id = "vettura.core.pbr"
+priority = 100
+family = "pbr"
+[recipe.match]
+shader = ["ksPerPixel", "ksPerPixelNM", "ksPerPixelSimple", "ksPerPixelAt", "ksPerPixelAT_NM", "ksPerPixelAT"]
+[recipe.textures]
+albedo = "txDiffuse"
+normal = "txNormal"
+[recipe.parameters]
+roughness = 0.5
+
+# 兜底：未知 shader 不阻断加载，只进入兼容报告。
+[[recipe]]
+id = "vettura.core.fallback"
+priority = -1000
+family = "unknown"
+fallback = true
+[recipe.match]

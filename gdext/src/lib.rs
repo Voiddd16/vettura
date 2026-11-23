@@ -34,6 +34,7 @@ mod kn5_file;
 mod logging;
 mod paths;
 mod vehicle_body;
+mod visual_compat;
 mod world;
 
 struct VetturaNative;

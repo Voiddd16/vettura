@@ -1,0 +1,18 @@
+[package]
+name = "vettura-render-inspect"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Scan an Assetto Corsa mod and report visual compatibility (materials, ext_config, FX)"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+vettura-render.workspace = true
+
+[[bin]]
+name = "render-inspect"
+path = "src/main.rs"
