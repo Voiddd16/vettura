@@ -60,11 +60,11 @@ func _ready() -> void:
 	_camera.current = true
 	_frame_camera()
 
-	_fx = load("res://game/fx/fx_runtime.gd").new()
+	_fx = load("res://game/fx/fx_runtime.tscn").instantiate()
 	_fx.name = "FxRuntime"
 	add_child(_fx)
-	_fx.attach(_world, [_car], _camera)
-	print("[fx-probe] attached rain=0.85 wetness=0.9")
+	# 故意不手动 attach：验证 FxRuntime 能自动发现 WorldBody/VehicleBody。
+	print("[fx-probe] waiting for auto attach, rain=0.85 wetness=0.9")
 
 
 func _physics_process(delta: float) -> void:
