@@ -64,6 +64,7 @@ v1 在 `FxManager` 里为每个定义创建一个实例；`Car` scope 的多实�
 | `vettura.fx.brake_disc` | Car | Material, Render | — | 刹车温度→发光强度 |
 | `vettura.fx.tyres` | Car | Render, Material | — | 轮胎 FX：滑动/胎面/侧壁/模糊贴图状态 |
 | `vettura.fx.extra` | Scene | Render | — | Extra FX 伞形配置（具体 pass 仍是独立模块） |
+| `vettura.fx.generic` | Scene | Render | — | 未识别 FX section 的兜底记录 |
 | `vettura.fx.extra.bloom` | Scene | Render | — | post pass |
 | `vettura.fx.extra.ssao` | Scene | Render | — | 高画质 |
 | `vettura.fx.extra.ssr` | Scene | Render | — | 高画质 |
@@ -130,7 +131,8 @@ Off < Low < Medium < High < Ultra
 | `[GRASS_FX_...]` | patch + record → `vettura.fx.grass` |
 | `[TYRES_FX_...]` | record → `vettura.fx.tyres` |
 | `[BRAKE_DISC_FX]` | patch + record → `vettura.fx.brake_disc` |
-| `[EXTRA_FX]` | patch + record → `vettura.fx.extra` |
+| `[EXTRA_FX]` / `[EXTRA_FX_SSAO]` / `[EXTRA_FX_SSR]` / `[EXTRA_FX_BLOOM]` / `[EXTRA_FX_DOF]` / `[EXTRA_FX_MOTION_BLUR]` / `[EXTRA_FX_SHARPEN]` | 按名称映射到对应 extra 模块 |
+| 其他 `*_FX*` section | 兜底 `vettura.fx.generic` record |
 | `[ANIMATION_...]` | 解析保留，标记未接入 |
 | `[CONDITION_...]` | 简单条件求值，复杂条件降级 |
 | `[MODEL_REPLACEMENT_...]` / `[DRIVER3D_...]` / `[SCRIPTABLE_DISPLAY_...]` / `[DASH_...]` / `[CAMERA_...]` | 识别并报告“模块未接入” |

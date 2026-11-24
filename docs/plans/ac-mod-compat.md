@@ -14,7 +14,9 @@
 - [x] 新 crate `vettura-render`（纯 Rust，不依赖 Godot）
 - [x] 材质配方 `render/data/recipes.toml` + `MaterialRegistry`
 - [x] `ext_config.ini` 解析：include、section 分类、材质/贴图/灯光/粒子/条件
-- [x] `BindingPlan` 与兼容报告
+- [x] 全部 FX section：Rain/Wind/Smoke/LightSeries/LightPollution/EmissiveLight/TyresFx/BrakeDiscFx/ExtraFx/GenericFx
+- [x] `BindingPlan` + `FxConfigRecord`（保留每个 section 的独立 FX 参数）
+- [x] 兼容报告
 - [x] FX 框架：`FxDefinition` / `FxInstance` / `FxManager` / `FxProfile` / 预算
 - [x] 内置 FX：Weather / Rain / Grass / Lighting / Particles / Brake Disc / Extra
 - [x] CLI `render-inspect`（文本/JSON）

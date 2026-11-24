@@ -161,7 +161,7 @@ impl FxInstance for ConfigInstance {
                     FxValue::String(str_at(&self.config, "tread_texture", "").to_owned()),
                 );
             }
-            "vettura.fx.extra" => {
+            "vettura.fx.extra" | "vettura.fx.generic" => {
                 self.state.insert(
                     "enabled".to_owned(),
                     value_bool(bool_at(&self.config, "enabled", true)),
@@ -345,6 +345,15 @@ pub fn builtin_definitions() -> Vec<Box<dyn FxDefinition>> {
             ]),
         ),
         definition(
+            "vettura.fx.generic",
+            FxScope::Scene,
+            &[FxCapability::Render],
+            FxQuality::Low,
+            FxCost::default(),
+            &[],
+            config(&[("enabled", value_bool(true))]),
+        ),
+        definition(
             "vettura.fx.extra.bloom",
             FxScope::Scene,
             &[FxCapability::Render],
@@ -444,6 +453,7 @@ mod tests {
         assert!(ids.contains("vettura.fx.brake_disc"));
         assert!(ids.contains("vettura.fx.tyres"));
         assert!(ids.contains("vettura.fx.extra"));
+        assert!(ids.contains("vettura.fx.generic"));
         assert!(ids.contains("vettura.fx.extra.ssao"));
     }
 }

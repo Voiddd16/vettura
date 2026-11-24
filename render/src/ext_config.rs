@@ -46,6 +46,7 @@ pub enum ExtConfigKind {
     EmissiveLight,
     BrakeDiscFx,
     ExtraFx,
+    GenericFx,
     Dash,
     Camera,
     Lighting,
@@ -134,6 +135,8 @@ impl ExtConfigKind {
             Self::Audio
         } else if base.starts_with("GUI") || base.starts_with("UI") {
             Self::Gui
+        } else if base.contains("FX") {
+            Self::GenericFx
         } else if base.is_empty() {
             Self::Unknown
         } else {
@@ -160,6 +163,7 @@ impl ExtConfigKind {
             Self::EmissiveLight => "emissive_light",
             Self::BrakeDiscFx => "brake_disc_fx",
             Self::ExtraFx => "extra_fx",
+            Self::GenericFx => "fx_generic",
             Self::Dash => "dash",
             Self::Camera => "camera",
             Self::Lighting => "lighting",
@@ -197,6 +201,7 @@ impl ExtConfigKind {
                 | Self::TyresFx
                 | Self::BrakeDiscFx
                 | Self::ExtraFx
+                | Self::GenericFx
                 | Self::Include
         )
     }
@@ -681,8 +686,12 @@ impl<'a> ExtConfigResolver<'a> {
                     patch(&mut plan, "vettura.fx.brake_disc", section, &entries);
                 }
                 ExtConfigKind::ExtraFx => {
-                    record(&mut plan, "vettura.fx.extra", section, &entries);
-                    patch(&mut plan, "vettura.fx.extra", section, &entries);
+                    let module = extra_fx_module(&section.name);
+                    record(&mut plan, module, section, &entries);
+                    patch(&mut plan, module, section, &entries);
+                }
+                ExtConfigKind::GenericFx => {
+                    record(&mut plan, "vettura.fx.generic", section, &entries);
                 }
                 ExtConfigKind::Animation => {
                     plan.animations.push(AnimationDefinition {
@@ -870,6 +879,25 @@ fn split_list(value: &str) -> Vec<String> {
         .collect()
 }
 
+fn extra_fx_module(section_name: &str) -> &'static str {
+    let name = section_name.to_ascii_uppercase();
+    if name.contains("SSAO") || name.contains("HBAO") || name.contains("AO") {
+        "vettura.fx.extra.ssao"
+    } else if name.contains("SSR") || name.contains("REFLECTION") {
+        "vettura.fx.extra.ssr"
+    } else if name.contains("BLOOM") || name.contains("GLARE") {
+        "vettura.fx.extra.bloom"
+    } else if name.contains("DOF") || name.contains("DEPTH") {
+        "vettura.fx.extra.dof"
+    } else if name.contains("MOTION") || name.contains("BLUR") {
+        "vettura.fx.extra.motion_blur"
+    } else if name.contains("SHARP") {
+        "vettura.fx.extra.sharpen"
+    } else {
+        "vettura.fx.extra"
+    }
+}
+
 fn record(
     plan: &mut BindingPlan,
     module: &str,
@@ -1019,6 +1047,33 @@ mod tests {
             ExtConfigKind::from_name("PARTICLES_FX"),
             ExtConfigKind::Particles
         );
+        assert_eq!(ExtConfigKind::from_name("RAIN_FX"), ExtConfigKind::RainFx);
+        assert_eq!(ExtConfigKind::from_name("WIND"), ExtConfigKind::Weather);
+        assert_eq!(ExtConfigKind::from_name("SMOKE_0"), ExtConfigKind::Smoke);
+        assert_eq!(
+            ExtConfigKind::from_name("LIGHT_SERIES_16"),
+            ExtConfigKind::LightSeries
+        );
+        assert_eq!(
+            ExtConfigKind::from_name("EMISSIVE_LIGHT_1"),
+            ExtConfigKind::EmissiveLight
+        );
+        assert_eq!(
+            ExtConfigKind::from_name("TYRES_FX_REAR"),
+            ExtConfigKind::TyresFx
+        );
+        assert_eq!(
+            ExtConfigKind::from_name("BRAKE_DISC_FX"),
+            ExtConfigKind::BrakeDiscFx
+        );
+        assert_eq!(
+            ExtConfigKind::from_name("EXTRA_FX_SSAO"),
+            ExtConfigKind::ExtraFx
+        );
+        assert_eq!(
+            ExtConfigKind::from_name("CUSTOM_FX_1"),
+            ExtConfigKind::GenericFx
+        );
         assert_eq!(
             ExtConfigKind::from_name("SOMETHING_NEW"),
             ExtConfigKind::Other
@@ -1143,6 +1198,25 @@ GRASS_MATERIALS = grass
             plan.records
                 .iter()
                 .any(|record| record.module == "vettura.fx.grass")
+        );
+    }
+
+    #[test]
+    fn unknown_fx_is_caught_by_generic_bucket() {
+        let document = ExtConfigDocument::parse_text(
+            "test.ini",
+            "[CUSTOM_FX_1]\nENABLED = 1\n[EXTRA_FX_SSAO]\nSTRENGTH = 0.5\n",
+        );
+        let plan = ExtConfigResolver::new(&[]).resolve(&document);
+        assert!(
+            plan.records
+                .iter()
+                .any(|record| record.module == "vettura.fx.generic")
+        );
+        assert!(
+            plan.records
+                .iter()
+                .any(|record| record.module == "vettura.fx.extra.ssao")
         );
     }
 

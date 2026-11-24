@@ -51,7 +51,8 @@
 - `[GRASS_FX_...]`
 - `[TYRES_FX_...]`
 - `[BRAKE_DISC_FX]`
-- `[EXTRA_FX]`
+- `[EXTRA_FX]` / `[EXTRA_FX_SSAO]` / `[EXTRA_FX_SSR]` / `[EXTRA_FX_BLOOM]` / `[EXTRA_FX_DOF]` / `[EXTRA_FX_MOTION_BLUR]` / `[EXTRA_FX_SHARPEN]`
+- 其他 `*_FX*` section → `vettura.fx.generic` 兜底记录
 - `[CONDITION_...]`（简单条件）
 - `[INCLUDE]`（递归、防环）
 
@@ -85,6 +86,7 @@
 | Brake Disc | 刹车温度→发光强度 |
 | Tyres | 滑动/胎面/侧壁/模糊贴图状态 |
 | Extra | 伞形配置 + Bloom/SSAO/SSR/DoF/Motion Blur/Sharpen 的质量门槛与启用状态 |
+| Generic | 未识别 `*_FX*` section 的兜底记录 |
 
 v1 的状态由 `FxManager` 维护；Godot 渲染桥接入后才会真正出画面。
 详见 [`docs/fx.md`](fx.md)。
