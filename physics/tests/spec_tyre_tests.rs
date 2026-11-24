@@ -159,17 +159,31 @@ fn aligning_torque_and_rolling_resistance_come_from_the_tyre_data() {
         ..TyreSpec::default()
     };
     // A tyre pushed to the right twists the wheel back towards travel,
-    // which is a positive (left) moment about the car's up axis.
-    let force = tyre.aligning_torque_nm(1_000.0);
-    assert!((force - 35.0).abs() < 1e-4, "{force}");
-    assert!((tyre.aligning_torque_nm(-1_000.0) + 35.0).abs() < 1e-4);
+    // which is a positive (left) moment about the car's up axis. Well inside
+    // the peak slip the trail model is unchanged.
+    let peak = tyre.lateral_peak_slip_deg.to_radians();
+    let force = tyre.aligning_torque_nm(0.5 * peak, 1_000.0);
+    assert!((force - 35.0).abs() < 1e-3, "{force}");
+    assert!((tyre.aligning_torque_nm(-0.5 * peak, -1_000.0) + 35.0).abs() < 1e-3);
+    // Past the peak the pressure centre keeps moving back: the moment crosses
+    // zero and then becomes de-aligning (sign flips), as on a real tyre.
+    assert!(tyre.aligning_torque_nm(2.5 * peak, 1_000.0) < 0.0);
+    let deep = tyre.aligning_torque_nm(4.0 * peak, 1_000.0);
+    assert!(deep < 0.0);
+    assert!(
+        deep.abs() < 0.5 * 35.0,
+        "the de-aligning moment should settle, not grow: {deep}"
+    );
     // No trail, no torque; nonsense stays harmless.
     let no_trail = TyreSpec {
         pneumatic_trail_m: 0.0,
         ..tyre.clone()
     };
-    assert_eq!(no_trail.aligning_torque_nm(1_000.0), 0.0);
-    assert_eq!(tyre.aligning_torque_nm(f32::NAN), 0.0);
+    assert_eq!(no_trail.aligning_torque_nm(0.5 * peak, 1_000.0), 0.0);
+    // Nonsense lateral force is harmless; a nonsense slip angle reads as zero
+    // slip (full aligning) rather than poisoning the chassis.
+    assert_eq!(tyre.aligning_torque_nm(0.5 * peak, f32::NAN), 0.0);
+    assert!(tyre.aligning_torque_nm(f32::NAN, 1_000.0).is_finite());
 
     // Rolling resistance: the three AC terms, and pressure only ever adds.
     let cold = tyre.rolling_resistance_n(30.0, 0.1, 17.0);

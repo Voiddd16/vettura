@@ -303,28 +303,52 @@ pub(crate) fn vehicle_settings(
     } else {
         3.2
     };
+    // AC's differential is a clutch-type unit: `POWER`/`COAST` are the locking
+    // rates under drive/overrun, `PRELOAD` is the base locking torque that acts
+    // even with no speed difference. Jolt only has one speed-ratio based
+    // limited-slip model (1 = fully locked, larger = more open) and no
+    // drive/overrun state, so the three numbers collapse into one equivalent
+    // ratio. `PRELOAD` is folded in as extra base locking — it used to be read
+    // into the spec and then never used. A true ramp/preload differential needs
+    // a custom unit; Jolt's model cannot express it.
+    let diff = &spec.drivetrain.diff;
+    let preload_lock = if diff.preload_nm.is_finite() {
+        (diff.preload_nm / (2.0 * spec.engine.peak_torque_nm.max(1.0))).clamp(0.0, 0.5)
+    } else {
+        0.0
+    };
+    let lock = (0.5 * (diff.power_lock.clamp(0.01, 1.0) + diff.coast_lock.clamp(0.01, 1.0))
+        + preload_lock)
+        .clamp(0.01, 1.0);
+    // Jolt needs a ratio strictly above 1: fully locked becomes just over 1, an
+    // open diff becomes a large number. This single ratio is what the per-axle
+    // differentials use; for RWD/FWD it is the *only* thing that shapes the
+    // left/right torque split (the controller's global ratio only matters when
+    // several axles share the engine, i.e. AWD).
+    let lock_ratio = (1.0 / lock).clamp(1.0001, 100.0);
+
     let differentials = match spec.drivetrain.layout {
         DrivetrainLayout::Rwd => vec![
             VehicleDifferentialSettings::new(Some(2), Some(3))
                 .differential_ratio(final_drive)
                 .engine_torque_ratio(1.0)
-                .limited_slip_ratio(1.4),
+                .limited_slip_ratio(lock_ratio),
         ],
         DrivetrainLayout::Fwd => vec![
             VehicleDifferentialSettings::new(Some(0), Some(1))
                 .differential_ratio(final_drive)
                 .engine_torque_ratio(1.0)
-                .limited_slip_ratio(1.4),
+                .limited_slip_ratio(lock_ratio),
         ],
         DrivetrainLayout::Awd => vec![
             VehicleDifferentialSettings::new(Some(0), Some(1))
                 .differential_ratio(final_drive)
                 .engine_torque_ratio(0.42)
-                .limited_slip_ratio(1.4),
+                .limited_slip_ratio(lock_ratio),
             VehicleDifferentialSettings::new(Some(2), Some(3))
                 .differential_ratio(final_drive)
                 .engine_torque_ratio(0.58)
-                .limited_slip_ratio(1.4),
+                .limited_slip_ratio(lock_ratio),
         ],
     };
 
@@ -388,19 +412,6 @@ pub(crate) fn vehicle_settings(
     // Query as a moving body so static ground/walls (NON_MOVING) are hit;
     // NON_MOVING-vs-NON_MOVING is filtered out by the default layer table.
     let collision_tester = VehicleCollisionTester::cast_sphere(ObjectLayer::MOVING, tester_radius);
-
-    // AC's differential lock is a fraction: `1.0` fully locked, `0` open.
-    // Jolt expresses it as the fastest/slowest speed ratio at which torque
-    // still gets put into the slower wheel, so an open diff needs a large
-    // number and a locked one needs 1.0. Jolt has one ratio, so power and
-    // coast are averaged; the preload stays in the spec for callers that
-    // model it separately.
-    let lock = 0.5
-        * (spec.drivetrain.diff.power_lock.clamp(0.01, 1.0)
-            + spec.drivetrain.diff.coast_lock.clamp(0.01, 1.0));
-    // Jolt needs a ratio strictly above 1: a fully locked AC diff becomes just
-    // over 1, and an open one becomes a very large number.
-    let lock_ratio = (1.0 / lock).clamp(1.0001, f32::MAX);
 
     Ok(
         WheeledVehicleSettings::new(wheels, differentials, collision_tester)

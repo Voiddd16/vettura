@@ -326,15 +326,36 @@ impl TyreSpec {
 
     /// Self-aligning torque for one wheel, N·m.
     ///
-    /// The lateral force acts `pneumatic_trail_m` behind the contact patch
-    /// centre, so it produces a moment about the wheel's own vertical axis that
-    /// always rotates the wheel back towards the direction of travel. Signed so
-    /// that it opposes the steer the way a real steering wheel does.
-    pub fn aligning_torque_nm(&self, lateral_force_n: f32) -> f32 {
+    /// Up to the lateral peak slip the lateral force acts `pneumatic_trail_m`
+    /// behind the contact-patch centre, so `Mz = Fy · trail` and it always
+    /// rotates the wheel back towards the direction of travel.
+    ///
+    /// Past the peak the contact patch's pressure centre keeps moving back: the
+    /// moment collapses, crosses zero at roughly twice the peak slip, and then
+    /// becomes *de*-aligning (the real tyre's Mz curve). Modelling that with a
+    /// smooth angle-only shape leaves the pre-peak feel untouched — which is
+    /// what the steering wheel actually communicates in normal driving — but
+    /// stops the model from pretending the wheel still self-centres when the
+    /// tyre is sliding.
+    pub fn aligning_torque_nm(&self, slip_angle_rad: f32, lateral_force_n: f32) -> f32 {
         if self.pneumatic_trail_m <= 0.0 || !lateral_force_n.is_finite() {
             return 0.0;
         }
-        (lateral_force_n * self.pneumatic_trail_m).clamp(-2_000.0, 2_000.0)
+        let lean = if slip_angle_rad.is_finite() {
+            slip_angle_rad.abs()
+        } else {
+            0.0
+        };
+        let peak = self.lateral_peak_slip_deg.to_radians().max(0.01);
+        let ratio = if lean <= peak {
+            1.0
+        } else {
+            // 1 at the peak slip → 0 at ~2.1× → −0.35 beyond ~3× (smoothstep).
+            let t = ((lean - peak) / (2.0 * peak)).clamp(0.0, 1.0);
+            let s = t * t * (3.0 - 2.0 * t);
+            1.0 - 1.35 * s
+        };
+        (lateral_force_n * self.pneumatic_trail_m * ratio).clamp(-2_000.0, 2_000.0)
     }
 
     /// Rolling resistance force of one wheel, N.

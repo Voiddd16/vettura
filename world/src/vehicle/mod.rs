@@ -1296,10 +1296,10 @@ impl VehicleRuntime {
                 // towards the direction of travel. This is what makes the
                 // steering feel connected and what helps a fast car hold its
                 // line without driver input.
-                let aligning = self
-                    .spec
-                    .tyres
-                    .aligning_torque_nm(self.snapshot.wheels[index].lateral_force_n);
+                let aligning = self.spec.tyres.aligning_torque_nm(
+                    self.snapshot.wheels[index].slip_angle,
+                    self.snapshot.wheels[index].lateral_force_n,
+                );
                 if aligning.abs() > 1.0e-3 {
                     let steer_angle = self.snapshot.wheels[index].steer_angle;
                     let wheel_up = orientation * Quat::from_rotation_y(-steer_angle) * Vec3::Y;
