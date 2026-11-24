@@ -121,8 +121,24 @@ Cl  = LUT_AOA_CL(AoA) · LUT_GH_CL(该翼离地高度)
 ### 差速器（`drivetrain.ini [DIFFERENTIAL]`）
 
 `POWER`/`COAST`/`PRELOAD` 映射为 `DrivetrainSpec.diff`。Jolt 用“快轮/慢轮速度比
-超过该值时扭矩全给慢轮”表达限滑，所以 AC 的锁定比例取倒数：
-`POWER=0.25` → 限滑比 4.0，`POWER=1.0`（完全锁死）→ 1.0001。
+超过该值时扭矩全给慢轮”表达限滑（`limited_slip_ratio`，1 = 全锁，越大越开），
+**没有** power/coast 两种状态，也没有 preload。因此三个数折算成一个每轴生效的
+等效速度比：
+
+- `POWER`/`COAST` 取平均得到锁止率，再取倒数成速度比（`POWER=0.25` 的 F1
+  大约是 2.4，`1.0` 完全锁死是 1.0001）；
+- `PRELOAD` 按 `preload / (2·峰值扭矩)` 折算成额外的**基础锁止**，加进锁止率；
+- 每轴 `VehicleDifferentialSettings::limited_slip_ratio` 都用这个值。
+
+关于两个历史坑（已修）：
+
+- 之前每轴差速器写死 `limited_slip_ratio(1.4)`，AC 的数据只喂给控制器的
+  全局比值——而单差速器（RWD/FWD）时全局 alpha 恒为 0，等于 AC 的
+  `POWER`/`COAST` **对左右轮分配完全没生效**；
+- `PRELOAD` 以前读进 spec 后从未被使用。
+
+真正的 clutch-type ramp/preload（加速/滑行不同锁止、无速差时的基础扭矩）
+需要自研差速器；Jolt 的模型表达不了，当前是物理等效而非逐项还原。
 
 ### 刹车热（`brakes.ini`）
 
@@ -296,9 +312,11 @@ E    使 3×峰值滑移处仍保留 FALLOFF_LEVEL 的抓地
 四个“手感+数据”短板：
 
 - **回正力矩（self-aligning torque）**：轮胎侧向力作用在接触斑中心之后
-  `pneumatic_trail_m` 处，于是产生把轮子拧回行驶方向力矩
-  `Mz = −Fy · trail`（绕该轮自身竖轴）。这就是方向盘会“自己回正”、快速车不用
-  一直修方向的原因；无 trail 的车行为不变。
+  `pneumatic_trail_m` 处，峰值滑移以内 `Mz = −Fy · trail`（绕该轮自身竖轴），
+  这就是方向盘会“自己回正”、快速车不用一直修方向的原因。超过峰值滑移后
+  接触斑压力中心继续后移，`Mz` 下降、约 2 倍峰值滑移处过零、随后变成
+  **反回正**（真实轮胎的 Mz 曲线）。形状因子只依赖滑移角，所以峰值前的
+  手感完全不变；无 trail 的车行为不变。
 - **气动尾流（dirty air）**：跟车时前车已经把空气的能量抽干，后车下压力按
   `AeroSpec::dirty_air_multiplier` 折减：正后方 1.0、`dirty_air_distance_m` 外
   0.0、二次衰减。这是每台车自己的气动物理，不是比赛规则。
