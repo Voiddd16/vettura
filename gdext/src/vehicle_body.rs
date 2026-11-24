@@ -131,6 +131,11 @@ pub struct VehicleBody {
     last_forward_speed: f32,
     last_gear: i64,
     last_rpm: f32,
+    /// 世界模式每帧写入的刹车盘温度，供 BrakeDisc FX / HUD 读取。
+    last_brake_temps: [f32; 4],
+    /// 车目录（视觉 FX 用来定位 `extension/ext_config.ini`、`skins/`、`sfx/`）。
+    #[init(val = GString::new())]
+    car_path: GString,
 }
 
 #[godot_api]
@@ -182,10 +187,15 @@ impl VehicleBody {
     /// 成功返回 `true`；`AcCar` 未打开或物理映射失败会打印错误并返回 `false`。
     #[func]
     pub fn setup_from_car(&mut self, car: Gd<AcCar>) -> bool {
-        let Some(spec) = car.bind().vehicle_spec() else {
+        let (spec, path) = {
+            let car = car.bind();
+            (car.vehicle_spec(), car.car_root())
+        };
+        let Some(spec) = spec else {
             godot_error!("setup_from_car: AcCar has no mappable VehicleSpec");
             return false;
         };
+        self.car_path = path;
         self.setup_jolt_with_spec(spec)
     }
 
@@ -349,6 +359,52 @@ impl VehicleBody {
         self.wheel_state(index).map_or(0.0, |wheel| wheel.load_n)
     }
 
+    /// 车目录；世界模式由 `WorldBody` 在生成时写入，独立模式由 `setup_from_car*` 写入。
+    #[func]
+    pub fn car_path(&self) -> GString {
+        self.car_path.clone()
+    }
+
+    /// 第 `index` 个轮子的刹车盘表面温度，°C（世界模式；独立模式返回 0）。
+    #[func]
+    pub fn brake_temperature_c(&self, index: i64) -> f32 {
+        let Ok(index) = wheel_index(index) else {
+            return 0.0;
+        };
+        self.last_brake_temps[index]
+    }
+
+    /// 第 `index` 个轮子 dummy 的世界坐标；未绑定时返回原点。
+    #[func]
+    pub fn wheel_world_position(&self, index: i64) -> Vector3 {
+        let Ok(index) = wheel_index(index) else {
+            return Vector3::ZERO;
+        };
+        self.wheels[index]
+            .node
+            .as_ref()
+            .map(|node| node.get_global_position())
+            .unwrap_or(Vector3::ZERO)
+    }
+
+    /// 四个轮子里最大的侧偏角，弧度。声效用它驱动打滑声。
+    #[func]
+    pub fn max_wheel_slip_angle(&self) -> f32 {
+        (0..WHEEL_NODES.len()).fold(0.0f32, |max, index| {
+            self.wheel_state(index)
+                .map_or(max, |wheel| max.max(wheel.slip_angle.abs()))
+        })
+    }
+
+    /// 四个轮子里最大的纵向滑移率（绝对值）。ABS / 驱动打滑诊断用。
+    #[func]
+    pub fn max_wheel_slip_ratio(&self) -> f32 {
+        (0..WHEEL_NODES.len()).fold(0.0f32, |max, index| {
+            self.wheel_state(index)
+                .map_or(max, |wheel| max.max(wheel.slip_ratio.abs()))
+        })
+    }
+
     /// 在 `root` 的子树里按名字绑定四个车轮 dummy，返回绑定成功的数量。
     ///
     /// KN5 命名约定是 `WHEEL_LF/RF/LR/RR`，恰好对应 `vettura_physics::Wheel`
@@ -444,6 +500,11 @@ impl VehicleBody {
         self.controls.shift_down = false;
     }
 
+    /// 世界模式生成时由 `WorldBody` 写入车目录，供 FX 读取 `extension/`。
+    pub(crate) fn set_car_path(&mut self, path: GString) {
+        self.car_path = path;
+    }
+
     /// 记录初始位姿，供重置使用。
     pub(crate) fn set_initial_pose(&mut self, pose: Pose) {
         self.initial_pose = pose;
@@ -461,6 +522,7 @@ impl VehicleBody {
         self.last_gear = snapshot.gear as i64;
         self.last_rpm = snapshot.engine_rpm;
         self.last_wheels = snapshot.wheels;
+        self.last_brake_temps = snapshot.brake_temperatures_c;
 
         self.apply_pose(snapshot.reference_position, snapshot.orientation);
         for index in 0..WHEEL_NODES.len() {
@@ -528,6 +590,8 @@ impl VehicleBody {
                     contact: wheel.contact,
                     rotation: wheel.rotation,
                     load_n: wheel.load_n,
+                    slip_ratio: wheel.slip_ratio,
+                    slip_angle: wheel.slip_angle,
                 })
             }
             VehicleMode::World { .. } | VehicleMode::Unset => {
@@ -536,6 +600,8 @@ impl VehicleBody {
                     contact: wheel.contact,
                     rotation: wheel.rotation_angle,
                     load_n: wheel.load_n,
+                    slip_ratio: wheel.slip_ratio,
+                    slip_angle: wheel.slip_angle,
                 })
             }
         }
@@ -552,6 +618,8 @@ struct WheelStateView {
     contact: bool,
     rotation: f32,
     load_n: f32,
+    slip_ratio: f32,
+    slip_angle: f32,
 }
 
 fn spec_default() -> vettura_physics::VehicleSpec {

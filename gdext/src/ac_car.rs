@@ -154,6 +154,14 @@ impl AcCar {
             .unwrap_or(0.0)
     }
 
+    /// 打开时传入的车目录（`res://` / `user://` / 绝对路径原样返回）。
+    ///
+    /// 视觉 FX 用它定位 `extension/ext_config.ini`、`skins/`、`sfx/`。
+    #[func]
+    pub fn car_root(&self) -> GString {
+        self.path.clone()
+    }
+
     /// 车辆显示名，来自 `car.ini`；未打开时为空字符串。
     #[func]
     pub fn display_name(&self) -> GString {

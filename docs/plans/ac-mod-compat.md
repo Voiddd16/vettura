@@ -25,9 +25,15 @@
 
 ## 下一步（P1：渲染桥）
 
-- [ ] `gdext/src/fx`：把 `FxReport` 状态接到 Godot
-- [ ] 材质：recipe → `StandardMaterial3D` / `ShaderMaterial`
-- [ ] `ext_config` 覆盖实际应用到 KN5 材质/贴图
+- [x] `game/fx/fx_runtime.gd`：自动发现 WorldBody/VehicleBody，分发 ext_config records
+- [x] RainFX：湿路面、雨丝、积水、挡风玻璃雨滴、车轮水花
+- [x] GrassFX：SurfaceMap 采样 + MultiMesh
+- [x] LightingFX：LIGHT_SERIES/EMISSIVE_LIGHT → 灯光
+- [x] ParticlesFX：SMOKE/PARTICLES → GPUParticles3D
+- [x] BrakeDiscFX：刹车温度 → emission
+- [x] TyresFX：TYRES_FX 贴图替换（含 zip）
+- [x] ExtraFX：Bloom/tonemap/SSAO/SSIL 子集
+- [ ] 材质：recipe → `StandardMaterial3D` / `ShaderMaterial`（材质覆盖实际应用）
 - [ ] `game/fx_lab.tscn`：开关/调参/调试视图
 - [ ] 真实 mod 语料覆盖率与性能基准
 

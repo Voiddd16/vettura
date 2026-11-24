@@ -72,8 +72,22 @@ v1 在 `FxManager` 里为每个定义创建一个实例；`Car` scope 的多实�
 | `vettura.fx.extra.motion_blur` | Camera | Render | — | 高画质 |
 | `vettura.fx.extra.sharpen` | Scene | Render | — | 中画质 |
 
-v1 模块只维护状态（不直接画）；渲染桥在 `gdext/src/fx` 里消费这些状态。
-这样先验证启用、依赖、质量、预算和报告，再逐个接 Godot。
+`vettura-render` 负责状态/预算/报告；真实画面在 `game/fx/`：
+
+| 模块 | 状态 | 真实效果 |
+| --- | --- | --- |
+| Weather | 启用 | 复用 `weather_visuals.gd`（天空/雾/太阳/雨丝） |
+| Rain | 启用 | 湿路面材质、相机局部雨丝、贴地积水、挡风玻璃雨滴、车轮水花 |
+| Grass | 启用 | `SurfaceMap` 采样 + MultiMesh 草 |
+| Lighting | 启用 | LIGHT_SERIES/EMISSIVE_LIGHT → Omni/SpotLight3D |
+| Particles | 启用 | SMOKE/PARTICLES → GPUParticles3D |
+| Brake Disc | 启用 | 刹车盘温度 → emission |
+| Tyres | 启用 | TYRES_FX 贴图（含 `extension/textures` zip）替换 |
+| Extra | 启用 | Bloom/tonemap/adjustment，高画质 SSAO/SSIL |
+| Generic | 记录 | 只进报告，不执行 |
+
+入口是 `game/fx/fx_runtime.tscn`；它自动发现 `WorldBody` / `VehicleBody`，
+并把 `AcVisualCompat` 的 `ext_config.records` 分发给各模块。
 
 ## 4. 生命周期
 

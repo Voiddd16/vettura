@@ -76,20 +76,20 @@
 
 ### 2.3 FX 模块
 
-| 模块 | 当前状态 |
+| 模块 | 当前实现 |
 | --- | --- |
-| Weather | 状态/参数（时间、雨、湿滑、风、雾） |
-| Rain | 状态（雨丝/挡风/水花/积水开关） |
-| Grass | 状态（密度、距离、风） |
-| Lighting | 灯光预算/数量 |
-| Particles | 粒子预算/开关 |
-| Brake Disc | 刹车温度→发光强度 |
-| Tyres | 滑动/胎面/侧壁/模糊贴图状态 |
-| Extra | 伞形配置 + Bloom/SSAO/SSR/DoF/Motion Blur/Sharpen 的质量门槛与启用状态 |
+| Weather | 复用 `weather_visuals.gd`，同步 WorldBody 天气 |
+| Rain | 湿路面材质、相机局部雨丝、贴地积水、挡风玻璃雨滴、车轮水花 |
+| Grass | `SurfaceMap` 采样 + MultiMesh 草 |
+| Lighting | LIGHT_SERIES / EMISSIVE_LIGHT → Omni/SpotLight3D |
+| Particles | SMOKE / PARTICLES → GPUParticles3D |
+| Brake Disc | 刹车盘温度 → emission |
+| Tyres | TYRES_FX 贴图替换（含 `extension/textures` zip） |
+| Extra | Bloom/tonemap/adjustment，高画质 SSAO/SSIL |
 | Generic | 未识别 `*_FX*` section 的兜底记录 |
 
-v1 的状态由 `FxManager` 维护；Godot 渲染桥接入后才会真正出画面。
-详见 [`docs/fx.md`](fx.md)。
+入口：把 `game/fx/fx_runtime.tscn` 放到 `WorldBody` 同级；它会自动 attach。
+详见 [`game/fx/README.md`](../game/fx/README.md) 与 [`docs/fx.md`](fx.md)。
 
 ## 3. 用户：怎么检查一个 mod
 

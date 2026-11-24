@@ -209,6 +209,9 @@ impl WorldBody {
             .unwrap_or_default();
 
         if build_visual_mesh {
+            // 切换赛道前清空跨文件贴图去重表：旧赛道的纹理不再被材质引用，
+            // 缓存里的强引用会阻止它们释放。
+            crate::kn5::cache::clear_texture_cache();
             // 先试真实视觉模型（`models.ini` 的 KN5）；一个都没加载成功才退回
             // 碰撞低模——两条路都有 warning，不会静默。
             let models = {
@@ -420,6 +423,22 @@ impl WorldBody {
         }
     }
 
+    /// 当前 AI 外部配速倍率（默认 `1.0`）。
+    #[func]
+    pub fn ai_pace(&self) -> f32 {
+        self.ai.as_ref().map_or(1.0, |driver| driver.tuning().pace)
+    }
+
+    /// 外部配速倍率（`0.5..=3.0`），乘在难度档位自带的配速上。
+    ///
+    /// 难度 110 自带约 1.65 的配速；再传 `1.2` 可到约 1.98，用于贴近人类圈速。
+    #[func]
+    pub fn set_ai_pace(&mut self, pace: f32) {
+        if let Some(driver) = self.ai.as_mut() {
+            driver.set_pace(pace);
+        }
+    }
+
     /// 当前进行中的圈速，秒。起点线尚未越过时为 `0`。
     #[func]
     pub fn lap_time_s(&self) -> f32 {
@@ -527,11 +546,103 @@ impl WorldBody {
     pub fn is_telemetry_enabled(&self) -> bool {
         self.telemetry.config().enabled
     }
+
+    /// 赛道表面高度（用于 Grass/Rain FX 的贴地采样）。
+    ///
+    /// 采样点用较高的 `y`，让 `SurfaceMap` 选择该 `(x,z)` 下方最高的三角形，
+    /// 桥/坡道也适用。没有赛道或没有 mesh 表面时返回 `0.0`。
+    #[func]
+    pub fn surface_height_at(&self, x: f32, z: f32) -> f32 {
+        self.world
+            .as_ref()
+            .and_then(|world| {
+                world
+                    .surface_map()
+                    .sample_height(glam::Vec3::new(x, 10_000.0, z))
+            })
+            .unwrap_or(0.0)
+    }
+
+    /// 赛道表面类型名（`Asphalt` / `Grass` / `Gravel` …）。
+    #[func]
+    pub fn surface_kind_at(&self, x: f32, z: f32) -> GString {
+        self.world
+            .as_ref()
+            .and_then(|world| {
+                let map = world.surface_map();
+                let sample = map.sample(glam::Vec3::new(x, 10_000.0, z));
+                map.table()
+                    .get(sample.surface)
+                    .map(|properties| format!("{:?}", properties.kind))
+            })
+            .map(|name| GString::from(&name))
+            .unwrap_or_default()
+    }
+
+    /// 该点的积水深度（米）。
+    #[func]
+    pub fn water_depth_at(&self, x: f32, z: f32) -> f32 {
+        self.world
+            .as_ref()
+            .map(|world| world.surface_map().sample(glam::Vec3::new(x, 10_000.0, z)))
+            .map_or(0.0, |sample| sample.water_depth_m)
+    }
+
+    /// 当前物理天气快照（给 `WeatherVisuals.sync_from_world()` 用）。
+    ///
+    /// `sun` 是把 `sun_w_m2` 归一化到 `0..1`（1400 W/m² = 1），`rain` /
+    /// `fog` / `wetness` 与 `track::Weather` 同名同量纲。
+    #[func]
+    pub fn get_weather(&self) -> Dictionary<Variant, Variant> {
+        let weather = self
+            .world
+            .as_ref()
+            .map(|world| world.weather())
+            .unwrap_or_default();
+        let mut dict = Dictionary::new();
+        dict.set("wetness", weather.wetness);
+        dict.set("rain", weather.rain_intensity);
+        dict.set("fog", weather.fog_density);
+        dict.set("sun", (weather.sun_w_m2 / 1400.0).clamp(0.0, 1.0));
+        dict.set("air_c", weather.air_temperature_c);
+        dict.set("track_c", weather.track_temperature_c);
+        dict.set(
+            "wind",
+            Vector3::new(weather.wind.x, weather.wind.y, weather.wind.z),
+        );
+        dict
+    }
+
+    /// 设置物理天气（与视觉天气系统 `WeatherVisuals.set_conditions()` 配对）。
+    ///
+    /// 只传需要改的键；缺省的沿用当前值。改动会立刻影响抓地力、滚阻与
+    /// 赛道温度演化；想让画面同步请再调用 `WeatherVisuals.sync_from_world()`。
+    #[func]
+    pub fn set_weather(&mut self, params: Dictionary<Variant, Variant>) {
+        let Some(world) = self.world.as_mut() else {
+            return;
+        };
+        let mut weather = world.weather();
+        if let Some(value) = params.get("wetness") {
+            weather.wetness = value.to::<f64>() as f32;
+        }
+        if let Some(value) = params.get("rain") {
+            weather.rain_intensity = value.to::<f64>() as f32;
+        }
+        if let Some(value) = params.get("fog") {
+            weather.fog_density = value.to::<f64>() as f32;
+        }
+        if let Some(value) = params.get("sun") {
+            weather.sun_w_m2 = (value.to::<f64>() as f32).clamp(0.0, 1.0) * 1400.0;
+        }
+        world.set_weather(weather.clamped());
+    }
 }
 
 impl WorldBody {
     /// 生成车辆：装进世界 → 造节点 → 实例化车模 → 绑轮 → 登记。
     fn spawn_vehicle_at_pose(&mut self, mut car: Gd<AcCar>, pose: Pose) -> Option<Gd<VehicleBody>> {
+        let car_path = car.bind().car_root();
         let spec = car.bind().vehicle_spec()?;
         let handle = {
             let world = self.world.as_mut()?;
@@ -572,6 +683,7 @@ impl WorldBody {
             let mut bound = body.bind_mut();
             bound.attach_to_world(handle);
             bound.set_initial_pose(pose);
+            bound.set_car_path(car_path);
         }
 
         if self.primary.is_none() {
