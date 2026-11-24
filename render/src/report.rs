@@ -2,6 +2,7 @@
 //!
 //! 这是“先看再改”的入口：它不修改渲染，只告诉你哪些能自动适配、哪些会降级。
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -92,13 +93,24 @@ impl VisualReport {
             self.ext_config.stats.sections
         ));
         out.push_str(&format!(
-            "  material overrides: {}, texture overrides: {}, fx patches: {}, lights: {}, particles: {}\n",
+            "  material overrides: {}, texture overrides: {}, fx patches: {}, lights: {}, particles: {}, records: {}\n",
             self.ext_config.stats.material_overrides,
             self.ext_config.stats.texture_overrides,
             self.ext_config.stats.fx_patches,
             self.ext_config.stats.lights,
-            self.ext_config.stats.particles
+            self.ext_config.stats.particles,
+            self.ext_config.stats.records
         ));
+        if !self.ext_config.records.is_empty() {
+            let mut by_module = std::collections::BTreeMap::new();
+            for record in &self.ext_config.records {
+                *by_module.entry(record.module.as_str()).or_insert(0usize) += 1;
+            }
+            out.push_str("  fx records by module:\n");
+            for (module, count) in by_module {
+                out.push_str(&format!("    {module}: {count}\n"));
+            }
+        }
         out.push_str(&format!(
             "fx: {} enabled, {} disabled (quality {})\n",
             self.fx.enabled_count(),
@@ -204,6 +216,7 @@ pub fn inspect_path(
     warnings.extend(ext_config_document.warnings.clone());
     warnings.extend(binding.warnings.clone());
     warnings.extend(fx_report.warnings.clone());
+    dedupe_warnings(&mut warnings);
 
     Ok(VisualReport {
         path: path.display().to_string(),
@@ -251,6 +264,17 @@ fn detect_kind(root: &Path, files: &[PathBuf]) -> String {
         let _ = root;
         "unknown".to_owned()
     }
+}
+
+fn dedupe_warnings(warnings: &mut Vec<CompatWarning>) {
+    let mut seen = BTreeSet::new();
+    warnings.retain(|warning| {
+        seen.insert((
+            warning.source.clone(),
+            warning.section.clone(),
+            warning.message.clone(),
+        ))
+    });
 }
 
 fn collect_files(root: &Path, limit: usize) -> Vec<PathBuf> {

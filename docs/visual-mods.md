@@ -43,9 +43,15 @@
 - `[SHADER_REPLACEMENT_...]`
 - `[TEXTURE_OVERRIDE_...]`
 - `[MATERIAL_...]` / `[EMISSIVE_...]`
-- `[LIGHTING]`
+- `[LIGHTING]` / `[LIGHT_SERIES_...]` / `[LIGHT_POLLUTION]` / `[EMISSIVE_LIGHT_...]`
 - `[EXTRA_LIGHT_...]`
-- `[PARTICLES_...]`
+- `[PARTICLES_...]` / `[SMOKE_...]`
+- `[RAIN_FX]`
+- `[WIND]` / `[WEATHER_FX]`
+- `[GRASS_FX_...]`
+- `[TYRES_FX_...]`
+- `[BRAKE_DISC_FX]`
+- `[EXTRA_FX]`
 - `[CONDITION_...]`（简单条件）
 - `[INCLUDE]`（递归、防环）
 
@@ -55,7 +61,6 @@
 - `[MODEL_REPLACEMENT_...]`
 - `[DRIVER3D_...]`
 - `[SCRIPTABLE_DISPLAY_...]`
-- `[TYRES_FX_...]`
 - `[DASH_...]`
 - `[CAMERA_...]`
 
@@ -78,7 +83,8 @@
 | Lighting | 灯光预算/数量 |
 | Particles | 粒子预算/开关 |
 | Brake Disc | 刹车温度→发光强度 |
-| Extra | Bloom/SSAO/SSR/DoF/Motion Blur/Sharpen 的质量门槛与启用状态 |
+| Tyres | 滑动/胎面/侧壁/模糊贴图状态 |
+| Extra | 伞形配置 + Bloom/SSAO/SSR/DoF/Motion Blur/Sharpen 的质量门槛与启用状态 |
 
 v1 的状态由 `FxManager` 维护；Godot 渲染桥接入后才会真正出画面。
 详见 [`docs/fx.md`](fx.md)。

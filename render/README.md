@@ -6,8 +6,8 @@ Assetto Corsa **视觉兼容层**（纯 Rust，不依赖 Godot）。
 
 - KN5 材质 → 原生材质家族 / 配方，统计覆盖率；
 - CSP `ext_config.ini` 的声明式子集解析 → 可应用的 `BindingPlan`；
-- Weather / Rain / Grass / Extra / Lighting / Particles / Brake Disc 的模块化 FX
-  框架：注册、依赖排序、质量档位、预算与兼容报告。
+- Weather / Rain / Grass / Tyres / Extra / Lighting / Particles / Brake Disc 的
+  模块化 FX 框架：注册、依赖排序、质量档位、预算与兼容报告。
 
 > 这个 crate 不做 `.fx` 运行时、不执行任意 Lua、不替换原材质。未知项一律
 > 进入报告并降级，而不是静默失败。

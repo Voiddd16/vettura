@@ -62,6 +62,8 @@ v1 在 `FxManager` 里为每个定义创建一个实例；`Car` scope 的多实�
 | `vettura.fx.grass` | Track | Render, Material | — | 草密度、距离、风 |
 | `vettura.fx.lighting` | Scene | Light | — | 车灯/路灯/额外灯预算 |
 | `vettura.fx.brake_disc` | Car | Material, Render | — | 刹车温度→发光强度 |
+| `vettura.fx.tyres` | Car | Render, Material | — | 轮胎 FX：滑动/胎面/侧壁/模糊贴图状态 |
+| `vettura.fx.extra` | Scene | Render | — | Extra FX 伞形配置（具体 pass 仍是独立模块） |
 | `vettura.fx.extra.bloom` | Scene | Render | — | post pass |
 | `vettura.fx.extra.ssao` | Scene | Render | — | 高画质 |
 | `vettura.fx.extra.ssr` | Scene | Render | — | 高画质 |
@@ -120,12 +122,18 @@ Off < Low < Medium < High < Ultra
 | `[SHADER_REPLACEMENT_...]` | `MaterialOverride`（shader + properties） |
 | `[TEXTURE_OVERRIDE_...]` | `TextureOverride` |
 | `[MATERIAL_...]` / `[EMISSIVE_...]` | `MaterialOverride` |
-| `[LIGHTING]` | `FxConfigPatch` → `vettura.fx.lighting` |
-| `[EXTRA_LIGHT_...]` | `LightDefinition` |
-| `[PARTICLES_...]` | `ParticleDefinition` |
+| `[LIGHTING]` / `[LIGHT_SERIES_...]` / `[LIGHT_POLLUTION]` / `[EMISSIVE_LIGHT_...]` | `FxConfigPatch` + `FxConfigRecord` → `vettura.fx.lighting` |
+| `[EXTRA_LIGHT_...]` | `LightDefinition` + record |
+| `[PARTICLES_...]` / `[SMOKE_...]` | `ParticleDefinition` + record |
+| `[RAIN_FX]` | patch + record → `vettura.fx.rain` |
+| `[WIND]` / `[WEATHER_FX]` | patch + record → `vettura.fx.weather` |
+| `[GRASS_FX_...]` | patch + record → `vettura.fx.grass` |
+| `[TYRES_FX_...]` | record → `vettura.fx.tyres` |
+| `[BRAKE_DISC_FX]` | patch + record → `vettura.fx.brake_disc` |
+| `[EXTRA_FX]` | patch + record → `vettura.fx.extra` |
 | `[ANIMATION_...]` | 解析保留，标记未接入 |
 | `[CONDITION_...]` | 简单条件求值，复杂条件降级 |
-| `[MODEL_REPLACEMENT_...]` / `[DRIVER3D_...]` / `[SCRIPTABLE_DISPLAY_...]` / `[TYRES_FX_...]` / `[DASH_...]` / `[CAMERA_...]` | 识别并报告“模块未接入” |
+| `[MODEL_REPLACEMENT_...]` / `[DRIVER3D_...]` / `[SCRIPTABLE_DISPLAY_...]` / `[DASH_...]` / `[CAMERA_...]` | 识别并报告“模块未接入” |
 | `[INCLUDE]` | 递归加载，防环/限深 |
 | `[PHYSICS]` / `[AUDIO]` / `[GUI]` | 识别，视觉兼容范围外 |
 | 未知 | 报告，忽略 |

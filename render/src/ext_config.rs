@@ -39,6 +39,13 @@ pub enum ExtConfigKind {
     TyresFx,
     GrassFx,
     Weather,
+    RainFx,
+    Smoke,
+    LightSeries,
+    LightPollution,
+    EmissiveLight,
+    BrakeDiscFx,
+    ExtraFx,
     Dash,
     Camera,
     Lighting,
@@ -76,9 +83,27 @@ impl ExtConfigKind {
             Self::TyresFx
         } else if base.starts_with("GRASS") {
             Self::GrassFx
+        } else if base.starts_with("RAIN_FX") {
+            Self::RainFx
+        } else if base.starts_with("SMOKE") {
+            Self::Smoke
+        } else if base.starts_with("LIGHT_SERIES") {
+            Self::LightSeries
+        } else if base.starts_with("LIGHT_POLLUTION") {
+            Self::LightPollution
+        } else if base.starts_with("EMISSIVE_LIGHT") {
+            Self::EmissiveLight
+        } else if base.starts_with("LIGHT_") {
+            Self::Lighting
+        } else if base.starts_with("BRAKE_DISC") {
+            Self::BrakeDiscFx
+        } else if base.starts_with("EXTRA_FX") {
+            Self::ExtraFx
         } else if base.starts_with("WEATHER")
             || base.starts_with("WIND")
             || base.starts_with("RAIN")
+            || base.starts_with("FOG")
+            || base.starts_with("CLOUD")
         {
             Self::Weather
         } else if base.starts_with("WIPER") || base.starts_with("WOBBLY") {
@@ -128,6 +153,13 @@ impl ExtConfigKind {
             Self::TyresFx => "tyres_fx",
             Self::GrassFx => "grass_fx",
             Self::Weather => "weather",
+            Self::RainFx => "rain_fx",
+            Self::Smoke => "smoke",
+            Self::LightSeries => "light_series",
+            Self::LightPollution => "light_pollution",
+            Self::EmissiveLight => "emissive_light",
+            Self::BrakeDiscFx => "brake_disc_fx",
+            Self::ExtraFx => "extra_fx",
             Self::Dash => "dash",
             Self::Camera => "camera",
             Self::Lighting => "lighting",
@@ -155,8 +187,16 @@ impl ExtConfigKind {
                 | Self::Lighting
                 | Self::ExtraLight
                 | Self::Particles
+                | Self::Smoke
                 | Self::GrassFx
                 | Self::Weather
+                | Self::RainFx
+                | Self::LightSeries
+                | Self::LightPollution
+                | Self::EmissiveLight
+                | Self::TyresFx
+                | Self::BrakeDiscFx
+                | Self::ExtraFx
                 | Self::Include
         )
     }
@@ -447,6 +487,19 @@ pub struct FxConfigPatch {
     pub values: FxConfig,
 }
 
+/// 单个 section 的 FX 实例定义（灯光系列、烟雾、轮胎 FX 等）。
+///
+/// 与 [`FxConfigPatch`] 的区别：patch 是“模块级参数”，多个 section 会合并；
+/// record 保留每个 section 的独立参数，供渲染桥创建实例。
+#[derive(Debug, Clone, Serialize)]
+pub struct FxConfigRecord {
+    pub module: String,
+    pub name: String,
+    pub source: String,
+    pub section: String,
+    pub values: FxConfig,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LightDefinition {
     pub name: String,
@@ -491,6 +544,7 @@ pub struct BindingStats {
     pub fx_patches: usize,
     pub lights: usize,
     pub particles: usize,
+    pub records: usize,
     pub animations: usize,
     pub conditions: usize,
 }
@@ -502,6 +556,7 @@ pub struct BindingPlan {
     pub fx_patches: Vec<FxConfigPatch>,
     pub lights: Vec<LightDefinition>,
     pub particles: Vec<ParticleDefinition>,
+    pub records: Vec<FxConfigRecord>,
     pub animations: Vec<AnimationDefinition>,
     pub conditions: Vec<ConditionBlock>,
     pub warnings: Vec<CompatWarning>,
@@ -573,31 +628,30 @@ impl<'a> ExtConfigResolver<'a> {
                     plan.stats.texture_overrides += 1;
                 }
                 ExtConfigKind::GrassFx => {
-                    plan.fx_patches.push(FxConfigPatch {
-                        module: "vettura.fx.grass".to_owned(),
-                        source: section.source.clone(),
-                        section: section.name.clone(),
-                        values: entries_to_config(&entries),
-                    });
-                    plan.stats.fx_patches += 1;
+                    record(&mut plan, "vettura.fx.grass", section, &entries);
+                    patch(&mut plan, "vettura.fx.grass", section, &entries);
                 }
                 ExtConfigKind::Weather => {
-                    plan.fx_patches.push(FxConfigPatch {
-                        module: "vettura.fx.weather".to_owned(),
-                        source: section.source.clone(),
-                        section: section.name.clone(),
-                        values: entries_to_config(&entries),
-                    });
-                    plan.stats.fx_patches += 1;
+                    record(&mut plan, "vettura.fx.weather", section, &entries);
+                    patch(&mut plan, "vettura.fx.weather", section, &entries);
+                }
+                ExtConfigKind::RainFx => {
+                    record(&mut plan, "vettura.fx.rain", section, &entries);
+                    patch(&mut plan, "vettura.fx.rain", section, &entries);
+                }
+                ExtConfigKind::Smoke => {
+                    record(&mut plan, "vettura.fx.particles", section, &entries);
+                    plan.stats.particles += 1;
                 }
                 ExtConfigKind::Lighting => {
-                    plan.fx_patches.push(FxConfigPatch {
-                        module: "vettura.fx.lighting".to_owned(),
-                        source: section.source.clone(),
-                        section: section.name.clone(),
-                        values: entries_to_config(&entries),
-                    });
-                    plan.stats.fx_patches += 1;
+                    record(&mut plan, "vettura.fx.lighting", section, &entries);
+                    patch(&mut plan, "vettura.fx.lighting", section, &entries);
+                }
+                ExtConfigKind::LightSeries
+                | ExtConfigKind::LightPollution
+                | ExtConfigKind::EmissiveLight => {
+                    record(&mut plan, "vettura.fx.lighting", section, &entries);
+                    plan.stats.lights += 1;
                 }
                 ExtConfigKind::ExtraLight => {
                     plan.lights.push(LightDefinition {
@@ -607,6 +661,7 @@ impl<'a> ExtConfigResolver<'a> {
                         values: entries_to_config(&entries),
                     });
                     plan.stats.lights += 1;
+                    record(&mut plan, "vettura.fx.lighting", section, &entries);
                 }
                 ExtConfigKind::Particles => {
                     plan.particles.push(ParticleDefinition {
@@ -616,6 +671,18 @@ impl<'a> ExtConfigResolver<'a> {
                         values: entries_to_config(&entries),
                     });
                     plan.stats.particles += 1;
+                    record(&mut plan, "vettura.fx.particles", section, &entries);
+                }
+                ExtConfigKind::TyresFx => {
+                    record(&mut plan, "vettura.fx.tyres", section, &entries);
+                }
+                ExtConfigKind::BrakeDiscFx => {
+                    record(&mut plan, "vettura.fx.brake_disc", section, &entries);
+                    patch(&mut plan, "vettura.fx.brake_disc", section, &entries);
+                }
+                ExtConfigKind::ExtraFx => {
+                    record(&mut plan, "vettura.fx.extra", section, &entries);
+                    patch(&mut plan, "vettura.fx.extra", section, &entries);
                 }
                 ExtConfigKind::Animation => {
                     plan.animations.push(AnimationDefinition {
@@ -660,7 +727,6 @@ impl<'a> ExtConfigResolver<'a> {
                 ExtConfigKind::ModelReplacement
                 | ExtConfigKind::Driver3d
                 | ExtConfigKind::ScriptableDisplay
-                | ExtConfigKind::TyresFx
                 | ExtConfigKind::Dash
                 | ExtConfigKind::Camera => {
                     plan.warnings.push(CompatWarning::warning(
@@ -802,6 +868,37 @@ fn split_list(value: &str) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+fn record(
+    plan: &mut BindingPlan,
+    module: &str,
+    section: &ExtConfigSection,
+    entries: &BTreeMap<String, Vec<String>>,
+) {
+    plan.records.push(FxConfigRecord {
+        module: module.to_owned(),
+        name: section.name.clone(),
+        source: section.source.clone(),
+        section: section.name.clone(),
+        values: entries_to_config(entries),
+    });
+    plan.stats.records += 1;
+}
+
+fn patch(
+    plan: &mut BindingPlan,
+    module: &str,
+    section: &ExtConfigSection,
+    entries: &BTreeMap<String, Vec<String>>,
+) {
+    plan.fx_patches.push(FxConfigPatch {
+        module: module.to_owned(),
+        source: section.source.clone(),
+        section: section.name.clone(),
+        values: entries_to_config(entries),
+    });
+    plan.stats.fx_patches += 1;
 }
 
 fn entries_to_config(entries: &BTreeMap<String, Vec<String>>) -> FxConfig {
@@ -969,6 +1066,83 @@ FOO = bar
             plan.warnings
                 .iter()
                 .any(|warning| warning.section == "UNKNOWN_THING")
+        );
+    }
+
+    #[test]
+    fn all_fx_sections_produce_records() {
+        let text = r#"
+[RAIN_FX]
+PUDDLES_MATERIALS = asph?, conc?
+SOAKING_MATERIALS = tent
+[WIND]
+DYNAMIC_FLAGS = AUTO
+[SMOKE_0]
+POSITION = 1, 2, 3
+INTENSITY = CHIMNEYSMOKE
+[LIGHT_SERIES_...]
+MESHES = neon
+RANGE = 2
+[LIGHT_POLLUTION]
+DENSITY = 0.5
+[EMISSIVE_LIGHT_1]
+NAME = door_light
+COLOR = 5, 5, 8, 15
+[TYRES_FX_CUSTOMTEXTURE_SS]
+MATERIAL = tread
+TXDIFFUSE = treads.dds
+[BRAKE_DISC_FX]
+MAX_EMISSIVE = 1
+[EXTRA_FX]
+ENABLED = 1
+[GRASS_FX]
+GRASS_MATERIALS = grass
+"#;
+        let document = ExtConfigDocument::parse_text("test.ini", text);
+        let plan = ExtConfigResolver::new(&[]).resolve(&document);
+
+        assert_eq!(plan.stats.sections, 10);
+        assert_eq!(plan.stats.supported_sections, 10);
+        assert!(plan.stats.records >= 10);
+        assert!(
+            plan.records
+                .iter()
+                .any(|record| record.module == "vettura.fx.rain")
+        );
+        assert!(
+            plan.records
+                .iter()
+                .any(|record| record.module == "vettura.fx.weather")
+        );
+        assert!(
+            plan.records
+                .iter()
+                .any(|record| record.module == "vettura.fx.particles")
+        );
+        assert!(
+            plan.records
+                .iter()
+                .any(|record| record.module == "vettura.fx.lighting")
+        );
+        assert!(
+            plan.records
+                .iter()
+                .any(|record| record.module == "vettura.fx.tyres")
+        );
+        assert!(
+            plan.records
+                .iter()
+                .any(|record| record.module == "vettura.fx.brake_disc")
+        );
+        assert!(
+            plan.records
+                .iter()
+                .any(|record| record.module == "vettura.fx.extra")
+        );
+        assert!(
+            plan.records
+                .iter()
+                .any(|record| record.module == "vettura.fx.grass")
         );
     }
 

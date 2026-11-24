@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use super::config::{FxConfig, FxValue, bool_at, f32_at};
+use super::config::{FxConfig, FxValue, bool_at, f32_at, str_at};
 use super::context::{FxContext, FxCost, FxQuality};
 use super::definition::{FxCapability, FxDefinition, FxError, FxInstance, FxMeta, FxScope};
 
@@ -146,6 +146,27 @@ impl FxInstance for ConfigInstance {
                     value_bool(bool_at(&self.config, "spray", true)),
                 );
             }
+            "vettura.fx.tyres" => {
+                let threshold = f32_at(&self.config, "slip_threshold", 0.15).max(0.0);
+                let slip = ctx
+                    .cars
+                    .iter()
+                    .map(|car| car.tyre_slip)
+                    .fold(0.0_f32, f32::max);
+                self.state.insert("slip".to_owned(), value_f32(slip));
+                self.state
+                    .insert("active".to_owned(), value_bool(slip > threshold));
+                self.state.insert(
+                    "tread_texture".to_owned(),
+                    FxValue::String(str_at(&self.config, "tread_texture", "").to_owned()),
+                );
+            }
+            "vettura.fx.extra" => {
+                self.state.insert(
+                    "enabled".to_owned(),
+                    value_bool(bool_at(&self.config, "enabled", true)),
+                );
+            }
             "vettura.fx.brake_disc" => {
                 let threshold = f32_at(&self.config, "glow_threshold", 450.0).max(0.0);
                 let max_temp = ctx
@@ -279,6 +300,36 @@ pub fn builtin_definitions() -> Vec<Box<dyn FxDefinition>> {
             ]),
         ),
         definition(
+            "vettura.fx.tyres",
+            FxScope::Car,
+            &[FxCapability::Render, FxCapability::Material],
+            FxQuality::Low,
+            FxCost {
+                draw_calls: 8,
+                ..FxCost::default()
+            },
+            &[],
+            config(&[
+                ("slip_threshold", value_f32(0.15)),
+                ("tread_texture", FxValue::String(String::new())),
+                ("side_texture", FxValue::String(String::new())),
+                ("blur_texture", FxValue::String(String::new())),
+            ]),
+        ),
+        definition(
+            "vettura.fx.extra",
+            FxScope::Scene,
+            &[FxCapability::Render],
+            FxQuality::Medium,
+            FxCost {
+                post_passes: 0,
+                milliseconds: 0.0,
+                ..FxCost::default()
+            },
+            &[],
+            config(&[("enabled", value_bool(true))]),
+        ),
+        definition(
             "vettura.fx.brake_disc",
             FxScope::Car,
             &[FxCapability::Material, FxCapability::Render],
@@ -391,6 +442,8 @@ mod tests {
         assert!(ids.contains("vettura.fx.lighting"));
         assert!(ids.contains("vettura.fx.particles"));
         assert!(ids.contains("vettura.fx.brake_disc"));
+        assert!(ids.contains("vettura.fx.tyres"));
+        assert!(ids.contains("vettura.fx.extra"));
         assert!(ids.contains("vettura.fx.extra.ssao"));
     }
 }
