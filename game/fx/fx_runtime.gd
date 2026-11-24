@@ -151,17 +151,17 @@ func _build_effects() -> void:
 		add_child(_tyres_fx)
 		_tyres_fx.setup(_cars, car_records)
 
-	if enable_extra:
-		_extra_fx = load("res://game/fx/extra_fx.gd").new()
-		_extra_fx.name = "ExtraFX"
-		add_child(_extra_fx)
-		_extra_fx.setup(_world, track_records, quality)
-
 	if enable_weather:
 		_weather_fx = load("res://game/fx/weather_fx.gd").new()
 		_weather_fx.name = "WeatherFX"
 		add_child(_weather_fx)
 		_weather_fx.setup(_world, track_records)
+
+	if enable_extra:
+		_extra_fx = load("res://game/fx/extra_fx.gd").new()
+		_extra_fx.name = "ExtraFX"
+		add_child(_extra_fx)
+		_extra_fx.setup(_world, track_records, quality)
 
 	print("[fx] attached world=%s cars=%d track_records=%d" % [
 		track_root, _cars.size(), track_records.size()])
