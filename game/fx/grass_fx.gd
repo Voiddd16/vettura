@@ -12,12 +12,13 @@ extends Node3D
 ## 仍未实现 CSP 的逐像素 mask/纹理组权重和风摆 shader；没有草材质三角形时
 ## 回退到 SurfaceMap 的 Grass/Gravel/Dirt/Sand 采样。
 
-const BUILD_RADIUS := 68.0
+const BUILD_RADIUS := 78.0
 const REBUILD_MOVE := 9.0
 const CHUNK_SIZE := 24.0
 const MAX_GRASS_TRIANGLES := 120_000
 const BLADE_WIDTH := 0.5
 const BLADE_HEIGHT := 0.9
+const GRASS_SHADER := preload("res://game/fx/grass_blade.gdshader")
 
 var enabled := true
 var density := 1.0
@@ -30,15 +31,20 @@ var _camera: Camera3D
 var _last_build := Vector3(1e9, 0.0, 0.0)
 var _timer := 0.0
 var _rng := RandomNumberGenerator.new()
-var _max_instances := 3200
+var _max_instances := 4200
 var _variants: Array[MultiMeshInstance3D] = []
 var _variant_meshes: Array[MultiMesh] = []
-var _material: StandardMaterial3D
+var _material: ShaderMaterial
 var _atlas: Texture2D
 var _grid_cols := 2
 var _grid_rows := 2
 var _track_root := ""
 var _logged := false
+var _variant_weights: Array[float] = []
+var _group_count := 0
+var _mask_main_threshold := 0.0
+var _full_track := false
+var _full_built := false
 
 ## Vector2i(chunk_x, chunk_z) -> Array[PackedVector3Array]（每个三角形 3 点）。
 var _chunks: Dictionary = {}
@@ -53,6 +59,7 @@ func setup(world: WorldBody, records: Array, quality_name: String) -> void:
 	_track_root = String(world.track_root())
 	_apply_records(records)
 	_max_instances = _quality_count()
+	_full_track = quality == "ultra"
 	_atlas = _load_or_make_atlas()
 	_create_multimeshes()
 	_collect_geometry()
@@ -68,6 +75,12 @@ func _process(delta: float) -> void:
 	if _camera == null or not is_instance_valid(_camera):
 		_camera = get_viewport().get_camera_3d()
 	if _camera == null:
+		return
+	if _full_track and not _full_built:
+		_full_built = true
+		_build_full_track()
+		return
+	if _full_track:
 		return
 	_timer -= delta
 	var moved := _camera.global_position.distance_to(_last_build)
@@ -103,6 +116,16 @@ func _apply_records(records: Array) -> void:
 			if grid.size() >= 2:
 				_grid_cols = maxi(1, int(str(grid[0]).to_float()))
 				_grid_rows = maxi(1, int(str(grid[1]).to_float()))
+		if values.has("mask_main_threshold"):
+			_mask_main_threshold = _float(values["mask_main_threshold"], _mask_main_threshold)
+		if String(record.get("name", "")).begins_with("GRASS_FX_TEXTURE_GROUP"):
+			_group_count += 1
+		# CONFIGURATION 里的 texture_group_N_chance；按变体权重使用。
+		for key in values.keys():
+			var key_text := String(key)
+			if key_text.begins_with("texture_group_") and key_text.ends_with("_chance"):
+				var weight := _float(values[key], 1.0)
+				_variant_weights.append(maxf(0.01, weight))
 
 
 func _quality_count() -> int:
@@ -110,28 +133,27 @@ func _quality_count() -> int:
 		"off":
 			return 0
 		"low":
-			return 1200
+			return 1500
 		"medium":
-			return 4200
+			return 6000
 		"high":
-			return 8500
-		_:
 			return 14000
+		_:
+			return 18000
 
 
 func _create_multimeshes() -> void:
-	_material = StandardMaterial3D.new()
-	_material.albedo_texture = _atlas
-	_material.albedo_color = Color(1, 1, 1, 1).darkened(1.0 - clampf(color_factor, 0.2, 1.0) * 0.2)
-	_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-	_material.alpha_scissor_threshold = 0.34
-	_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_material.roughness = 0.95
-	_material.vertex_color_use_as_albedo = true
+	_material = ShaderMaterial.new()
+	_material.shader = GRASS_SHADER
+	_material.set_shader_parameter("grass_atlas", _atlas)
+	_material.set_shader_parameter("tint", Color(1, 1, 1, 1).darkened(1.0 - clampf(color_factor, 0.2, 1.0) * 0.2))
 
 	var cells := mini(_grid_cols * _grid_rows, 8)
+	if _group_count > cells:
+		cells = mini(_group_count, 8)
+	if _variant_weights.size() < cells:
+		_variant_weights.resize(cells)
+		_variant_weights.fill(1.0)
 	for index in cells:
 		var cell := Vector2(index % _grid_cols, index / _grid_cols)
 		var mesh := _make_blade_mesh(cell)
@@ -355,7 +377,7 @@ func _place_from_surface_map(buckets: Array[Array]) -> void:
 
 
 func _add_instance(point: Vector3, buckets: Array[Array]) -> void:
-	var variant := _rng.randi_range(0, _variants.size() - 1)
+	var variant := _choose_variant()
 	var scale := _rng.randf_range(0.55, 1.6) * clampf(density, 0.2, 2.0)
 	var basis := Basis(Vector3.UP, _rng.randf_range(0.0, TAU))
 	basis = basis.scaled(Vector3(scale, scale, scale))
@@ -369,6 +391,96 @@ func _add_instance(point: Vector3, buckets: Array[Array]) -> void:
 		"transform": Transform3D(basis, point),
 		"color": color,
 	})
+
+
+func _choose_variant() -> int:
+	if _variants.is_empty():
+		return 0
+	if _variant_weights.is_empty():
+		return _rng.randi_range(0, _variants.size() - 1)
+	var total := 0.0
+	for weight in _variant_weights:
+		total += maxf(0.0, weight)
+	if total <= 0.0:
+		return _rng.randi_range(0, _variants.size() - 1)
+	var roll := _rng.randf() * total
+	for index in mini(_variants.size(), _variant_weights.size()):
+		roll -= maxf(0.0, _variant_weights[index])
+		if roll <= 0.0:
+			return index
+	return _variants.size() - 1
+
+
+func _build_full_track() -> void:
+	if _world == null or _camera == null:
+		return
+	_last_build = _camera.global_position
+	var buckets: Array[Array] = []
+	for _i in _variants.size():
+		buckets.append([])
+	var candidates := _all_triangles()
+	if candidates.is_empty():
+		return
+	var target := mini(_max_instances * 2, 30000)
+	var attempts := target * 3
+	var placements := 0
+	for _i in attempts:
+		if placements >= target:
+			break
+		var triangle: PackedVector3Array = candidates[_rng.randi_range(0, candidates.size() - 1)]
+		var r1 := _rng.randf()
+		var r2 := _rng.randf()
+		if r1 + r2 > 1.0:
+			r1 = 1.0 - r1
+			r2 = 1.0 - r2
+		var point := triangle[0] + (triangle[1] - triangle[0]) * r1 + (triangle[2] - triangle[0]) * r2
+		_add_instance(point, buckets)
+		placements += 1
+	# 全赛道只做“底色覆盖”；再叠一层相机附近高密度草，避免整体太稀。
+	var local_candidates := _candidate_triangles()
+	if not local_candidates.is_empty():
+		var local_target := _max_instances
+		var local_attempts := local_target * 4
+		var local_placed := 0
+		for _i in local_attempts:
+			if local_placed >= local_target:
+				break
+			var triangle: PackedVector3Array = local_candidates[_rng.randi_range(0, local_candidates.size() - 1)]
+			var r1 := _rng.randf()
+			var r2 := _rng.randf()
+			if r1 + r2 > 1.0:
+				r1 = 1.0 - r1
+				r2 = 1.0 - r2
+			var point := triangle[0] + (triangle[1] - triangle[0]) * r1 + (triangle[2] - triangle[0]) * r2
+			if point.distance_to(_last_build) > BUILD_RADIUS:
+				continue
+			_add_instance(point, buckets)
+			local_placed += 1
+		placements += local_placed
+	_apply_buckets(buckets)
+	if not _logged:
+		_logged = true
+		print("[grass] full_track instances=%d variants=%d atlas=%s" % [
+			placements, _variants.size(), _atlas != null])
+
+
+func _all_triangles() -> Array:
+	var result: Array = []
+	for value in _chunks.values():
+		result.append_array(value)
+	return result
+
+
+func _apply_buckets(buckets: Array[Array]) -> void:
+	for index in _variants.size():
+		var multimesh := _variant_meshes[index]
+		var items: Array = buckets[index]
+		multimesh.instance_count = 0
+		multimesh.instance_count = items.size()
+		for item_index in items.size():
+			var item: Dictionary = items[item_index]
+			multimesh.set_instance_transform(item_index, item["transform"])
+			multimesh.set_instance_color(item_index, item["color"])
 
 
 func _is_grass_kind(kind: String) -> bool:

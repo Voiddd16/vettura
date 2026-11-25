@@ -29,7 +29,7 @@ fx.attach(world, [car], camera)
 | 文件 | 效果 | 数据来源 |
 | --- | --- | --- |
 | `rain_fx.gd` | 湿路面、雨丝、贴地积水、挡风玻璃雨滴、车轮水花 | `RAIN_FX` / 天气 |
-| `grass_fx.gd` | 按 GRASS_MATERIALS 三角形分块铺草 + 图集草卡片 | `GRASS_FX` + track mesh |
+| `grass_fx.gd` + `grass_blade.gdshader` | 按 GRASS_MATERIALS 三角形分块铺草 + 图集草卡片 + 风摆 | `GRASS_FX` + track mesh |
 | `lighting_fx.gd` | `LIGHT_SERIES` / `EMISSIVE_LIGHT` / `LIGHT_POLLUTION` → Omni/SpotLight3D | `LIGHTING*` records |
 | `particles_fx.gd` | `SMOKE_*` / `PARTICLES_*` → GPUParticles3D | particle records |
 | `brake_disc_fx.gd` | 刹车盘温度 → emission | `BRAKE_DISC*` + `brake_temperature_c()` |
@@ -45,7 +45,7 @@ fx.attach(world, [car], camera)
   `extra` / `weather`
 - `quality`：`off` / `low` / `medium` / `high` / `ultra`
 
-湿材质默认最多 1400 个 surface；草默认 medium 4200 个实例（按 track 草材质三角形分块）；灯光最多 48 盏。
+湿材质默认最多 1400 个 surface；草 medium 6000（相机局部）、high 14000（局部高密度）、ultra 48000（全赛道底色 + 局部高密度）；灯光最多 48 盏。
 这些是 v1 的移动端安全上限，后续按真实性能数据调。
 
 ## 验证
@@ -56,6 +56,11 @@ fx.attach(world, [car], camera)
 
 # 换赛道/车
 FX_TRACK=res://mods/fn_nurburgring FX_LAYOUT=auto \
+  /Applications/Godot.app/Contents/MacOS/Godot --path . res://gdext/fx_probe.tscn
+```
+
+```bash
+FX_TRACK=res://mods/fn_nurburgring FX_LAYOUT=auto FX_QUALITY=high \
   /Applications/Godot.app/Contents/MacOS/Godot --path . res://gdext/fx_probe.tscn
 ```
 

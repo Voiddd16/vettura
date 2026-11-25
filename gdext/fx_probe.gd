@@ -62,6 +62,9 @@ func _ready() -> void:
 
 	_fx = load("res://game/fx/fx_runtime.tscn").instantiate()
 	_fx.name = "FxRuntime"
+	var quality := OS.get_environment("FX_QUALITY")
+	if not quality.is_empty():
+		_fx.quality = quality
 	add_child(_fx)
 	# 故意不手动 attach：验证 FxRuntime 能自动发现 WorldBody/VehicleBody。
 	print("[fx-probe] waiting for auto attach, rain=0.85 wetness=0.9")

@@ -27,7 +27,7 @@
 
 - [x] `game/fx/fx_runtime.gd`：自动发现 WorldBody/VehicleBody，分发 ext_config records
 - [x] RainFX：湿路面、雨丝、积水、挡风玻璃雨滴、车轮水花
-- [x] GrassFX：SurfaceMap 采样 + MultiMesh
+- [x] GrassFX：GRASS_MATERIALS 三角形分块 + 图集草卡片 + 风摆 + ultra 全赛道底色
 - [x] LightingFX：LIGHT_SERIES/EMISSIVE_LIGHT → 灯光
 - [x] ParticlesFX：SMOKE/PARTICLES → GPUParticles3D
 - [x] BrakeDiscFX：刹车温度 → emission
