@@ -31,6 +31,8 @@ const RAIN_DROP_SHADER := preload("res://game/fx/rain/rain_drop.gdshader")
 const RAIN_SPLASH_SHADER := preload("res://game/fx/rain/rain_splash.gdshader")
 const RAIN_RIPPLE_SHADER := preload("res://game/fx/rain/rain_ripple.gdshader")
 const RAIN_SCREEN_SHADER := preload("res://game/fx/rain/rain_screen.gdshader")
+const RAIN_REFRACTION_SHADER := preload("res://game/fx/rain/rain_refraction.gdshader")
+const RAIN_MIST_SHADER := preload("res://game/fx/rain/rain_mist.gdshader")
 
 const MAX_NEAR_BY_QUALITY := [700, 1800, 3600]
 const MAX_FAR_BY_QUALITY := [0, 550, 1300]
@@ -115,6 +117,73 @@ const SPLASH_AMOUNT_CAP := 240
 		_parameters_dirty = true
 		parameters_changed.emit()
 
+@export_group("Optics")
+@export_range(0.002, 0.0667, 0.0001) var shutter_time: float = 1.0 / 60.0:
+	set(value):
+		shutter_time = clampf(value, 0.002, 0.0667)
+		_parameters_dirty = true
+@export_range(0.2, 40.0, 0.01) var exposure_gain: float = 8.0:
+	set(value):
+		exposure_gain = clampf(value, 0.2, 40.0)
+		_parameters_dirty = true
+@export_range(0.2, 4.0, 0.01) var drop_size_scale: float = 1.0:
+	set(value):
+		drop_size_scale = clampf(value, 0.2, 4.0)
+		_parameters_dirty = true
+@export_range(0.0, 1.0, 0.01) var streak_softness: float = 0.35:
+	set(value):
+		streak_softness = clampf(value, 0.0, 1.0)
+		_parameters_dirty = true
+@export_range(0.0, 1.0, 0.01) var internal_pattern_strength: float = 0.55:
+	set(value):
+		internal_pattern_strength = clampf(value, 0.0, 1.0)
+		_parameters_dirty = true
+@export_range(0.0, 12.0, 0.1) var oscillation_freq: float = 2.4:
+	set(value):
+		oscillation_freq = clampf(value, 0.0, 12.0)
+		_parameters_dirty = true
+@export_range(1.0, 3.0, 1.0) var highlight_count: float = 2.0:
+	set(value):
+		highlight_count = clampf(value, 1.0, 3.0)
+		_parameters_dirty = true
+@export_range(0.0, 1.0, 0.01) var background_response: float = 0.85:
+	set(value):
+		background_response = clampf(value, 0.0, 1.0)
+		_parameters_dirty = true
+@export_range(0.0, 2.0, 0.01) var backlit_boost: float = 1.0:
+	set(value):
+		backlit_boost = clampf(value, 0.0, 2.0)
+		_parameters_dirty = true
+@export var light_direction_override: Vector3 = Vector3.ZERO
+@export var dof_enabled: bool = false:
+	set(value):
+		dof_enabled = value
+		_parameters_dirty = true
+@export_range(0.0, 20.0, 0.1) var dof_near: float = 5.0
+@export_range(0.0, 60.0, 0.1) var dof_mid: float = 25.0
+@export_range(10.0, 160.0, 1.0) var dof_far: float = 65.0
+@export_range(0.0, 1.0, 0.01) var defocus_amount: float = 0.0
+
+@export_group("Gust & Shaft")
+@export_range(0.0, 1.0, 0.01) var gust_strength: float = 0.25:
+	set(value):
+		gust_strength = clampf(value, 0.0, 1.0)
+		_parameters_dirty = true
+@export_range(0.5, 12.0, 0.1) var gust_period: float = 3.0:
+	set(value):
+		gust_period = clampf(value, 0.5, 12.0)
+		_parameters_dirty = true
+@export_range(0.01, 0.5, 0.01) var shaft_scale: float = 0.08:
+	set(value):
+		shaft_scale = clampf(value, 0.01, 0.5)
+		_parameters_dirty = true
+@export_range(0.0, 1.0, 0.01) var shaft_contrast: float = 0.35:
+	set(value):
+		shaft_contrast = clampf(value, 0.0, 1.0)
+		_parameters_dirty = true
+@export var screen_refraction_enabled: bool = false
+@export var backbuffer_copy_rect: Rect2 = Rect2()
+
 @export_group("Ground & Atmosphere")
 @export var auto_wetness_from_rain: bool = true:
 	set(value):
@@ -197,14 +266,24 @@ var _parameters_dirty := true
 var _compat_fallback := false
 var _rendering_method := ""
 
-var _rain_near: GPUParticles3D
-var _rain_far: GPUParticles3D
-var _rain_near_shader: ShaderMaterial
-var _rain_far_shader: ShaderMaterial
-var _rain_near_process: ParticleProcessMaterial
-var _rain_far_process: ParticleProcessMaterial
+## 四档粒径谱；每项独立粒子层、终端速度、宽度、softness 与数量占比。
+## 终端速度经验值来自 Marshall–Palmer/Atlas 类关系
+## v(D) ≈ 9.65 - 10.3·exp(-0.6·D_mm)（m/s，D 为直径 mm）；
+## 这里取各档速度区间，避免在 shader 里做开方/指数。
+const RAIN_CLASSES := [
+	{"name": "Large", "d_min": 2.6, "d_max": 4.6, "v_min": 8.2, "v_max": 9.6,
+		"fraction": 0.06, "width": 0.016, "softness": 0.10, "distance": 55.0},
+	{"name": "Medium", "d_min": 1.2, "d_max": 2.6, "v_min": 6.2, "v_max": 8.2,
+		"fraction": 0.24, "width": 0.013, "softness": 0.22, "distance": 68.0},
+	{"name": "Small", "d_min": 0.5, "d_max": 1.2, "v_min": 4.0, "v_max": 6.2,
+		"fraction": 0.40, "width": 0.009, "softness": 0.38, "distance": 78.0},
+	{"name": "Fine", "d_min": 0.15, "d_max": 0.5, "v_min": 2.5, "v_max": 4.0,
+		"fraction": 0.30, "width": 0.006, "softness": 0.58, "distance": 88.0},
+]
+var _rain_layers: Array[Dictionary] = []
 var _splash: GPUParticles3D
 var _splash_process: ParticleProcessMaterial
+var _mist: GPUParticles3D
 var _ripple_instance: MultiMeshInstance3D
 var _ripple_multimesh: MultiMesh
 var _ripple_material: ShaderMaterial
@@ -214,6 +293,10 @@ var _effective_ripple_limit := 4
 var _screen_layer: CanvasLayer
 var _screen_rect: ColorRect
 var _screen_material: ShaderMaterial
+var _refraction_layer: CanvasLayer
+var _refraction_rect: ColorRect
+var _refraction_material: ShaderMaterial
+var _refraction_backbuffer: BackBufferCopy
 var _environment: Environment
 var _world_env: WorldEnvironment
 var _wet_entries: Array[Dictionary] = []
@@ -225,6 +308,9 @@ var _audio_player: AudioStreamPlayer
 var _audio_playback: AudioStreamGeneratorPlayback
 var _audio_last := 0.0
 var _logged := false
+var _frame_dt := 1.0 / 60.0
+var _sun: DirectionalLight3D
+var _local_lights: Array[Light3D] = []
 
 
 func _ready() -> void:
@@ -275,6 +361,7 @@ func get_rendering_method() -> String:
 
 func _process(delta: float) -> void:
 	_time += delta
+	_frame_dt = delta
 	if not _built:
 		_build()
 	if _camera == null or not is_instance_valid(_camera):
@@ -297,12 +384,14 @@ func _process(delta: float) -> void:
 
 	if _parameters_dirty:
 		_apply_parameters()
+	_update_lighting()
 	_update_fall_direction()
 	_update_particles()
 	_update_ground_feedback(delta)
 	_update_wetness()
 	_update_atmosphere()
 	_update_screen_overlay()
+	_update_refraction_overlay()
 	if enable_audio:
 		_update_audio()
 
@@ -314,65 +403,90 @@ func _build() -> void:
 	_viewport_size = Vector2(get_viewport().get_visible_rect().size) if get_viewport() != null else Vector2(1920, 1080)
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 
-	_rain_near_shader = _make_rain_material(0)
-	_rain_far_shader = _make_rain_material(1)
-	_rain_near = _make_rain_layer("RainNear", _rain_near_shader, 24.0, 0.7, 1.4)
-	_rain_far = _make_rain_layer("RainFar", _rain_far_shader, 52.0, 0.5, 1.6)
-	_rain_far.visible = false
-
+	_create_rain_layers()
 	_splash = _make_splash()
+	_mist = _make_mist()
 	_make_ripples()
 	_make_screen_overlay()
+	_make_refraction_overlay()
 	_find_environment()
 	_build_audio()
 	_apply_parameters()
 
 
-func _make_rain_material(layer: int) -> ShaderMaterial:
+func _create_rain_layers() -> void:
+	_rain_layers.clear()
+	var box_extents := [22.0, 28.0, 34.0, 40.0]
+	for index in RAIN_CLASSES.size():
+		var cfg: Dictionary = RAIN_CLASSES[index]
+		var material := _make_rain_material(index, cfg)
+		var particles := _make_rain_layer(cfg, material, float(box_extents[index]))
+		_rain_layers.append({
+			"config": cfg,
+			"material": material,
+			"particles": particles,
+			"process": particles.process_material as ParticleProcessMaterial,
+		})
+
+
+func _make_rain_material(index: int, cfg: Dictionary) -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = RAIN_DROP_SHADER
 	material.set_shader_parameter("drop_color", drop_color)
-	material.set_shader_parameter("brightness", drop_brightness * (1.0 if layer == 0 else 0.55))
-	material.set_shader_parameter("base_width", drop_width * (1.0 if layer == 0 else 1.35))
-	material.set_shader_parameter("drop_length", drop_length * stretch_multiplier * (1.0 if layer == 0 else 1.5))
+	material.set_shader_parameter("brightness", drop_brightness * (1.0 - index * 0.08))
+	material.set_shader_parameter("drop_diameter_mm", (float(cfg["d_min"]) + float(cfg["d_max"])) * 0.5 * drop_size_scale)
+	material.set_shader_parameter("terminal_velocity", (float(cfg["v_min"]) + float(cfg["v_max"])) * 0.5)
+	material.set_shader_parameter("drop_width_scale", float(cfg["width"]) / maxf(drop_width, 0.001))
 	material.set_shader_parameter("min_screen_width_px", min_screen_width_px)
-	material.set_shader_parameter("max_distance", rain_visibility_distance)
+	material.set_shader_parameter("max_distance", float(cfg["distance"]) * (rain_visibility_distance / 70.0))
 	material.set_shader_parameter("viewport_size", _viewport_size)
-	material.set_shader_parameter("jitter_strength", jitter_strength)
+	material.set_shader_parameter("layer_softness", maxf(streak_softness, float(cfg["softness"])))
+	material.set_shader_parameter("internal_pattern_strength", internal_pattern_strength)
+	material.set_shader_parameter("oscillation_freq", oscillation_freq)
+	material.set_shader_parameter("highlight_count", highlight_count)
+	material.set_shader_parameter("shutter_time", shutter_time)
+	material.set_shader_parameter("frame_time", _frame_dt)
+	material.set_shader_parameter("exposure_gain", exposure_gain)
+	material.set_shader_parameter("background_response", background_response)
+	material.set_shader_parameter("backlit_boost", backlit_boost)
+	material.set_shader_parameter("dof_near", dof_near)
+	material.set_shader_parameter("dof_mid", dof_mid)
+	material.set_shader_parameter("dof_far", dof_far)
+	material.set_shader_parameter("defocus_amount", defocus_amount if dof_enabled else 0.0)
+	material.set_shader_parameter("gust_strength", gust_strength)
+	material.set_shader_parameter("gust_period", gust_period)
+	material.set_shader_parameter("shaft_scale", shaft_scale)
+	material.set_shader_parameter("shaft_contrast", shaft_contrast)
 	return material
 
 
-func _make_rain_layer(name: String, material: ShaderMaterial, box_extent: float, scale_min: float, scale_max: float) -> GPUParticles3D:
+func _make_rain_layer(cfg: Dictionary, material: ShaderMaterial, box_extent: float) -> GPUParticles3D:
 	var process := ParticleProcessMaterial.new()
 	process.direction = Vector3(0.0, -1.0, 0.0)
 	process.spread = 1.5
-	process.initial_velocity_min = 32.0
-	process.initial_velocity_max = 56.0
-	process.gravity = Vector3(0.0, -9.8, 0.0)
+	process.initial_velocity_min = float(cfg["v_min"])
+	process.initial_velocity_max = float(cfg["v_max"])
+	process.gravity = Vector3.ZERO
 	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
 	process.emission_box_extents = Vector3(box_extent, 6.0, box_extent)
-	process.scale_min = scale_min
-	process.scale_max = scale_max
+	process.scale_min = 0.65
+	process.scale_max = 1.35
 
 	var quad := QuadMesh.new()
 	quad.size = Vector2(1.0, 1.0)
 	quad.material = material
 
 	var particles := GPUParticles3D.new()
-	particles.name = name
+	particles.name = "Rain" + String(cfg["name"])
 	particles.process_material = process
 	particles.draw_pass_1 = quad
 	particles.amount = 1
-	particles.lifetime = 0.9 if name == "RainNear" else 1.4
+	particles.lifetime = 1.2
 	particles.local_coords = false
 	particles.emitting = false
 	particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	particles.visibility_aabb = AABB(Vector3(-box_extent, -12, -box_extent), Vector3(box_extent * 2.0, 28.0, box_extent * 2.0))
 	add_child(particles)
-	if name == "RainNear":
-		_rain_near_process = process
-	else:
-		_rain_far_process = process
 	return particles
 
 
@@ -413,6 +527,40 @@ func _make_splash() -> GPUParticles3D:
 	return particles
 
 
+func _make_mist() -> GPUParticles3D:
+	var process := ParticleProcessMaterial.new()
+	process.direction = Vector3(0.0, 0.15, 0.0)
+	process.spread = 35.0
+	process.initial_velocity_min = 0.05
+	process.initial_velocity_max = 0.35
+	process.gravity = Vector3(0.0, -0.15, 0.0)
+	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	process.emission_box_extents = Vector3(22.0, 0.4, 22.0)
+	process.scale_min = 0.35
+	process.scale_max = 0.9
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(4.2, 2.0)
+	var material := ShaderMaterial.new()
+	material.shader = RAIN_MIST_SHADER
+	material.set_shader_parameter("mist_color", Color(0.45, 0.52, 0.62, 1.0))
+	material.set_shader_parameter("intensity", 0.028)
+	quad.material = material
+
+	var particles := GPUParticles3D.new()
+	particles.name = "RainMist"
+	particles.process_material = process
+	particles.draw_pass_1 = quad
+	particles.amount = 1
+	particles.lifetime = 2.4
+	particles.local_coords = false
+	particles.emitting = false
+	particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	particles.visibility_aabb = AABB(Vector3(-28, -3, -28), Vector3(56, 10, 56))
+	add_child(particles)
+	return particles
+
+
 func _make_ripples() -> void:
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(1.0, 1.0)
@@ -432,6 +580,30 @@ func _make_ripples() -> void:
 	_ripple_instance.material_override = _ripple_material
 	_ripple_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_ripple_instance)
+
+
+func _make_refraction_overlay() -> void:
+	_refraction_layer = CanvasLayer.new()
+	_refraction_layer.name = "RainRefraction"
+	_refraction_layer.layer = 10
+	add_child(_refraction_layer)
+
+	_refraction_backbuffer = BackBufferCopy.new()
+	_refraction_backbuffer.name = "RainRefractionCopy"
+	_refraction_backbuffer.copy_mode = BackBufferCopy.COPY_MODE_RECT
+	_refraction_backbuffer.rect = Rect2(Vector2.ZERO, _viewport_size)
+	_refraction_layer.add_child(_refraction_backbuffer)
+
+	_refraction_rect = ColorRect.new()
+	_refraction_rect.name = "RainRefractionDrops"
+	_refraction_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_refraction_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_refraction_material = ShaderMaterial.new()
+	_refraction_material.shader = RAIN_REFRACTION_SHADER
+	_refraction_material.set_shader_parameter("intensity", 0.0)
+	_refraction_rect.material = _refraction_material
+	_refraction_rect.visible = false
+	_refraction_layer.add_child(_refraction_rect)
 
 
 func _make_screen_overlay() -> void:
@@ -543,47 +715,101 @@ func _apply_parameters() -> void:
 	_compat_fallback = _rendering_method == "gl_compatibility"
 
 	var tier := clampi(int(quality), 0, 2)
-	var near_max := int(MAX_NEAR_BY_QUALITY[tier])
-	var far_max := int(MAX_FAR_BY_QUALITY[tier])
+	var total_max := int(MAX_NEAR_BY_QUALITY[tier])
 	var splash_max := int(MAX_SPLASH_BY_QUALITY[tier])
 	if mobile_low_end:
-		near_max = int(near_max * 0.55)
-		far_max = int(far_max * 0.45)
+		total_max = int(total_max * 0.55)
 		splash_max = int(splash_max * 0.6)
 
-	_rain_near.amount = maxi(1, int(near_max * rain_amount))
-	_rain_far.amount = maxi(1, int(far_max * rain_amount))
-	_rain_far.visible = far_max > 0
+	# 粒径谱随雨量右移：雨越大，大滴占比越高，速度方差也越大。
+	var fractions := _class_fractions()
+	for index in _rain_layers.size():
+		var layer: Dictionary = _rain_layers[index]
+		var cfg: Dictionary = layer["config"]
+		var particles: GPUParticles3D = layer["particles"]
+		var material: ShaderMaterial = layer["material"]
+		var amount := maxi(1, int(float(total_max) * fractions[index] * rain_amount))
+		particles.amount = amount
+		particles.visible = not _compat_fallback
+		particles.emitting = rain_amount > 0.02 and not _compat_fallback
+		material.set_shader_parameter("drop_color", drop_color)
+		material.set_shader_parameter("brightness", drop_brightness * (1.0 - index * 0.07))
+		material.set_shader_parameter("drop_diameter_mm", (float(cfg["d_min"]) + float(cfg["d_max"])) * 0.5 * drop_size_scale)
+		material.set_shader_parameter("terminal_velocity", (float(cfg["v_min"]) + float(cfg["v_max"])) * 0.5)
+		material.set_shader_parameter("drop_width_scale", float(cfg["width"]) / maxf(drop_width, 0.001))
+		material.set_shader_parameter("min_screen_width_px", min_screen_width_px)
+		material.set_shader_parameter("max_distance", float(cfg["distance"]) * (rain_visibility_distance / 70.0))
+		material.set_shader_parameter("layer_softness", maxf(streak_softness, float(cfg["softness"])))
+		material.set_shader_parameter("internal_pattern_strength", internal_pattern_strength)
+		material.set_shader_parameter("oscillation_freq", oscillation_freq)
+		material.set_shader_parameter("highlight_count", highlight_count)
+		material.set_shader_parameter("shutter_time", shutter_time)
+		material.set_shader_parameter("frame_time", _frame_dt)
+		material.set_shader_parameter("exposure_gain", exposure_gain)
+		material.set_shader_parameter("background_response", background_response)
+		material.set_shader_parameter("backlit_boost", backlit_boost)
+		material.set_shader_parameter("dof_near", dof_near)
+		material.set_shader_parameter("dof_mid", dof_mid)
+		material.set_shader_parameter("dof_far", dof_far)
+		material.set_shader_parameter("defocus_amount", defocus_amount if dof_enabled else 0.0)
+		material.set_shader_parameter("gust_strength", gust_strength)
+		material.set_shader_parameter("gust_period", gust_period)
+		material.set_shader_parameter("shaft_scale", shaft_scale)
+		material.set_shader_parameter("shaft_contrast", shaft_contrast)
+
 	_splash.amount = maxi(1, mini(SPLASH_AMOUNT_CAP, int(splash_max * rain_amount)))
-	_rain_near_shader.set_shader_parameter("drop_color", drop_color)
-	_rain_far_shader.set_shader_parameter("drop_color", drop_color)
-	_rain_near_shader.set_shader_parameter("brightness", drop_brightness)
-	_rain_far_shader.set_shader_parameter("brightness", drop_brightness * 0.5)
-	_rain_near_shader.set_shader_parameter("base_width", drop_width)
-	_rain_far_shader.set_shader_parameter("base_width", drop_width * 1.4)
-	_rain_near_shader.set_shader_parameter("drop_length", drop_length * stretch_multiplier)
-	_rain_far_shader.set_shader_parameter("drop_length", drop_length * stretch_multiplier * 1.5)
-	_rain_near_shader.set_shader_parameter("min_screen_width_px", min_screen_width_px)
-	_rain_far_shader.set_shader_parameter("min_screen_width_px", min_screen_width_px)
-	_rain_near_shader.set_shader_parameter("max_distance", rain_visibility_distance)
-	_rain_far_shader.set_shader_parameter("max_distance", rain_visibility_distance * 1.35)
-	_rain_near_shader.set_shader_parameter("jitter_strength", jitter_strength)
-	_rain_far_shader.set_shader_parameter("jitter_strength", jitter_strength)
-	_ripple_material.set_shader_parameter("ripple_color", drop_color)
-	_splash.amount = maxi(1, _splash.amount)
 	_splash.emitting = rain_amount > 0.02 and ground_wetness > 0.05 and not _compat_fallback
+	_mist.amount = maxi(1, int(lerpf(4.0, 18.0, rain_amount) * (0.6 if mobile_low_end else 1.0)))
+	_mist.emitting = rain_amount > 0.05 and not _compat_fallback
+	_ripple_material.set_shader_parameter("ripple_color", drop_color)
 
 	var effective_ripples := mini(max_ripples, int(MAX_RIPPLES_BY_QUALITY[tier]))
 	if mobile_low_end:
 		effective_ripples = mini(effective_ripples, 2)
 	_effective_ripple_limit = effective_ripples
 	_apply_viewport_quality(tier)
+	_apply_dof()
 	_update_screen_overlay()
+	_update_refraction_overlay()
 	if not _logged:
 		_logged = true
-		print("[RainSystem] method=%s compat=%s near=%d far=%d splash=%d ripples=%d" % [
-			_rendering_method, _compat_fallback, _rain_near.amount, _rain_far.amount,
-			_splash.amount, max_ripples])
+		print("[RainSystem] method=%s compat=%s classes=%d total=%d splash=%d ripples=%d" % [
+			_rendering_method, _compat_fallback, _rain_layers.size(), total_max,
+			_splash.amount, effective_ripples])
+
+
+func _class_fractions() -> Array[float]:
+	var shift := (rain_amount - 0.5) * 2.0
+	var weights: Array[float] = [
+		maxf(0.005, 0.10 * (1.0 + 0.55 * shift)),
+		maxf(0.005, 0.30 * (1.0 + 0.18 * shift)),
+		maxf(0.005, 0.35 * (1.0 - 0.18 * shift)),
+		maxf(0.005, 0.25 * (1.0 - 0.45 * shift)),
+	]
+	var total := 0.0
+	for w in weights:
+		total += w
+	for i in weights.size():
+		weights[i] /= total
+	return weights
+
+
+func _apply_dof() -> void:
+	if _camera == null or not is_instance_valid(_camera):
+		return
+	if not dof_enabled:
+		return
+	# 可选低品质 CameraAttributes DOF：Mobile 走光栅化 bokeh；默认关闭。
+	# 这里只用于近景虚化，不是逐滴 DOF；低配建议保持关闭。
+	var attributes := CameraAttributesPractical.new()
+	attributes.dof_blur_far_enabled = true
+	attributes.dof_blur_far_distance = dof_far
+	attributes.dof_blur_far_transition = maxf(dof_far - dof_mid, 0.1)
+	attributes.dof_blur_near_enabled = true
+	attributes.dof_blur_near_distance = dof_near
+	attributes.dof_blur_near_transition = maxf(dof_mid - dof_near, 0.1)
+	attributes.dof_blur_amount = clampf(defocus_amount * 0.08, 0.0, 0.2)
+	_camera.attributes = attributes
 
 
 func _apply_viewport_quality(tier: int) -> void:
@@ -609,37 +835,104 @@ func _apply_viewport_quality(tier: int) -> void:
 func _update_fall_direction() -> void:
 	var wind_rad := deg_to_rad(wind_direction_deg)
 	var horizontal := Vector3(cos(wind_rad), 0.0, sin(wind_rad)) * wind_speed
-	# 低频湍流只扰动水平分量，保持主方向一致；风为 0 时水平分量为 0。
-	var gust := turbulence * sin(_time * 0.7 + _camera.global_position.x * 0.03) * 0.35
-	var lateral := Vector3(-sin(wind_rad), 0.0, cos(wind_rad)) * gust
+	# 阵风包络（低频振幅调制）× 空间相干噪声；相邻雨滴同相，主方向仍一致。
+	var gust_envelope := 1.0 + gust_strength * sin(_time * 6.2831 / maxf(gust_period, 0.1))
+	var coherent := turbulence * sin(_time * 0.7 + _camera.global_position.x * 0.03) * 0.22
+	var lateral := Vector3(-sin(wind_rad), 0.0, cos(wind_rad)) * coherent * gust_envelope
 	var fall := Vector3(horizontal.x + lateral.x, -fall_speed_mps, horizontal.z + lateral.z).normalized()
-	_rain_near_shader.set_shader_parameter("fall_direction", fall)
-	_rain_far_shader.set_shader_parameter("fall_direction", fall)
-	# 风向 → 倾角：atan(|horizontal| / fall_speed)。这里不直接设置角度，
-	# 而是把合速度传给 shader，shader 用 cross(fall, to_camera) 构造面向相机的
-	# 细长 quad；风为 0 时 fall=(0,-1,0)，雨丝垂直。
+	for layer in _rain_layers:
+		var material: ShaderMaterial = layer["material"]
+		material.set_shader_parameter("fall_direction", fall)
+		material.set_shader_parameter("frame_time", _frame_dt)
+	# 风向 → 倾角：atan(|horizontal| / fall_speed)。风为 0 时 fall=(0,-1,0)。
 
 
 func _update_particles() -> void:
 	var emitting := rain_amount > 0.02 and not _compat_fallback
-	_rain_near.emitting = emitting
-	_rain_far.emitting = emitting and _rain_far.visible
-	if _rain_near_process != null:
-		var direction := Vector3(0.0, -1.0, 0.0)
-		var wind_rad := deg_to_rad(wind_direction_deg)
-		direction = Vector3(cos(wind_rad) * wind_speed * 0.08, -fall_speed_mps, sin(wind_rad) * wind_speed * 0.08).normalized()
-		_rain_near_process.direction = direction
-		_rain_far_process.direction = direction
-		_rain_near_process.spread = 1.0 + turbulence * 2.0
-		_rain_far_process.spread = 1.0 + turbulence * 2.0
+	var wind_rad := deg_to_rad(wind_direction_deg)
+	var direction := Vector3(cos(wind_rad) * wind_speed * 0.08, -fall_speed_mps,
+		sin(wind_rad) * wind_speed * 0.08).normalized()
+	for layer in _rain_layers:
+		var particles: GPUParticles3D = layer["particles"]
+		var process: ParticleProcessMaterial = layer["process"]
+		particles.emitting = emitting and particles.visible
+		process.direction = direction
+		process.spread = 1.0 + turbulence * 2.0
+
+
+func _update_lighting() -> void:
+	if _rain_layers.is_empty():
+		return
+	if _sun == null or not is_instance_valid(_sun):
+		_sun = _find_first_directional_light()
+	if _local_lights.is_empty():
+		_local_lights = _find_local_lights()
+	var sun_dir := light_direction_override
+	if sun_dir.length_squared() < 1e-5:
+		sun_dir = (_sun.global_transform.basis.z if _sun != null else Vector3(0.3, -0.6, 0.2)).normalized()
+	var sky := 0.35
+	if _environment != null:
+		sky = clampf(_environment.ambient_light_energy * 0.28 + _environment.background_energy_multiplier * 0.25, 0.05, 1.5)
+	if _sun != null:
+		sky = clampf(sky + maxf(_sun.light_energy, 0.0) * 0.12, 0.65, 1.8)
+	var ground := clampf(sky * 0.35, 0.02, 0.8)
+	for layer in _rain_layers:
+		var material: ShaderMaterial = layer["material"]
+		material.set_shader_parameter("sun_direction", sun_dir)
+		material.set_shader_parameter("sky_brightness", sky)
+		material.set_shader_parameter("ground_brightness", ground)
+		material.set_shader_parameter("frame_time", _frame_dt)
+		for index in 3:
+			var position := Vector3.ZERO
+			var color := Color(0, 0, 0, 1)
+			if index < _local_lights.size():
+				var light := _local_lights[index]
+				if is_instance_valid(light):
+					position = light.global_position
+					color = light.light_color * clampf(light.light_energy, 0.0, 1.0)
+			material.set_shader_parameter("local_light_pos_%d" % index, position)
+			material.set_shader_parameter("local_light_color_%d" % index, Vector3(color.r, color.g, color.b))
+
+
+func _find_first_directional_light() -> DirectionalLight3D:
+	var root := get_tree().current_scene
+	if root == null:
+		return null
+	for node in root.find_children("*", "DirectionalLight3D", true, false):
+		if node is DirectionalLight3D:
+			return node as DirectionalLight3D
+	return null
+
+
+func _find_local_lights() -> Array[Light3D]:
+	var result: Array[Light3D] = []
+	var root := get_tree().current_scene
+	if root == null or _camera == null:
+		return result
+	for node in root.find_children("*", "Light3D", true, false):
+		if node is DirectionalLight3D:
+			continue
+		if node is OmniLight3D or node is SpotLight3D:
+			result.append(node as Light3D)
+	result.sort_custom(func(a: Light3D, b: Light3D) -> bool:
+		return a.global_position.distance_squared_to(_camera.global_position) < b.global_position.distance_squared_to(_camera.global_position))
+	if result.size() > 3:
+		result.resize(3)
+	return result
 
 
 func _update_ground_feedback(delta: float) -> void:
 	if _compat_fallback:
 		_splash.emitting = false
 	elif _splash != null:
-		_splash.global_position = Vector3(_camera.global_position.x, _ground_height(_camera.global_position.x, _camera.global_position.z), _camera.global_position.z)
+		var ground := Vector3(_camera.global_position.x,
+			_ground_height(_camera.global_position.x, _camera.global_position.z),
+			_camera.global_position.z)
+		_splash.global_position = ground
 		_splash.emitting = rain_amount > 0.02 and ground_wetness > 0.05
+		if _mist != null:
+			_mist.global_position = ground + Vector3(0.0, 0.7, 0.0)
+			_mist.emitting = rain_amount > 0.05 and not _compat_fallback
 
 	if _effective_ripple_limit <= 0 or rain_amount <= 0.02:
 		_ripples.clear()
@@ -723,6 +1016,22 @@ func _update_atmosphere() -> void:
 	_environment.adjustment_enabled = true
 	_environment.adjustment_contrast = lerpf(1.0, 0.88, rain)
 	_environment.adjustment_saturation = lerpf(1.0, 0.82, rain)
+
+
+func _update_refraction_overlay() -> void:
+	if _refraction_rect == null:
+		return
+	var tier := clampi(int(quality), 0, 2)
+	var allowed := screen_refraction_enabled and tier >= 2 and not mobile_low_end and rain_amount > 0.05
+	_refraction_rect.visible = allowed
+	_refraction_backbuffer.visible = allowed
+	if allowed:
+		var rect := backbuffer_copy_rect
+		if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+			rect = Rect2(Vector2.ZERO, _viewport_size)
+		_refraction_backbuffer.rect = rect
+		_refraction_material.set_shader_parameter("intensity", clampf(rain_amount * 0.55, 0.0, 0.55))
+		_refraction_material.set_shader_parameter("gravity_speed", 0.18 + rain_amount * 0.35)
 
 
 func _update_screen_overlay() -> void:
@@ -829,8 +1138,8 @@ func _on_viewport_size_changed() -> void:
 	if viewport == null:
 		return
 	_viewport_size = Vector2(viewport.get_visible_rect().size)
-	if _rain_near_shader != null:
-		_rain_near_shader.set_shader_parameter("viewport_size", _viewport_size)
-		_rain_far_shader.set_shader_parameter("viewport_size", _viewport_size)
+	for layer in _rain_layers:
+		var material: ShaderMaterial = layer["material"]
+		material.set_shader_parameter("viewport_size", _viewport_size)
 	if _screen_material != null:
 		_screen_material.set_shader_parameter("viewport_size", _viewport_size)

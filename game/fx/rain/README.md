@@ -10,6 +10,8 @@ game/fx/rain/
   rain_splash.gdshader   # 可选水花（当前实现改用小 SphereMesh，shader 保留给 quad 变体）
   rain_ripple.gdshader   # MultiMesh 地面涟漪（不用 Decal）
   rain_screen.gdshader   # 可选全屏程序化雨痕（默认关闭）
+  rain_mist.gdshader     # 贴地薄雾/溅射水雾带
+  rain_refraction.gdshader # 可选镜头折射（BackBufferCopy，默认关闭）
 ```
 
 > 依赖：Godot 4.3+（工程 4.7 验证），Mobile / Vulkan / Metal。  
@@ -38,24 +40,21 @@ CPU 逐粒子会占用主线程，Mobile 上直接吃掉 16.7ms 预算的很大�
 
 目标：1080p、Mobile、60fps（16.7ms）/ 30fps（33.3ms）。
 
-- medium：近层 1800、远层 550、水花 22、涟漪 4。
-- high：近层 3600、远层 1300、水花 42、涟漪 6。
-- 单根雨丝在 10m 处约 1.5–2px 宽、30–45px 长；平均覆盖约 60–100px²。
-- medium 雨滴覆盖约 1800×80 ≈ 0.14M px + 远层 ≈ 0.04M px，
-  加两层透明度叠加约 0.3–0.5M px；高画质控制在 ~1M px 以内。
-- 目标 GPU 雨效：medium ≤1.5ms、high ≤3ms（以真机 GPU profiler 为准）。
-- 不要把所有预算花在“少量巨大长条”上：更多更小、更细的雨滴在 tile GPU 上
-  观感更好，overdraw 也更可控。
+- medium：总雨滴 1800（Large/Medium/Small/Fine 按粒径谱分配），水花 12，涟漪 4。
+- high：总雨滴 3600，水花 24，涟漪 6。
+- 单根雨丝在 10m 处约 1.2–2px 宽、20–50px 长；平均覆盖约 50–100px²。
+- 目标 GPU 雨效：medium ≤1.5ms、high ≤3ms（真机 profiler 为准）。
+- 更多更小、更细的雨滴在 tile GPU 上观感更好，overdraw 也更可控。
 
 ## 节点树
 
 ```text
 RainSystem (Node3D, top_level=true)
-├─ RainNear (GPUParticles3D, local_coords=false)
-├─ RainFar (GPUParticles3D, local_coords=false)
+├─ RainLarge / RainMedium / RainSmall / RainFine (GPUParticles3D, local_coords=false)
 ├─ RainSplash (GPUParticles3D, local_coords=false)
 ├─ RainRipples (MultiMeshInstance3D, <=6)
 ├─ RainScreen (CanvasLayer → ColorRect, 默认隐藏)
+├─ RainRefraction (BackBufferCopy + ColorRect, 默认关闭)
 └─ RainEnvironment (可选：只复用已有 WorldEnvironment；没有才创建)
 ```
 
@@ -104,6 +103,17 @@ camera.add_child(rain)
 | Ground | `ripple_size` / `max_ripples` | 0.45 / 4 | 涟漪尺寸/上限（硬上限 6） |
 | Atmosphere | `fog_density` | 0.012 | 雾最大密度 |
 | Atmosphere | `rain_visibility_distance` | 70 | 雨幕可见距离 |
+| Optics | `shutter_time` | 1/60 | 曝光积分窗口，范围 1/500–1/15 |
+| Optics | `exposure_gain` | 8 | τ/T 亮度增益，避免物理正确但不可见 |
+| Optics | `drop_size_scale` | 1 | 粒径谱整体缩放 |
+| Optics | `streak_softness` | 0.35 | 边缘软化 |
+| Optics | `internal_pattern_strength` | 0.55 | 散斑/拖尾高光 |
+| Optics | `background_response` | 0.85 | Garg–Nayar 的 β 近似 |
+| Optics | `backlit_boost` | 1.0 | 逆光边缘增强 |
+| Optics | `dof_enabled` | false | 可选 CameraAttributes DOF，Mobile 默认关 |
+| Gust | `gust_strength/period` | 0.25 / 3 | 阵风包络 |
+| Gust | `shaft_scale/contrast` | 0.08 / 0.35 | 雨幕条带 |
+| Optional | `screen_refraction_enabled` | false | BackBufferCopy 镜头折射，HIGH 才允许 |
 | Quality | `quality` | MEDIUM | LOW/MEDIUM/HIGH |
 | Quality | `mobile_low_end` | false | 低配再降数量/分辨率 |
 | Optional | `screen_drops_enabled` | false | 屏幕雨痕；低画质强制关闭 |
@@ -116,6 +126,7 @@ camera.add_child(rain)
 ```text
 rain_amount=0.25, wind_speed=1.5, wind_direction_deg=20,
 fall_speed_mps=12, drop_length=0.22, drop_width=0.008,
+shutter_time=1.0/60.0, exposure_gain=7.0, background_response=0.85,
 ground_wetness=0.35, splash_strength=0.3, fog_density=0.004,
 rain_visibility_distance=45, quality=LOW
 ```
@@ -125,6 +136,7 @@ rain_visibility_distance=45, quality=LOW
 ```text
 rain_amount=0.95, wind_speed=6, wind_direction_deg=35,
 fall_speed_mps=16, drop_length=0.5, drop_width=0.014,
+shutter_time=1.0/50.0, exposure_gain=8.0, background_response=0.85,
 ground_wetness=0.95, splash_strength=0.9, fog_density=0.025,
 rain_visibility_distance=65, quality=HIGH
 ```
@@ -134,6 +146,7 @@ rain_visibility_distance=65, quality=HIGH
 ```text
 rain_amount=0.9, wind_speed=18, wind_direction_deg=75,
 fall_speed_mps=14, drop_length=0.55, stretch_multiplier=1.3,
+shutter_time=1.0/45.0, exposure_gain=7.5, gust_strength=0.55,
 ground_wetness=0.95, splash_strength=0.8, fog_density=0.02,
 rain_visibility_distance=60, quality=HIGH
 ```
@@ -143,6 +156,7 @@ rain_visibility_distance=60, quality=HIGH
 ```text
 rain_amount=0.35, wind_speed=0.5, wind_direction_deg=0,
 fall_speed_mps=10, drop_length=0.18, drop_width=0.007,
+shutter_time=1.0/60.0, exposure_gain=6.5, background_response=0.9,
 ground_wetness=0.45, splash_strength=0.2, fog_density=0.04,
 rain_visibility_distance=35, quality=MEDIUM
 ```
@@ -165,13 +179,35 @@ rain_visibility_distance=35, quality=MEDIUM
 
 - 改了 `rain_amount` 但地湿没变：检查 `auto_wetness_from_rain` 或 `set_weather`。
 - 粒子为零：检查渲染方法是否 `gl_compatibility`。
-- 雨丝糊成白板：距离相机太近；shader 会在 <0.8m 淡出，别把发射盒缩到相机内部。
+- 雨丝糊成白板：距离相机太近；shader 会在约 1.3–3.8m 处淡出，别把发射盒缩到相机内部。
 - 雾过头：`fog_density` 是最大值，`rain_amount` 会插值；不要同时开 volumetric fog。
 - 移动时雨跟着飘：保持 `local_coords=false`，只更新根节点位置，不继承相机旋转。
+
+## 光度/物理模型
+
+- 雨滴按接近球形小透镜处理；折射为主，镜面/内反射作为高光项。Mobile 不做逐滴屏幕采样。
+- streak 亮度使用 Garg & Nayar 近似：
+  `I_d = τ·Ē_d + (T−τ)·E_bg`，`ΔI = τ(Ē_d−E_bg)`；背景亮度用屏幕高度 + sky/ground uniform 近似，亮天空前雨会淡出。
+- 粒径谱分 Large/Medium/Small/Fine 四档，终端速度使用
+  `v(D) ≈ 9.65 − 10.3·exp(−0.6·D_mm)` 量级（Marshall–Palmer/Atlas 类经验关系），不是所有雨滴同速。
+- 雨丝长度由 `|v|·T` 决定，T = max(shutter_time, frame_dt)；低帧率拖影自然变长、亮度按 τ/T 摊薄。
+- 阵风 = 低频包络 × 空间相干噪声；shader 内再乘雨幕条带密度，避免均匀白线。
+
+## 反向“卡通感”自检
+
+1. 暗背景（湿柏油/暗植被）前雨清楚；亮天空前雨明显变淡甚至消失。若天空前仍一片白线，检查 `background_response` 与 `sky_brightness`。
+2. 放大单条拖影：两端渐隐、内部有散斑/1–3 个拖尾高光；不是均匀矩形。
+3. rain_amount 从 0.2 拉到 0.95：大滴占比、速度方差、雨幕条带、雾、水花都应变化，不只是数量变多。
+4. 近景雨滴更大更虚，中景最清晰，远景融进雾；转头时三层不跳变。
+5. 关掉场景灯：雨不应继续发白；打开路灯/车灯：只有局部雨被照亮并带色（最多 3 个局部光源 uniform）。
+6. 60fps → 30fps：拖影变长、亮度按 τ/T 变淡，而不是断续跳点。
+7. 开 `screen_refraction_enabled` 前后对比 Android/iOS GPU ms；关闭时不应有 Viewport copy 成本。
+8. 截图去饱和后：应是低对比灰蓝画面里的雨，不是高对比白线压在彩色场景上。
 
 ## 已知取舍
 
 - 没有体积雨幕、逐滴碰撞、SSR/SSAO/SSIL，也没有 TAA/FSR2；Mobile 下用 depth/height fog、roughness、颜色调整近似。
+- 屏幕折射是共享 BackBufferCopy 层，不是逐滴真实折射；默认关闭，HIGH 才允许；开启时单列一次 Viewport copy 成本。
 - 水花只在地面附近平面发射，不做逐滴射线检测；坡度大的赛道会有少量悬浮感。
 - 涟漪是 MultiMesh quad，不是 Decal；没有真正的积水 mask 纹理。
 - 屏幕雨痕是程序化叠加，默认关闭，避免 tile GPU 全屏带宽。
