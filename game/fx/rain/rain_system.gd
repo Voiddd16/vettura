@@ -34,7 +34,7 @@ const RAIN_SCREEN_SHADER := preload("res://game/fx/rain/rain_screen.gdshader")
 const RAIN_REFRACTION_SHADER := preload("res://game/fx/rain/rain_refraction.gdshader")
 const RAIN_MIST_SHADER := preload("res://game/fx/rain/rain_mist.gdshader")
 
-const MAX_NEAR_BY_QUALITY := [700, 1800, 3600]
+const MAX_NEAR_BY_QUALITY := [1000, 3000, 6000]
 const MAX_FAR_BY_QUALITY := [0, 550, 1300]
 const MAX_SPLASH_BY_QUALITY := [4, 12, 24]
 const MAX_RIPPLES_BY_QUALITY := [2, 4, 6]

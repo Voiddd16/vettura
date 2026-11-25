@@ -40,8 +40,8 @@ CPU 逐粒子会占用主线程，Mobile 上直接吃掉 16.7ms 预算的很大�
 
 目标：1080p、Mobile、60fps（16.7ms）/ 30fps（33.3ms）。
 
-- medium：总雨滴 1800（Large/Medium/Small/Fine 按粒径谱分配），水花 12，涟漪 4。
-- high：总雨滴 3600，水花 24，涟漪 6。
+- medium：总雨滴 3000（Large/Medium/Small/Fine 按粒径谱分配），水花 12，涟漪 4。
+- high：总雨滴 6000，水花 24，涟漪 6。
 - 单根雨丝在 10m 处约 1.2–2px 宽、20–50px 长；平均覆盖约 50–100px²。
 - 目标 GPU 雨效：medium ≤1.5ms、high ≤3ms（真机 profiler 为准）。
 - 更多更小、更细的雨滴在 tile GPU 上观感更好，overdraw 也更可控。
@@ -52,6 +52,7 @@ CPU 逐粒子会占用主线程，Mobile 上直接吃掉 16.7ms 预算的很大�
 RainSystem (Node3D, top_level=true)
 ├─ RainLarge / RainMedium / RainSmall / RainFine (GPUParticles3D, local_coords=false)
 ├─ RainSplash (GPUParticles3D, local_coords=false)
+├─ RainMist (GPUParticles3D, local_coords=false)
 ├─ RainRipples (MultiMeshInstance3D, <=6)
 ├─ RainScreen (CanvasLayer → ColorRect, 默认隐藏)
 ├─ RainRefraction (BackBufferCopy + ColorRect, 默认关闭)
