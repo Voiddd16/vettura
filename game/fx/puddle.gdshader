@@ -30,8 +30,8 @@ void fragment() {
         + value_noise(uv * 4.3 + 41.0) * 0.17;
     float mask = smoothstep(0.42, 0.68, n);
     ALBEDO = water_color.rgb;
-    ALPHA = mask * wetness * 0.62;
-    ROUGHNESS = 0.035;
-    METALLIC = 0.75;
-    SPECULAR = 1.0;
+    ALPHA = mask * wetness * 0.48;
+    ROUGHNESS = 0.075;
+    METALLIC = 0.18;
+    SPECULAR = 0.45;
 }

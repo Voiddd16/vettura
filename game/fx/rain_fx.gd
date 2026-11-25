@@ -176,10 +176,10 @@ func _apply_wetness(value: float) -> void:
 			continue
 		var base: Color = entry["albedo"]
 		material.albedo_color = base.darkened(0.38 * wet)
-		material.roughness = lerpf(float(entry["roughness"]), 0.16, 0.75 * wet)
-		material.metallic = lerpf(float(entry["metallic"]), 0.22, 0.7 * wet)
-		if wet < 0.99:
-			material.metallic = minf(material.metallic, 0.85)
+		# 湿路面只增加一点光泽；高 metallic + 低 roughness 会把天空反射成
+		# 一块过曝白斑，尤其叠加 ExtraFX 的 bloom 之后。
+		material.roughness = maxf(lerpf(float(entry["roughness"]), 0.30, 0.55 * wet), 0.30)
+		material.metallic = minf(lerpf(float(entry["metallic"]), 0.10, 0.55 * wet), 0.12)
 
 
 func _parts(value: Variant) -> Array:

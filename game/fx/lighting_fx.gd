@@ -12,11 +12,14 @@ const MAX_LIGHTS := 48
 
 var enabled := true
 var _lights: Array[Light3D] = []
+var _base_energy: Array[float] = []
+var _world: WorldBody
 var _quality := "medium"
 
 
 func setup(world: WorldBody, cars: Array, track_records: Array, car_records: Array, quality: String) -> void:
 	_quality = quality
+	_world = world
 	if world == null:
 		return
 	var all_records: Array = []
@@ -71,7 +74,7 @@ func _apply_record(record: Dictionary, roots: Array[Node]) -> void:
 			light = omni
 		light.name = "FxLight_%s_%d" % [record.get("name", "light"), _lights.size()]
 		light.light_color = color
-		light.light_energy = clampf(energy, 0.05, 12.0)
+		light.light_energy = clampf(energy, 0.05, 3.0)
 		light.shadow_enabled = cast_shadow
 		light.distance_fade_enabled = true
 		light.distance_fade_begin = range_value * 1.5
@@ -79,6 +82,21 @@ func _apply_record(record: Dictionary, roots: Array[Node]) -> void:
 		add_child(light)
 		light.global_position = (node as Node3D).global_position + offset
 		_lights.append(light)
+		_base_energy.append(light.light_energy)
+
+
+func _process(_delta: float) -> void:
+	if _world == null or _lights.is_empty():
+		return
+	# 白天/强日照时衰减灯光能量，避免 LIGHT_SERIES 在路面上烧出白斑。
+	var sun := 1.0
+	if is_instance_valid(_world):
+		sun = clampf(float(_world.get_weather().get("sun", 1.0)), 0.0, 1.0)
+	var scale := lerpf(1.0, 0.28, sun)
+	for index in _lights.size():
+		var light := _lights[index]
+		if light != null and index < _base_energy.size():
+			light.light_energy = _base_energy[index] * scale
 
 
 func _active(values: Dictionary) -> bool:
@@ -175,9 +193,11 @@ func _color(value: Variant) -> Color:
 		r = str(parts[0]).to_float()
 		g = str(parts[1]).to_float()
 		b = str(parts[2]).to_float()
+	# ext_config 的 COLOR 是 HDR 值（25,25,25 很常见）；归一化到 0..1，
+	# 否则 44 盏灯叠加会在地面上形成过曝白块。
 	var max_value := maxf(r, maxf(g, b))
-	if max_value > 2.0:
-		r /= 10.0
-		g /= 10.0
-		b /= 10.0
-	return Color(clampf(r, 0.0, 4.0), clampf(g, 0.0, 4.0), clampf(b, 0.0, 4.0), 1.0)
+	if max_value > 0.001:
+		r /= max_value
+		g /= max_value
+		b /= max_value
+	return Color(clampf(r, 0.0, 1.0), clampf(g, 0.0, 1.0), clampf(b, 0.0, 1.0), 1.0)

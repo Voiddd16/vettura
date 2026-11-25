@@ -61,9 +61,9 @@ func _apply_settings() -> void:
 	var medium := _quality != "low" and _quality != "off"
 
 	_environment.glow_enabled = medium
-	_environment.glow_intensity = _float("strength", 0.45)
-	_environment.glow_bloom = 0.06
-	_environment.glow_hdr_threshold = 1.0
+	_environment.glow_intensity = _float("strength", 0.28)
+	_environment.glow_bloom = 0.035
+	_environment.glow_hdr_threshold = 1.2
 
 	if high:
 		_environment.ssao_enabled = true
