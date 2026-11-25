@@ -80,7 +80,7 @@
 | --- | --- |
 | Weather | 复用 `weather_visuals.gd`，同步 WorldBody 天气 |
 | Rain | 湿路面材质、相机局部雨丝、贴地积水、挡风玻璃雨滴、车轮水花 |
-| Grass | `SurfaceMap` 采样 + MultiMesh 草 |
+| Grass | 按 `GRASS_MATERIALS` 三角形分块 + 图集 MultiMesh 草（SurfaceMap 兜底） |
 | Lighting | LIGHT_SERIES / EMISSIVE_LIGHT → Omni/SpotLight3D |
 | Particles | SMOKE / PARTICLES → GPUParticles3D |
 | Brake Disc | 刹车盘温度 → emission |

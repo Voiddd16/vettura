@@ -29,7 +29,7 @@ fx.attach(world, [car], camera)
 | 文件 | 效果 | 数据来源 |
 | --- | --- | --- |
 | `rain_fx.gd` | 湿路面、雨丝、贴地积水、挡风玻璃雨滴、车轮水花 | `RAIN_FX` / 天气 |
-| `grass_fx.gd` | 赛道两侧 MultiMesh 草 | `GRASS_FX` + `SurfaceMap` |
+| `grass_fx.gd` | 按 GRASS_MATERIALS 三角形分块铺草 + 图集草卡片 | `GRASS_FX` + track mesh |
 | `lighting_fx.gd` | `LIGHT_SERIES` / `EMISSIVE_LIGHT` / `LIGHT_POLLUTION` → Omni/SpotLight3D | `LIGHTING*` records |
 | `particles_fx.gd` | `SMOKE_*` / `PARTICLES_*` → GPUParticles3D | particle records |
 | `brake_disc_fx.gd` | 刹车盘温度 → emission | `BRAKE_DISC*` + `brake_temperature_c()` |
@@ -45,7 +45,7 @@ fx.attach(world, [car], camera)
   `extra` / `weather`
 - `quality`：`off` / `low` / `medium` / `high` / `ultra`
 
-湿材质默认最多 1400 个 surface；草默认 520 个实例；灯光最多 48 盏。
+湿材质默认最多 1400 个 surface；草默认 medium 4200 个实例（按 track 草材质三角形分块）；灯光最多 48 盏。
 这些是 v1 的移动端安全上限，后续按真实性能数据调。
 
 ## 验证

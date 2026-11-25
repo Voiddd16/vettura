@@ -1,16 +1,21 @@
 extends Node3D
-## GrassFX v2：赛道级草卡片 + 纹理图集 + 颜色变化 + 基础草材质压暗。
+## GrassFX v3：按赛道草材质三角形分块的实例化草。
 ##
-## 与 v1 的区别：
-## - 不再只画纯色 QuadMesh，而是 2x2/网格图集的 alpha-tested 草卡片；
-## - 使用 MultiMesh + billboard，近处密度显著提高；
-## - 读取 [GRASS_FX] 的 GRASS_MATERIALS / TEXTURE / TEXTURE_GRID / COLOR_FACTOR；
-## - 对基础草地材质做轻微压暗/降对比，避免平铺贴图抢戏。
+## 核心变化：
+## - 不再只靠 SurfaceMap 的“草地种类”撒点；直接扫描 track MeshInstance3D
+##   中 GRASS_MATERIALS 匹配的三角形，按世界坐标分块缓存；
+## - 相机周围按 chunk 取三角形，随机重心采样，草能覆盖真正有草贴图的区域；
+## - 图集草卡片（CSP TEXTURE/TEXTURE_GRID 或程序化 2x2）+ alpha scissor；
+## - 读取 GRASS_MATERIALS / TEXTURE / TEXTURE_GRID / COLOR_FACTOR / density；
+## - 基础草地材质轻微压暗，避免平铺贴图抢戏。
 ##
-## 仍不是 CSP 的逐像素 mask/纹理组；无贴图时使用程序化草叶图集。
+## 仍未实现 CSP 的逐像素 mask/纹理组权重和风摆 shader；没有草材质三角形时
+## 回退到 SurfaceMap 的 Grass/Gravel/Dirt/Sand 采样。
 
-const BUILD_RADIUS := 38.0
-const REBUILD_MOVE := 10.0
+const BUILD_RADIUS := 68.0
+const REBUILD_MOVE := 9.0
+const CHUNK_SIZE := 24.0
+const MAX_GRASS_TRIANGLES := 120_000
 const BLADE_WIDTH := 0.5
 const BLADE_HEIGHT := 0.9
 
@@ -25,7 +30,7 @@ var _camera: Camera3D
 var _last_build := Vector3(1e9, 0.0, 0.0)
 var _timer := 0.0
 var _rng := RandomNumberGenerator.new()
-var _max_instances := 520
+var _max_instances := 3200
 var _variants: Array[MultiMeshInstance3D] = []
 var _variant_meshes: Array[MultiMesh] = []
 var _material: StandardMaterial3D
@@ -33,8 +38,12 @@ var _atlas: Texture2D
 var _grid_cols := 2
 var _grid_rows := 2
 var _track_root := ""
-var _base_tinted := false
 var _logged := false
+
+## Vector2i(chunk_x, chunk_z) -> Array[PackedVector3Array]（每个三角形 3 点）。
+var _chunks: Dictionary = {}
+var _triangle_count := 0
+var _used_geometry := false
 
 
 func setup(world: WorldBody, records: Array, quality_name: String) -> void:
@@ -46,7 +55,11 @@ func setup(world: WorldBody, records: Array, quality_name: String) -> void:
 	_max_instances = _quality_count()
 	_atlas = _load_or_make_atlas()
 	_create_multimeshes()
-	_tint_base_grass()
+	_collect_geometry()
+	if _chunks.is_empty():
+		push_warning("[grass-fx] 没有匹配到 GRASS_MATERIALS 的三角形，回退到 SurfaceMap 采样")
+	else:
+		print("[grass-fx] chunks=%d triangles=%d" % [_chunks.size(), _triangle_count])
 
 
 func _process(delta: float) -> void:
@@ -71,18 +84,20 @@ func _apply_records(records: Array) -> void:
 			continue
 		var values: Dictionary = record.get("values", {})
 		if values.has("density"):
-			density = clampf(float(values["density"]), 0.05, 4.0)
+			density = clampf(_float(values["density"], 1.0), 0.05, 4.0)
 		if values.has("color_factor"):
 			color_factor = clampf(_float(values["color_factor"], 1.0), 0.2, 2.0)
 		if values.has("grass_materials"):
 			for part in _parts(values["grass_materials"]):
 				var text := str(part).strip_edges()
-				if not text.is_empty():
+				if not text.is_empty() and not grass_materials.has(text):
 					grass_materials.append(text)
 		if values.has("texture"):
 			var path := str(values["texture"]).strip_edges()
 			if not path.is_empty():
-				_atlas = _try_load_track_texture(path)
+				var loaded := _try_load_track_texture(path)
+				if loaded != null:
+					_atlas = loaded
 		if values.has("texture_grid"):
 			var grid := _parts(values["texture_grid"])
 			if grid.size() >= 2:
@@ -97,17 +112,17 @@ func _quality_count() -> int:
 		"low":
 			return 1200
 		"medium":
-			return 3200
+			return 4200
 		"high":
-			return 6500
+			return 8500
 		_:
-			return 10000
+			return 14000
 
 
 func _create_multimeshes() -> void:
 	_material = StandardMaterial3D.new()
 	_material.albedo_texture = _atlas
-	_material.albedo_color = Color(1.0, 1.0, 1.0, 1.0).darkened(1.0 - clampf(color_factor, 0.2, 1.0) * 0.2)
+	_material.albedo_color = Color(1, 1, 1, 1).darkened(1.0 - clampf(color_factor, 0.2, 1.0) * 0.2)
 	_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 	_material.alpha_scissor_threshold = 0.34
 	_material.cull_mode = BaseMaterial3D.CULL_DISABLED
@@ -116,9 +131,7 @@ func _create_multimeshes() -> void:
 	_material.roughness = 0.95
 	_material.vertex_color_use_as_albedo = true
 
-	var cells := _grid_cols * _grid_rows
-	# 图集单元格太多时只取前 8 个，避免 MultiMesh 数量爆炸。
-	cells = mini(cells, 8)
+	var cells := mini(_grid_cols * _grid_rows, 8)
 	for index in cells:
 		var cell := Vector2(index % _grid_cols, index / _grid_cols)
 		var mesh := _make_blade_mesh(cell)
@@ -167,6 +180,95 @@ func _make_blade_mesh(cell: Vector2) -> ArrayMesh:
 	return mesh
 
 
+func _collect_geometry() -> void:
+	if _world == null:
+		return
+	for node in _world.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := node as MeshInstance3D
+		if mesh_instance == null or mesh_instance.mesh == null or _under_vehicle(mesh_instance):
+			continue
+		var mesh := mesh_instance.mesh
+		for surface in mesh.get_surface_count():
+			var material := mesh_instance.get_surface_override_material(surface)
+			if material == null:
+				material = mesh.surface_get_material(surface)
+			var material_name := ""
+			if material != null:
+				material_name = String(material.resource_name)
+			var node_name := String(mesh_instance.name)
+			if not _is_grass_material(material_name, node_name):
+				continue
+			_add_surface_triangles(mesh_instance, mesh, surface, material)
+			_tint_material(mesh_instance, surface, material)
+			if _triangle_count >= MAX_GRASS_TRIANGLES:
+				return
+
+
+func _is_grass_material(material_name: String, node_name: String) -> bool:
+	var haystack := (material_name + " " + node_name).to_lower()
+	if grass_materials.is_empty():
+		return haystack.contains("grass") or haystack.contains("top2") or haystack.contains("dirt") or haystack.contains("sand")
+	for selector in grass_materials:
+		var needle := selector.to_lower().trim_prefix("*").trim_suffix("*")
+		if not needle.is_empty() and haystack.contains(needle):
+			return true
+	return false
+
+
+func _add_surface_triangles(mesh_instance: MeshInstance3D, mesh: Mesh, surface: int, _material: Material) -> void:
+	var arrays := mesh.surface_get_arrays(surface)
+	if arrays.size() <= Mesh.ARRAY_VERTEX:
+		return
+	var vertices = arrays[Mesh.ARRAY_VERTEX]
+	if not (vertices is PackedVector3Array) or vertices.is_empty():
+		return
+	var index_array = arrays[Mesh.ARRAY_INDEX] if arrays.size() > Mesh.ARRAY_INDEX else PackedInt32Array()
+	var indices: PackedInt32Array
+	if index_array is PackedInt32Array and not index_array.is_empty():
+		indices = index_array
+	else:
+		indices = PackedInt32Array()
+		for i in vertices.size():
+			indices.append(i)
+
+	var transform := mesh_instance.global_transform
+	var limit := mini(indices.size(), MAX_GRASS_TRIANGLES - _triangle_count)
+	var i := 0
+	while i + 2 < limit:
+		var a: Vector3 = transform * vertices[indices[i]]
+		var b: Vector3 = transform * vertices[indices[i + 1]]
+		var c: Vector3 = transform * vertices[indices[i + 2]]
+		i += 3
+		var normal: Vector3 = (b - a).cross(c - a)
+		if normal.length_squared() < 1e-8:
+			continue
+		if absf(normal.normalized().y) < 0.25:
+			continue
+		var centroid: Vector3 = (a + b + c) / 3.0
+		var key := Vector2i(
+			int(floor(centroid.x / CHUNK_SIZE)),
+			int(floor(centroid.z / CHUNK_SIZE))
+		)
+		if not _chunks.has(key):
+			_chunks[key] = []
+		_chunks[key].append(PackedVector3Array([a, b, c]))
+		_triangle_count += 1
+		if _triangle_count >= MAX_GRASS_TRIANGLES:
+			return
+
+
+func _tint_material(mesh_instance: MeshInstance3D, surface: int, material: Material) -> void:
+	if not (material is StandardMaterial3D):
+		return
+	# 只在真正草材质上压暗，不碰车漆/路面。
+	if not _is_grass_material(String(material.resource_name), String(mesh_instance.name)):
+		return
+	var dup := (material as StandardMaterial3D).duplicate() as StandardMaterial3D
+	dup.albedo_color = dup.albedo_color.darkened(0.22)
+	dup.roughness = minf(dup.roughness, 0.95)
+	mesh_instance.set_surface_override_material(surface, dup)
+
+
 func _rebuild() -> void:
 	if _world == null or _camera == null or _variants.is_empty():
 		return
@@ -174,32 +276,14 @@ func _rebuild() -> void:
 	var buckets: Array[Array] = []
 	for _i in _variants.size():
 		buckets.append([])
-	var attempts := _max_instances * 12
-	var placements := 0
-	for _i in attempts:
-		if placements >= _max_instances:
-			break
-		var angle := _rng.randf_range(0.0, TAU)
-		var dist := sqrt(_rng.randf()) * BUILD_RADIUS
-		var x := _last_build.x + cos(angle) * dist
-		var z := _last_build.z + sin(angle) * dist
-		var kind := String(_world.surface_kind_at(x, z))
-		if not _is_grass_kind(kind):
-			continue
-		var y := float(_world.surface_height_at(x, z))
-		var variant := _rng.randi_range(0, _variants.size() - 1)
-		var scale := _rng.randf_range(0.55, 1.5) * clampf(density, 0.2, 2.0)
-		var basis := Basis(Vector3.UP, _rng.randf_range(0.0, TAU))
-		basis = basis.scaled(Vector3(scale, scale, scale))
-		var color := Color(
-			_rng.randf_range(0.72, 1.0),
-			_rng.randf_range(0.82, 1.0),
-			_rng.randf_range(0.62, 0.92),
-			1.0
-		)
-		var data := {"transform": Transform3D(basis, Vector3(x, y, z)), "color": color}
-		buckets[variant].append(data)
-		placements += 1
+
+	var candidates := _candidate_triangles()
+	if not candidates.is_empty():
+		_used_geometry = true
+		_place_from_triangles(candidates, buckets)
+	else:
+		_used_geometry = false
+		_place_from_surface_map(buckets)
 
 	var total := 0
 	for index in _variants.size():
@@ -214,44 +298,81 @@ func _rebuild() -> void:
 			multimesh.set_instance_color(item_index, item["color"])
 	if not _logged:
 		_logged = true
-		print("[grass] instances=%d variants=%d atlas=%s" % [total, _variants.size(), _atlas != null])
+		print("[grass] instances=%d variants=%d atlas=%s geometry=%s" % [
+			total, _variants.size(), _atlas != null, _used_geometry])
+
+
+func _candidate_triangles() -> Array:
+	var result: Array = []
+	if _chunks.is_empty():
+		return result
+	var cx := int(floor(_last_build.x / CHUNK_SIZE))
+	var cz := int(floor(_last_build.z / CHUNK_SIZE))
+	var reach := int(ceil(BUILD_RADIUS / CHUNK_SIZE))
+	for dx in range(-reach, reach + 1):
+		for dz in range(-reach, reach + 1):
+			var key := Vector2i(cx + dx, cz + dz)
+			if _chunks.has(key):
+				result.append_array(_chunks[key])
+	return result
+
+
+func _place_from_triangles(candidates: Array, buckets: Array[Array]) -> void:
+	var attempts := _max_instances * 7
+	var placements := 0
+	for _i in attempts:
+		if placements >= _max_instances:
+			break
+		var triangle: PackedVector3Array = candidates[_rng.randi_range(0, candidates.size() - 1)]
+		var r1 := _rng.randf()
+		var r2 := _rng.randf()
+		if r1 + r2 > 1.0:
+			r1 = 1.0 - r1
+			r2 = 1.0 - r2
+		var point := triangle[0] + (triangle[1] - triangle[0]) * r1 + (triangle[2] - triangle[0]) * r2
+		if point.distance_to(_last_build) > BUILD_RADIUS:
+			continue
+		_add_instance(point, buckets)
+		placements += 1
+
+
+func _place_from_surface_map(buckets: Array[Array]) -> void:
+	var attempts := _max_instances * 12
+	var placements := 0
+	for _i in attempts:
+		if placements >= _max_instances:
+			break
+		var angle := _rng.randf_range(0.0, TAU)
+		var dist := sqrt(_rng.randf()) * BUILD_RADIUS
+		var x := _last_build.x + cos(angle) * dist
+		var z := _last_build.z + sin(angle) * dist
+		var kind := String(_world.surface_kind_at(x, z))
+		if not _is_grass_kind(kind):
+			continue
+		var y := float(_world.surface_height_at(x, z))
+		_add_instance(Vector3(x, y, z), buckets)
+		placements += 1
+
+
+func _add_instance(point: Vector3, buckets: Array[Array]) -> void:
+	var variant := _rng.randi_range(0, _variants.size() - 1)
+	var scale := _rng.randf_range(0.55, 1.6) * clampf(density, 0.2, 2.0)
+	var basis := Basis(Vector3.UP, _rng.randf_range(0.0, TAU))
+	basis = basis.scaled(Vector3(scale, scale, scale))
+	var color := Color(
+		_rng.randf_range(0.72, 1.0),
+		_rng.randf_range(0.82, 1.0),
+		_rng.randf_range(0.62, 0.92),
+		1.0
+	)
+	buckets[variant].append({
+		"transform": Transform3D(basis, point),
+		"color": color,
+	})
 
 
 func _is_grass_kind(kind: String) -> bool:
-	if kind.is_empty():
-		return false
 	return kind == "Grass" or kind == "Gravel" or kind == "Dirt" or kind == "Sand"
-
-
-func _tint_base_grass() -> void:
-	if _base_tinted or _world == null:
-		return
-	_base_tinted = true
-	if grass_materials.is_empty():
-		return
-	for node in _world.find_children("*", "MeshInstance3D", true, false):
-		var mesh := node as MeshInstance3D
-		if mesh == null or mesh.mesh == null or _under_vehicle(mesh):
-			continue
-		for surface in mesh.mesh.get_surface_count():
-			var source := mesh.get_surface_override_material(surface)
-			if source == null:
-				source = mesh.mesh.surface_get_material(surface)
-			if not (source is StandardMaterial3D):
-				continue
-			var name := String(source.resource_name).to_lower()
-			var matched := false
-			for selector in grass_materials:
-				if name.contains(selector.to_lower().trim_prefix("*").trim_suffix("*")):
-					matched = true
-					break
-			if not matched:
-				continue
-			var dup := (source as StandardMaterial3D).duplicate() as StandardMaterial3D
-			# 让底层贴图退到“远景底色”，近处交给草卡片。
-			dup.albedo_color = dup.albedo_color.darkened(0.22)
-			dup.roughness = minf(dup.roughness, 0.95)
-			mesh.set_surface_override_material(surface, dup)
 
 
 func _under_vehicle(node: Node) -> bool:
@@ -290,7 +411,6 @@ func _try_load_track_texture(path: String) -> Texture2D:
 
 
 func _make_procedural_atlas() -> Texture2D:
-	# 2x2、每格 64x64：画几片弯曲草叶，alpha 裁切后作为 billboard 卡片。
 	_grid_cols = 2
 	_grid_rows = 2
 	var cell := 64
