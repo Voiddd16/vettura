@@ -46,11 +46,11 @@ func _ready() -> void:
 		return
 
 	_world.set_weather({
-		"rain": 0.85,
-		"wetness": 0.9,
-		"fog": 0.05,
-		"sun": 0.6,
-		"wind": Vector3(2.0, 0.0, 1.0),
+		"rain": _env_float("FX_RAIN", 0.85),
+		"wetness": _env_float("FX_WET", 0.9),
+		"fog": _env_float("FX_FOG", 0.05),
+		"sun": _env_float("FX_SUN", 0.6),
+		"wind": Vector3(_env_float("FX_WIND_X", 2.0), 0.0, _env_float("FX_WIND_Z", 1.0)),
 	})
 
 	_camera = Camera3D.new()
@@ -86,6 +86,11 @@ func _physics_process(delta: float) -> void:
 	if _elapsed >= 6.0 and not _failed:
 		print("[fx-probe] PASS elapsed=%.1f speed=%.1f km/h" % [_elapsed, _car.speed_kmh()])
 		get_tree().quit(0)
+
+
+func _env_float(name: String, fallback: float) -> float:
+	var text := OS.get_environment(name)
+	return text.to_float() if text.is_valid_float() else fallback
 
 
 func _frame_camera() -> void:

@@ -38,9 +38,9 @@ void vertex() {
     // 一个像素在距离 dist 处对应的世界宽度：h / (2*d*cot(fov/2))。
     float cot_half_fov = max(PROJECTION_MATRIX[1][1], 0.0001);
     float pixels_per_world = viewport_size.y * cot_half_fov / max(2.0 * dist, 0.0001);
-    float min_world_width = clamp(min_screen_width_px / max(pixels_per_world, 0.0001), 0.001, 0.25);
+    float min_world_width = clamp(min_screen_width_px / max(pixels_per_world, 0.0001), 0.001, 0.04);
 
-    float width = clamp(max(base_width * instance_scale.x, min_world_width), 0.001, 0.09);
+    float width = clamp(max(base_width * instance_scale.x, min_world_width), 0.001, 0.04);
     float length = clamp(drop_length * instance_scale.y, 0.03, 0.70);
     vec2 local = vec2(VERTEX.x * width, VERTEX.y * length);
 
@@ -55,7 +55,7 @@ void vertex() {
     // 太靠近相机的雨滴会在屏幕上变成一块大白板：近处淡出，
     // 同时配合发射盒避免相机内部生成可见雨滴。
     v_fade = clamp(1.0 - dist / max_distance, 0.0, 1.0)
-        * smoothstep(0.8, 2.8, dist);
+        * smoothstep(1.5, 4.0, dist);
     v_jitter = 1.0 - jitter_strength * 0.5
         + jitter_strength * fract(sin(dot(MODEL_MATRIX[3].xz, vec2(12.9898, 78.233))) * 43758.5453);
 }
