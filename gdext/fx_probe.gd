@@ -48,8 +48,8 @@ func _ready() -> void:
 	_world.set_weather({
 		"rain": 0.85,
 		"wetness": 0.9,
-		"fog": 0.25,
-		"sun": 0.35,
+		"fog": 0.05,
+		"sun": 0.6,
 		"wind": Vector3(2.0, 0.0, 1.0),
 	})
 
