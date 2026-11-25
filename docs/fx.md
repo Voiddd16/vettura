@@ -77,7 +77,7 @@ v1 在 `FxManager` 里为每个定义创建一个实例；`Car` scope 的多实�
 | 模块 | 状态 | 真实效果 |
 | --- | --- | --- |
 | Weather | 启用 | 复用 `weather_visuals.gd`（天空/雾/太阳/雨丝） |
-| Rain | 启用 | 湿路面材质、双层柔边雨丝、贴地积水、挡风玻璃雨滴、车轮水花 |
+| Rain | 启用 | `game/fx/rain/`：GPUParticles 双层雨丝、湿材质、水花、MultiMesh 涟漪、可选屏幕雨痕 |
 | Grass | 启用 | 按 `GRASS_MATERIALS` 三角形分块 + 图集 MultiMesh 草 + 风摆；medium/high 相机局部，ultra 全赛道底色 + 局部高密度 |
 | Lighting | 启用 | LIGHT_SERIES/EMISSIVE_LIGHT → Omni/SpotLight3D |
 | Particles | 启用 | SMOKE/PARTICLES → GPUParticles3D |

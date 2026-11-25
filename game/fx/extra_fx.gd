@@ -59,13 +59,16 @@ func _apply_settings() -> void:
 		return
 	var high := _quality == "high" or _quality == "ultra"
 	var medium := _quality != "low" and _quality != "off"
+	# Mobile 后端不支持 SSAO/SSIL/SSR；不要为了“高画质”在手机上打开这些，
+	# 它们会被引擎忽略或直接告警。只有 Forward+ 才启用屏幕空间遮蔽。
+	var forward_plus := RenderingServer.get_current_rendering_method() == "forward_plus"
 
 	_environment.glow_enabled = medium
 	_environment.glow_intensity = _float("strength", 0.28)
 	_environment.glow_bloom = 0.035
 	_environment.glow_hdr_threshold = 1.2
 
-	if high:
+	if high and forward_plus:
 		_environment.ssao_enabled = true
 		_environment.ssao_radius = 1.2
 		_environment.ssao_intensity = _float("ssao_strength", 1.5)

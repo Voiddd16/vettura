@@ -79,7 +79,7 @@
 | 模块 | 当前实现 |
 | --- | --- |
 | Weather | 复用 `weather_visuals.gd`，同步 WorldBody 天气 |
-| Rain | 湿路面材质、双层柔边雨丝、贴地积水、挡风玻璃雨滴、车轮水花 |
+| Rain | `game/fx/rain/`：GPUParticles 双层雨丝、湿材质、水花、MultiMesh 涟漪、可选屏幕雨痕 |
 | Grass | 按 `GRASS_MATERIALS` 三角形分块 + 图集 MultiMesh 草 + 风摆；ultra 全赛道底色 + 局部高密度 |
 | Lighting | LIGHT_SERIES / EMISSIVE_LIGHT → Omni/SpotLight3D |
 | Particles | SMOKE / PARTICLES → GPUParticles3D |

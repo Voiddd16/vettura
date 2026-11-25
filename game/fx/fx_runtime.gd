@@ -115,9 +115,16 @@ func _build_effects() -> void:
 	for root in car_roots:
 		car_records.append_array(_records_for(root))
 
+	if enable_weather:
+		_weather_fx = load("res://game/fx/weather_fx.gd").new()
+		_weather_fx.name = "WeatherFX"
+		add_child(_weather_fx)
+		_weather_fx.setup(_world, track_records)
+
 	if enable_rain:
-		_rain_fx = load("res://game/fx/rain_fx.gd").new()
+		_rain_fx = load("res://game/fx/rain/rain_system.tscn").instantiate()
 		_rain_fx.name = "RainFX"
+		_rain_fx.quality = _quality_enum()
 		add_child(_rain_fx)
 		_rain_fx.setup(_world, _cars, track_records, _camera)
 
@@ -151,12 +158,6 @@ func _build_effects() -> void:
 		add_child(_tyres_fx)
 		_tyres_fx.setup(_cars, car_records)
 
-	if enable_weather:
-		_weather_fx = load("res://game/fx/weather_fx.gd").new()
-		_weather_fx.name = "WeatherFX"
-		add_child(_weather_fx)
-		_weather_fx.setup(_world, track_records)
-
 	if enable_extra:
 		_extra_fx = load("res://game/fx/extra_fx.gd").new()
 		_extra_fx.name = "ExtraFX"
@@ -165,6 +166,18 @@ func _build_effects() -> void:
 
 	print("[fx] attached world=%s cars=%d track_records=%d" % [
 		track_root, _cars.size(), track_records.size()])
+
+
+func _quality_enum() -> int:
+	match quality:
+		"low":
+			return 0
+		"high":
+			return 2
+		"ultra":
+			return 2
+		_:
+			return 1
 
 
 func _records_for(path: String) -> Array:

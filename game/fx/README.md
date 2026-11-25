@@ -28,7 +28,7 @@ fx.attach(world, [car], camera)
 
 | 文件 | 效果 | 数据来源 |
 | --- | --- | --- |
-| `rain_fx.gd` | 湿路面、双层柔边雨丝、贴地积水、挡风玻璃雨滴、车轮水花 | `RAIN_FX` / 天气 |
+| `rain/rain_system.gd` | Mobile 3D 雨：双层 GPUParticles 雨丝、湿材质、水花、MultiMesh 涟漪、可选屏幕雨痕 | `RAIN_FX` / 天气 |
 | `grass_fx.gd` + `grass_blade.gdshader` | 按 GRASS_MATERIALS 三角形分块铺草 + 图集草卡片 + 风摆 | `GRASS_FX` + track mesh |
 | `lighting_fx.gd` | `LIGHT_SERIES` / `EMISSIVE_LIGHT` / `LIGHT_POLLUTION` → Omni/SpotLight3D | `LIGHTING*` records |
 | `particles_fx.gd` | `SMOKE_*` / `PARTICLES_*` → GPUParticles3D | particle records |
