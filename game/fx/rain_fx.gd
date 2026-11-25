@@ -30,6 +30,10 @@ var _rain: GPUParticles3D
 var _rain_process: ParticleProcessMaterial
 var _rain_material: StandardMaterial3D
 var _rain_amount := 0
+var _rain_fine: GPUParticles3D
+var _rain_fine_process: ParticleProcessMaterial
+var _rain_fine_material: StandardMaterial3D
+var _rain_fine_amount := 0
 
 var _wet_entries: Array = []
 var _material_filters: Array[String] = []
@@ -71,7 +75,10 @@ func set_weather(rain_amount: float, wet: float, wind_vector: Vector3) -> void:
 		var direction := Vector3(wind.x * 0.02, -1.0, wind.z * 0.02)
 		if direction.length_squared() < 0.01:
 			direction = Vector3(0.1, -1.0, 0.05)
-		_rain_process.direction = direction.normalized()
+		var normalized := direction.normalized()
+		_rain_process.direction = normalized
+		if _rain_fine_process != null:
+			_rain_fine_process.direction = normalized
 
 
 func _process(delta: float) -> void:
@@ -188,47 +195,136 @@ func _selector_matches(selector: String, name: String) -> bool:
 
 func _create_rain() -> void:
 	_rain_process = ParticleProcessMaterial.new()
-	_rain_process.direction = Vector3(0.1, -1.0, 0.05)
-	_rain_process.spread = 4.0
-	_rain_process.initial_velocity_min = 26.0
-	_rain_process.initial_velocity_max = 40.0
-	_rain_process.gravity = Vector3(0.0, -5.0, 0.0)
+	_rain_process.direction = Vector3(0.08, -1.0, 0.04)
+	_rain_process.spread = 2.5
+	_rain_process.initial_velocity_min = 34.0
+	_rain_process.initial_velocity_max = 56.0
+	_rain_process.gravity = Vector3(0.0, -9.8, 0.0)
 	_rain_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	_rain_process.emission_box_extents = Vector3(26.0, 1.5, 26.0)
-	_rain_process.scale_min = 0.7
-	_rain_process.scale_max = 1.3
+	_rain_process.emission_box_extents = Vector3(30.0, 2.0, 30.0)
+	_rain_process.scale_min = 0.55
+	_rain_process.scale_max = 1.35
+	_rain_process.particle_flag_align_y = true
+	# 生命周期首尾淡入淡出，避免“一根根白棍”突然出现/消失。
+	var gradient := Gradient.new()
+	gradient.offsets = PackedFloat32Array([0.0, 0.18, 0.82, 1.0])
+	gradient.colors = PackedColorArray([
+		Color(1, 1, 1, 0.0),
+		Color(1, 1, 1, 0.55),
+		Color(1, 1, 1, 0.55),
+		Color(1, 1, 1, 0.0),
+	])
+	var ramp := GradientTexture1D.new()
+	ramp.gradient = gradient
+	_rain_process.color_ramp = ramp
 
-	var drop := BoxMesh.new()
-	drop.size = Vector3(0.014, 0.62, 0.014)
+	# 柔边雨丝贴图：中间亮、两侧渐隐，避免 BoxMesh 的硬边白条。
+	var streak := QuadMesh.new()
+	streak.size = Vector2(0.018, 0.62)
 	_rain_material = StandardMaterial3D.new()
 	_rain_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_rain_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_rain_material.albedo_color = Color(0.72, 0.82, 0.95, 0.35)
-	drop.material = _rain_material
+	_rain_material.albedo_texture = _make_streak_texture()
+	_rain_material.albedo_color = Color(0.72, 0.82, 0.95, 0.38)
+	_rain_material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_rain_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	streak.material = _rain_material
 
 	_rain = GPUParticles3D.new()
 	_rain.name = "RainFX"
 	_rain.process_material = _rain_process
-	_rain.draw_pass_1 = drop
+	_rain.draw_pass_1 = streak
 	_rain.amount = 1
-	_rain.lifetime = 0.9
+	_rain.lifetime = 1.0
 	_rain.local_coords = false
 	_rain.emitting = false
-	_rain.visibility_aabb = AABB(Vector3(-30, -12, -30), Vector3(60, 30, 60))
+	_rain.visibility_aabb = AABB(Vector3(-34, -14, -34), Vector3(68, 34, 68))
 	add_child(_rain)
+	_create_fine_rain()
+
+
+func _create_fine_rain() -> void:
+	_rain_fine_process = ParticleProcessMaterial.new()
+	_rain_fine_process.direction = Vector3(0.08, -1.0, 0.04)
+	_rain_fine_process.spread = 4.0
+	_rain_fine_process.initial_velocity_min = 42.0
+	_rain_fine_process.initial_velocity_max = 70.0
+	_rain_fine_process.gravity = Vector3(0.0, -9.8, 0.0)
+	_rain_fine_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	_rain_fine_process.emission_box_extents = Vector3(22.0, 2.0, 22.0)
+	_rain_fine_process.scale_min = 0.35
+	_rain_fine_process.scale_max = 0.9
+	_rain_fine_process.particle_flag_align_y = true
+
+	var gradient := Gradient.new()
+	gradient.offsets = PackedFloat32Array([0.0, 0.12, 0.85, 1.0])
+	gradient.colors = PackedColorArray([
+		Color(1, 1, 1, 0.0),
+		Color(1, 1, 1, 0.42),
+		Color(1, 1, 1, 0.42),
+		Color(1, 1, 1, 0.0),
+	])
+	var ramp := GradientTexture1D.new()
+	ramp.gradient = gradient
+	_rain_fine_process.color_ramp = ramp
+
+	var streak := QuadMesh.new()
+	streak.size = Vector2(0.008, 0.28)
+	_rain_fine_material = StandardMaterial3D.new()
+	_rain_fine_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_rain_fine_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_rain_fine_material.albedo_texture = _rain_material.albedo_texture
+	_rain_fine_material.albedo_color = Color(0.70, 0.80, 0.96, 0.24)
+	_rain_fine_material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_rain_fine_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	streak.material = _rain_fine_material
+
+	_rain_fine = GPUParticles3D.new()
+	_rain_fine.name = "RainFine"
+	_rain_fine.process_material = _rain_fine_process
+	_rain_fine.draw_pass_1 = streak
+	_rain_fine.amount = 1
+	_rain_fine.lifetime = 0.8
+	_rain_fine.local_coords = false
+	_rain_fine.emitting = false
+	_rain_fine.visibility_aabb = AABB(Vector3(-26, -14, -26), Vector3(52, 34, 52))
+	add_child(_rain_fine)
+
+
+func _make_streak_texture() -> Texture2D:
+	var width := 32
+	var height := 128
+	var image := Image.create(width, height, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 0))
+	for y in height:
+		var t := float(y) / float(height - 1)
+		var vertical := smoothstep(0.0, 0.16, t) * (1.0 - smoothstep(0.78, 1.0, t))
+		for x in width:
+			var d := absf(float(x) - (width - 1) * 0.5) / (width * 0.5)
+			var a := pow(maxf(0.0, 1.0 - d), 2.2) * vertical
+			if a > 0.01:
+				image.set_pixel(x, y, Color(0.74, 0.84, 1.0, a))
+	return ImageTexture.create_from_image(image)
 
 
 func _update_rain() -> void:
 	if _rain == null:
 		return
 	_rain.emitting = rain > 0.02
-	var target := maxi(1, int(lerpf(240.0, 3600.0, rain)))
+	_rain_fine.emitting = rain > 0.02
+	var target := maxi(1, int(lerpf(700.0, 3800.0, rain)))
 	if target != _rain_amount:
 		_rain_amount = target
 		_rain.amount = target
+	var fine_target := maxi(1, int(lerpf(1200.0, 7200.0, rain)))
+	if fine_target != _rain_fine_amount:
+		_rain_fine_amount = fine_target
+		_rain_fine.amount = fine_target
 	if _camera != null and _rain.emitting:
 		var forward := -_camera.global_transform.basis.z
-		_rain.global_position = _camera.global_position + forward * 6.0 + Vector3(0.0, 7.0, 0.0)
+		var center := _camera.global_position + forward * 8.0 + Vector3(0.0, 8.0, 0.0)
+		_rain.global_position = center
+		_rain_fine.global_position = _camera.global_position + forward * 6.0 + Vector3(0.0, 7.0, 0.0)
 
 
 func _create_puddles() -> void:
