@@ -1,30 +1,108 @@
-[gd_resource type="Environment" load_steps=2 format=3]
+[gd_resource type="Environment" load_steps=6 format=3]
 
-; 全局默认环境：天空背景 + 环境光填充。
+; 全局默认环境：程序化天空（大气/太阳/云/星）+ 环境光 + 雾 + 桌面级后处理。
 ;
-; 为什么需要它：`test_visual/main.tscn`（主场景）以前只有一盏日光，没有任何
-; Environment。Godot 在没有 WorldEnvironment 时回落到工程的默认环境，默认环境
-; 的背景是接近黑色的 clear color、环境光为 0——于是太阳照得到的地方亮、照不到的
-; 地方一片死黑（看台内壁、车身底面、马路阴影全都看不见），也就是“有的地方是黑的”。
+; 由 project.godot 的 environment/defaults/default_environment 挂到所有场景。
+; 天空用 game/render/sky.gdshader：纯渐变天空会让车漆、湿路面、玻璃的反射
+; 变成一条死板的色带；带云层/太阳盘的天空给 IBL 提供结构。云噪声来自
+; FastNoiseLite 预生成的 seamless 纹理，避免每像素重算 fBm。天气系统
+; （gdext/weather_visuals.gd）会在此基础上按天气改天色/云量/星/雾。
 ;
-; 环境光用 AMBIENT_SOURCE_COLOR（恒定色）而不是 SKY/BG：实测本机 Godot 4.7 里
-; 运行时用代码 `AMBIENT_SOURCE_SKY` 建出来的天空（ai_lap.gd 的 AI_LAP_CAM 模式）
-; 不产生任何环境光，只有显式颜色才照得亮。用资源文件 + Sky 的方式虽然能亮，但
-; 为了让工程里“无论有没有 WorldEnvironment 节点”都拿到可靠的环境光，这里显式
-; 给一个偏冷的天空色常量，能量 1.2 刚好把阴影区提亮到可见而不过曝。
+; 环境光仍用 AMBIENT_SOURCE_COLOR（恒定色）而不是 SKY：实测本机 Godot 4.7
+; 里运行时用代码建的 AMBIENT_SOURCE_SKY 不产生环境光，只有显式颜色才照得亮。
+; 能量 2.0 把阴影区提亮到可见而不过曝。
+;
+; 屏幕空间效果（SSAO/SSIL/SSR/volumetric fog）只在 Forward+ 生效，且由
+; `game/render/render_quality.gd` 在运行时按后端打开——不要把 enabled 写进
+; 这份资源，否则 Android 的 Mobile 后端启动时会对每个属性打印“仅 Forward+
+; 可用”的警告。移动端仍走 Mobile（见 project.godot 的 rendering_method.mobile）。
 
-[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
-sky_top_color = Color(0.385, 0.513, 0.8, 1)
-sky_horizon_color = Color(0.75, 0.8, 0.9, 1)
-ground_horizon_color = Color(0.6, 0.65, 0.7, 1)
-ground_bottom_color = Color(0.35, 0.35, 0.4, 1)
-sun_angle_max = 30.0
+[ext_resource type="Shader" path="res://game/render/sky.gdshader" id="1_sky"]
+
+[sub_resource type="FastNoiseLite" id="FastNoiseLite_cloud"]
+seed = 1337
+noise_type = 1
+frequency = 0.012
+fractal_type = 1
+fractal_octaves = 5
+fractal_lacunarity = 2.0
+fractal_gain = 0.5
+
+[sub_resource type="NoiseTexture2D" id="NoiseTexture2D_cloud"]
+width = 256
+height = 256
+seamless = true
+generate_mipmaps = true
+noise = SubResource("FastNoiseLite_cloud")
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_sky"]
+shader = ExtResource("1_sky")
+shader_parameter/sky_top_color = Color(0.13, 0.32, 0.66, 1)
+shader_parameter/sky_horizon_color = Color(0.62, 0.76, 0.9, 1)
+shader_parameter/ground_color = Color(0.12, 0.13, 0.14, 1)
+shader_parameter/sun_color = Color(1, 0.95, 0.86, 1)
+shader_parameter/cloud_lit_color = Color(0.96, 0.97, 0.99, 1)
+shader_parameter/cloud_shadow_color = Color(0.42, 0.46, 0.53, 1)
+shader_parameter/moon_color = Color(0.72, 0.8, 1, 1)
+shader_parameter/cloud_coverage = 0.3
+shader_parameter/cloud_opacity = 0.92
+shader_parameter/cloud_sharpness = 0.22
+shader_parameter/cloud_scale = 1.0
+shader_parameter/cloud_altitude = 1.0
+shader_parameter/cloud_offset = Vector2(0, 0)
+shader_parameter/cloud_second_layer = 0.45
+shader_parameter/cloud_quality = 1.0
+shader_parameter/cloud_noise = SubResource("NoiseTexture2D_cloud")
+shader_parameter/cloud_noise_scale = 0.16
+shader_parameter/sun_disc_intensity = 1.0
+shader_parameter/sun_glow_intensity = 0.8
+shader_parameter/night = 0.0
+shader_parameter/star_intensity = 0.0
+shader_parameter/moon_intensity = 0.0
+shader_parameter/moon_direction = Vector3(0.35, 0.45, -0.82)
+shader_parameter/horizon_haze = 0.42
+shader_parameter/sky_exposure = 1.0
+
+[sub_resource type="Sky" id="Sky_sky"]
+sky_material = SubResource("ShaderMaterial_sky")
+radiance_size = 3
+process_mode = 2
 
 [resource]
 background_mode = 2
-sky = SubResource("ProceduralSkyMaterial_sky")
+sky = SubResource("Sky_sky")
 ambient_light_source = 2
-ambient_light_color = Color(0.55, 0.6, 0.68, 1)
-ambient_light_energy = 1.2
+ambient_light_color = Color(0.72, 0.77, 0.85, 1)
+ambient_light_energy = 2.0
 reflected_light_source = 2
-tonemap_mode = 0
+tonemap_mode = 3
+tonemap_exposure = 1.15
+tonemap_white = 6.0
+glow_enabled = true
+glow_levels/1 = 0.0
+glow_levels/2 = 0.35
+glow_levels/3 = 0.55
+glow_levels/4 = 0.42
+glow_levels/5 = 0.28
+glow_levels/6 = 0.14
+glow_levels/7 = 0.0
+glow_intensity = 0.18
+glow_strength = 1.0
+glow_bloom = 0.02
+glow_blend_mode = 1
+glow_hdr_threshold = 1.5
+glow_hdr_scale = 2.0
+glow_hdr_luminance_cap = 8.0
+fog_enabled = false
+fog_light_color = Color(0.66, 0.72, 0.8, 1)
+fog_light_energy = 1.0
+fog_sun_scatter = 0.0
+fog_density = 0.002
+fog_aerial_perspective = 0.35
+fog_sky_affect = 0.2
+fog_height = 0.0
+fog_height_density = 0.0
+adjustment_enabled = true
+adjustment_brightness = 1.0
+adjustment_contrast = 1.04
+adjustment_saturation = 1.0
