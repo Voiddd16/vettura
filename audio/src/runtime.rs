@@ -19,6 +19,7 @@
 mod engine;
 #[cfg(fmod_sdk_found)]
 mod plugins;
+mod roles;
 
 use std::path::Path;
 
@@ -86,6 +87,10 @@ pub struct VehicleParams {
     pub load: f32,
     pub speed: f32,
     pub view_blend: f32,
+    /// 当前挡位：`-1` 倒挡、`0` 空挡、`1` 一挡……
+    pub gear: i32,
+    /// 四个轮子里最大的侧偏角，弧度。用于驱动打滑声。
+    pub slip: f32,
 }
 
 impl Default for VehicleParams {
@@ -96,6 +101,8 @@ impl Default for VehicleParams {
             load: 0.0,
             speed: 0.0,
             view_blend: 0.0,
+            gear: 0,
+            slip: 0.0,
         }
     }
 }
@@ -277,6 +284,23 @@ impl AudioEngine {
         #[cfg(not(fmod_sdk_found))]
         {
             Ok(())
+        }
+    }
+
+    /// 当前 FSB fallback 实际选中的采样（诊断用）。
+    ///
+    /// Studio 事件引用的 bus 不在 bank 里时事件是静音的，真正发声的是这层
+    /// Core API fallback；把选中的采样名暴露出来，方便确认"没声音"到底缺哪一层。
+    pub fn fallback_summary(&self) -> Option<String> {
+        #[cfg(fmod_sdk_found)]
+        {
+            self.engine
+                .as_ref()
+                .and_then(|engine| engine.fallback_summary())
+        }
+        #[cfg(not(fmod_sdk_found))]
+        {
+            None
         }
     }
 

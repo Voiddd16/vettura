@@ -241,6 +241,16 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FMOD_VERSION");
     println!("cargo:rerun-if-env-changed=PROFILE");
 
+    // fetch_fmod.py 会把 SDK 位置写进 fmod_sdk.json。必须声明为 rerun-if-changed，
+    // 否则此前以 stub 模式构建过的话，拉完 SDK 直接 build 仍会复用缓存、继续无声。
+    // 这里无条件声明（含尚不存在的路径），这样首次生成文件也能触发重跑。
+    for root in candidate_paths() {
+        println!(
+            "cargo:rerun-if-changed={}",
+            root.join("fmod_sdk.json").display()
+        );
+    }
+
     // 未指定锁定版本时给出警告；本 workspace 的锁定版本是 2.02.22。
     let version = env::var("FMOD_VERSION").unwrap_or_else(|_| PINNED_VERSION.to_owned());
     if version != PINNED_VERSION {

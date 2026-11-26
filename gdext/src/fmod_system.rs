@@ -39,7 +39,12 @@ impl FmodSystem {
 #[godot_api]
 impl INode3D for FmodSystem {
     /// 每帧推进 FMOD Studio；不依赖 Godot 物理帧。
+    /// WAV 录制模式下改由 GDScript 在物理帧里显式调用 `step_audio()`，
+    /// 让混音进度跟随仿真时间而不是墙钟时间。
     fn process(&mut self, _delta: f64) {
+        if std::env::var_os("VETTURA_AUDIO_WAV").is_some() {
+            return;
+        }
         if let Some(engine) = self.engine.as_mut()
             && let Err(err) = engine.update()
         {
@@ -51,6 +56,18 @@ impl INode3D for FmodSystem {
 
 #[godot_api]
 impl FmodSystem {
+    /// WAV 录制模式下由物理帧调用一次，按仿真时间推进 FMOD 混音。
+    #[func]
+    pub fn step_audio(&mut self) -> bool {
+        let Some(engine) = self.engine.as_mut() else {
+            return self.fail("FMOD runtime is not ready");
+        };
+        match engine.update() {
+            Ok(()) => true,
+            Err(err) => self.fail(err),
+        }
+    }
+
     /// 启动 FMOD runtime。`max_channels <= 0` 表示用 FMOD 默认值。
     ///
     /// 未用 `--features fmod` 编译时返回 `false`，可在 `last_error()` 看到原因。
@@ -173,6 +190,10 @@ impl FmodSystem {
     }
 
     /// 用常见参数名适配车辆声浪事件；不存在的参数会被跳过。
+    ///
+    /// `gear` / `slip` 用于 FSB fallback 的换挡声与打滑声；`slip` 传四个轮子里
+    /// 最大的侧偏角（弧度）即可。
+    #[allow(clippy::too_many_arguments)]
     #[func]
     pub fn set_vehicle_parameters(
         &mut self,
@@ -182,6 +203,8 @@ impl FmodSystem {
         load: f32,
         speed: f32,
         view_blend: f32,
+        gear: i64,
+        slip: f32,
     ) -> bool {
         let Some(engine) = self.engine.as_mut() else {
             return self.fail("FMOD runtime is not ready");
@@ -193,11 +216,22 @@ impl FmodSystem {
             load,
             speed,
             view_blend,
+            gear: gear as i32,
+            slip,
         };
         match engine.set_vehicle_parameters(&event, params) {
             Ok(()) => true,
             Err(err) => self.fail(err),
         }
+    }
+
+    /// 当前 FSB fallback 选中的采样；Studio 事件静音时这是唯一发声路径。
+    #[func]
+    pub fn fallback_summary(&self) -> GString {
+        self.engine
+            .as_ref()
+            .and_then(|engine| engine.fallback_summary())
+            .map_or_else(GString::new, |summary| GString::from(summary.as_str()))
     }
 
     /// 按事件名查 GUID。

@@ -44,7 +44,7 @@ func _ready() -> void:
 	print("[fmod] play(engine_ext)= true")
 
 	print("[fmod] params(engine_ext)=", _audio.parameter_names("engine_ext"))
-	if not _audio.set_vehicle_parameters("engine_ext", 6000.0, 0.5, 0.25, 30.0, 0.0):
+	if not _audio.set_vehicle_parameters("engine_ext", 6000.0, 0.5, 0.25, 30.0, 0.0, 3, 0.0):
 		print("[fmod] warn: set_vehicle_parameters failed: ", _audio.last_error())
 	else:
 		print("[fmod] set_vehicle_parameters= true")
