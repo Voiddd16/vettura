@@ -34,13 +34,28 @@ const RAIN_SCREEN_SHADER := preload("res://game/fx/rain/rain_screen.gdshader")
 const RAIN_REFRACTION_SHADER := preload("res://game/fx/rain/rain_refraction.gdshader")
 const RAIN_MIST_SHADER := preload("res://game/fx/rain/rain_mist.gdshader")
 
-const MAX_NEAR_BY_QUALITY := [1000, 3000, 6000]
+const MAX_NEAR_BY_QUALITY := [2500, 10000, 16000]
 const MAX_FAR_BY_QUALITY := [0, 550, 1300]
-const MAX_SPLASH_BY_QUALITY := [4, 12, 24]
-const MAX_RIPPLES_BY_QUALITY := [2, 4, 6]
+const MAX_SPLASH_BY_QUALITY := [6, 20, 36]
+const MAX_RIPPLES_BY_QUALITY := [3, 6, 8]
 const DROP_WIDTH_BY_QUALITY := [0.008, 0.011, 0.014]
 const DROP_LENGTH_BY_QUALITY := [0.24, 0.34, 0.46]
 const SPLASH_AMOUNT_CAP := 240
+## 灯光发现（`find_children`）的节流周期，秒。场景树很大时每帧遍历会吃掉
+## 移动端预算；没有太阳/局部灯的场景（车库、夜晚）尤其会每帧全树扫描。
+const LIGHT_SCAN_INTERVAL_S := 2.0
+## 局部光源 uniform 名缓存，避免每帧用 `%` 拼字符串。
+const LOCAL_LIGHT_UNIFORM_NAMES := [
+	"local_light_pos_0", "local_light_pos_1", "local_light_pos_2",
+	"local_light_color_0", "local_light_color_1", "local_light_color_2",
+]
+## 粒径谱的终端速度以 13 m/s 为基准；`fall_speed_mps` 用它做整体倍率，
+## 这样 Inspector 里的「下落速度」仍然有效（预设也按它调）。
+const FALL_SPEED_REFERENCE_MPS := 13.0
+## `drop_length` / `stretch_multiplier` 的默认值：v3 的长度由曝光积分
+## |v|·T 决定，这两个旧参数作为整体形状倍率保留，默认值必须等于 1.0。
+const DROP_LENGTH_REFERENCE_M := 0.34
+const STRETCH_REFERENCE := 1.15
 
 @export_group("Rain")
 @export_range(0.0, 1.0, 0.01) var rain_amount: float = 0.6:
@@ -106,23 +121,23 @@ const SPLASH_AMOUNT_CAP := 240
 		drop_brightness = clampf(value, 0.0, 2.0)
 		_parameters_dirty = true
 		parameters_changed.emit()
-@export var drop_color: Color = Color(0.72, 0.82, 1.0, 1.0):
+@export var drop_color: Color = Color(0.66, 0.72, 0.80, 1.0):
 	set(value):
 		drop_color = value
 		_parameters_dirty = true
 		parameters_changed.emit()
-@export_range(0.0, 1.0, 0.01) var jitter_strength: float = 0.18:
+@export_range(0.0, 1.0, 0.01) var jitter_strength: float = 0.45:
 	set(value):
 		jitter_strength = clampf(value, 0.0, 1.0)
 		_parameters_dirty = true
 		parameters_changed.emit()
 
 @export_group("Optics")
-@export_range(0.002, 0.0667, 0.0001) var shutter_time: float = 1.0 / 60.0:
+@export_range(0.002, 0.0667, 0.0001) var shutter_time: float = 1.0 / 30.0:
 	set(value):
 		shutter_time = clampf(value, 0.002, 0.0667)
 		_parameters_dirty = true
-@export_range(0.2, 40.0, 0.01) var exposure_gain: float = 8.0:
+@export_range(0.2, 40.0, 0.01) var exposure_gain: float = 7.0:
 	set(value):
 		exposure_gain = clampf(value, 0.2, 40.0)
 		_parameters_dirty = true
@@ -130,11 +145,11 @@ const SPLASH_AMOUNT_CAP := 240
 	set(value):
 		drop_size_scale = clampf(value, 0.2, 4.0)
 		_parameters_dirty = true
-@export_range(0.0, 1.0, 0.01) var streak_softness: float = 0.35:
+@export_range(0.0, 1.0, 0.01) var streak_softness: float = 0.45:
 	set(value):
 		streak_softness = clampf(value, 0.0, 1.0)
 		_parameters_dirty = true
-@export_range(0.0, 1.0, 0.01) var internal_pattern_strength: float = 0.55:
+@export_range(0.0, 1.0, 0.01) var internal_pattern_strength: float = 0.40:
 	set(value):
 		internal_pattern_strength = clampf(value, 0.0, 1.0)
 		_parameters_dirty = true
@@ -142,7 +157,7 @@ const SPLASH_AMOUNT_CAP := 240
 	set(value):
 		oscillation_freq = clampf(value, 0.0, 12.0)
 		_parameters_dirty = true
-@export_range(1.0, 3.0, 1.0) var highlight_count: float = 2.0:
+@export_range(1.0, 3.0, 1.0) var highlight_count: float = 1.0:
 	set(value):
 		highlight_count = clampf(value, 1.0, 3.0)
 		_parameters_dirty = true
@@ -206,7 +221,7 @@ const SPLASH_AMOUNT_CAP := 240
 		ripple_size = clampf(value, 0.1, 3.0)
 		_parameters_dirty = true
 		parameters_changed.emit()
-@export_range(0, 6, 1) var max_ripples: int = 4:
+@export_range(0, 6, 1) var max_ripples: int = 6:
 	set(value):
 		max_ripples = clampi(value, 0, 6)
 		_parameters_dirty = true
@@ -272,14 +287,18 @@ var _rendering_method := ""
 ## 这里取各档速度区间，避免在 shader 里做开方/指数。
 const RAIN_CLASSES := [
 	{"name": "Large", "d_min": 2.6, "d_max": 4.6, "v_min": 8.2, "v_max": 9.6,
-		"fraction": 0.06, "width": 0.016, "softness": 0.10, "distance": 55.0},
+		"fraction": 0.06, "width": 0.013, "softness": 0.12, "distance": 55.0},
 	{"name": "Medium", "d_min": 1.2, "d_max": 2.6, "v_min": 6.2, "v_max": 8.2,
-		"fraction": 0.24, "width": 0.013, "softness": 0.22, "distance": 68.0},
+		"fraction": 0.22, "width": 0.0105, "softness": 0.26, "distance": 68.0},
 	{"name": "Small", "d_min": 0.5, "d_max": 1.2, "v_min": 4.0, "v_max": 6.2,
-		"fraction": 0.40, "width": 0.009, "softness": 0.38, "distance": 78.0},
+		"fraction": 0.42, "width": 0.0075, "softness": 0.42, "distance": 78.0},
 	{"name": "Fine", "d_min": 0.15, "d_max": 0.5, "v_min": 2.5, "v_max": 4.0,
-		"fraction": 0.30, "width": 0.006, "softness": 0.58, "distance": 88.0},
+		"fraction": 0.30, "width": 0.0055, "softness": 0.62, "distance": 88.0},
 ]
+
+## 各粒径档的整体亮度：大滴最亮，小滴/细滴快速衰减。旧版每档只降 8%，
+## 结果所有雨滴都接近同样的白线，密度一高就像撒了纸屑。
+const CLASS_BRIGHTNESS := [1.0, 0.85, 0.70, 0.58]
 var _rain_layers: Array[Dictionary] = []
 var _splash: GPUParticles3D
 var _splash_process: ParticleProcessMaterial
@@ -311,9 +330,34 @@ var _logged := false
 var _frame_dt := 1.0 / 60.0
 var _sun: DirectionalLight3D
 var _local_lights: Array[Light3D] = []
+## 下一次允许重扫场景灯光的时间（`_time`）。灯光只在到期时重新发现。
+var _next_light_scan := 0.0
+## 可选 DOF 的资源归属：申请一次、退出时还原相机原来的 attributes。
+var _dof_attributes: CameraAttributesPractical
+var _dof_previous_attributes: CameraAttributes
+var _dof_applied := false
+
+## 每帧都要写几十个 shader uniform / Environment 属性的函数按低频节流。
+## 这些值以秒级变化（雨量、风向、灯光、雾），10/20 Hz 的更新肉眼无法分辨，
+## 但能省掉雨系统在干燥天气下也要做的固定 CPU 工作。
+const WEATHER_POLL_S := 0.2
+const LIGHT_UPDATE_S := 0.1
+const PARTICLE_UPDATE_S := 0.2
+const OVERLAY_UPDATE_S := 0.1
+const ATMOSPHERE_EPSILON := 0.002
+var _weather_timer := 0.0
+var _light_timer := 0.0
+var _particle_timer := 0.0
+var _overlay_timer := 0.0
+var _atmo_rain := -1.0
+var _atmo_wet := -1.0
+## 干燥状态只做一次收尾（关粒子/雾/湿材质），之后每帧直接返回。
+var _dry_settled := false
 
 
 func _ready() -> void:
+	# 让 WeatherVisuals 这类兜底雨实现知道已经有真正的雨系统，避免双层雨。
+	add_to_group("vettura_rain")
 	_rendering_method = RenderingServer.get_current_rendering_method()
 	if _rendering_method == "gl_compatibility":
 		_compat_fallback = true
@@ -366,6 +410,12 @@ func _process(delta: float) -> void:
 		_build()
 	if _camera == null or not is_instance_valid(_camera):
 		_camera = _find_camera()
+		# 相机换了：旧的 DOF 资源不再属于当前相机，重新申请。
+		_dof_applied = false
+		_dof_attributes = null
+		_dof_previous_attributes = null
+		if _camera != null and dof_enabled:
+			_apply_dof()
 	if _camera == null:
 		return
 
@@ -375,23 +425,56 @@ func _process(delta: float) -> void:
 	global_transform = Transform3D(Basis.IDENTITY, _camera.global_position + Vector3(0.0, 2.5, 0.0))
 
 	if auto_weather and _world != null and is_instance_valid(_world):
-		var weather: Dictionary = _world.get_weather()
-		set_weather(
-			float(weather.get("rain", rain_amount)),
-			float(weather.get("wetness", ground_wetness)),
-			weather.get("wind", Vector3.ZERO) as Vector3
-		)
+		_weather_timer -= delta
+		if _weather_timer <= 0.0:
+			_weather_timer = WEATHER_POLL_S
+			var weather: Dictionary = _world.get_weather()
+			set_weather(
+				float(weather.get("rain", rain_amount)),
+				float(weather.get("wetness", ground_wetness)),
+				weather.get("wind", Vector3.ZERO) as Vector3
+			)
 
 	if _parameters_dirty:
 		_apply_parameters()
-	_update_lighting()
+
+	# 干地（无雨、无湿度）不需要每帧重写 40 个雨 shader uniform、雾和湿材质。
+	# 进入干地时完整跑一次收尾，把粒子/雾/湿材质恢复到干燥状态，之后直接
+	# 返回；天气一变回湿/雨，下面的常规路径会自动恢复。
+	var dry := rain_amount <= 0.001 and ground_wetness <= 0.001
+	if dry:
+		if not _dry_settled:
+			_dry_settled = true
+			_light_timer = 0.0
+			_particle_timer = 0.0
+			_overlay_timer = 0.0
+			_update_lighting()
+			_update_particles()
+			_update_ground_feedback(delta)
+			_update_wetness()
+			_update_atmosphere()
+			_update_screen_overlay()
+			_update_refraction_overlay()
+		return
+	_dry_settled = false
+
+	_light_timer -= delta
+	if _light_timer <= 0.0:
+		_light_timer = LIGHT_UPDATE_S
+		_update_lighting()
 	_update_fall_direction()
-	_update_particles()
+	_particle_timer -= delta
+	if _particle_timer <= 0.0:
+		_particle_timer = PARTICLE_UPDATE_S
+		_update_particles()
 	_update_ground_feedback(delta)
 	_update_wetness()
 	_update_atmosphere()
-	_update_screen_overlay()
-	_update_refraction_overlay()
+	_overlay_timer -= delta
+	if _overlay_timer <= 0.0:
+		_overlay_timer = OVERLAY_UPDATE_S
+		_update_screen_overlay()
+		_update_refraction_overlay()
 	if enable_audio:
 		_update_audio()
 
@@ -433,10 +516,12 @@ func _make_rain_material(index: int, cfg: Dictionary) -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = RAIN_DROP_SHADER
 	material.set_shader_parameter("drop_color", drop_color)
-	material.set_shader_parameter("brightness", drop_brightness * (1.0 - index * 0.08))
+	material.set_shader_parameter("brightness", drop_brightness * CLASS_BRIGHTNESS[index])
 	material.set_shader_parameter("drop_diameter_mm", (float(cfg["d_min"]) + float(cfg["d_max"])) * 0.5 * drop_size_scale)
-	material.set_shader_parameter("terminal_velocity", (float(cfg["v_min"]) + float(cfg["v_max"])) * 0.5)
+	material.set_shader_parameter("terminal_velocity", (float(cfg["v_min"]) + float(cfg["v_max"])) * 0.5 * _fall_speed_scale())
 	material.set_shader_parameter("drop_width_scale", float(cfg["width"]) / maxf(drop_width, 0.001))
+	material.set_shader_parameter("drop_length_scale", _drop_length_scale())
+	material.set_shader_parameter("jitter_strength", jitter_strength)
 	material.set_shader_parameter("min_screen_width_px", min_screen_width_px)
 	material.set_shader_parameter("max_distance", float(cfg["distance"]) * (rain_visibility_distance / 70.0))
 	material.set_shader_parameter("viewport_size", _viewport_size)
@@ -464,8 +549,8 @@ func _make_rain_layer(cfg: Dictionary, material: ShaderMaterial, box_extent: flo
 	var process := ParticleProcessMaterial.new()
 	process.direction = Vector3(0.0, -1.0, 0.0)
 	process.spread = 1.5
-	process.initial_velocity_min = float(cfg["v_min"])
-	process.initial_velocity_max = float(cfg["v_max"])
+	process.initial_velocity_min = float(cfg["v_min"]) * _fall_speed_scale()
+	process.initial_velocity_max = float(cfg["v_max"]) * _fall_speed_scale()
 	process.gravity = Vector3.ZERO
 	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
 	process.emission_box_extents = Vector3(box_extent, 6.0, box_extent)
@@ -634,10 +719,18 @@ func _find_environment() -> void:
 				return
 	_world_env = WorldEnvironment.new()
 	_world_env.name = "RainEnvironment"
-	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	env.sky = Sky.new()
-	env.sky.sky_material = ProceduralSkyMaterial.new()
+	# 没有现成环境时也复用工程默认环境（天空 shader / ACES / glow / 雾），
+	# 不要退回裸 ProceduralSkyMaterial——那会让独立挂 RainSystem 的场景
+	# 变成另一套画面。
+	var base := load("res://game_environment.tres") as Environment
+	var env: Environment
+	if base != null:
+		env = base.duplicate(true) as Environment
+	else:
+		env = Environment.new()
+		env.background_mode = Environment.BG_SKY
+		env.sky = Sky.new()
+		env.sky.sky_material = ProceduralSkyMaterial.new()
 	_world_env.environment = env
 	add_child(_world_env)
 	_environment = env
@@ -717,6 +810,11 @@ func _apply_parameters() -> void:
 	var tier := clampi(int(quality), 0, 2)
 	var total_max := int(MAX_NEAR_BY_QUALITY[tier])
 	var splash_max := int(MAX_SPLASH_BY_QUALITY[tier])
+	# 桌面每档多给一些细/小雨滴（粒子只是小 quad，overdraw 很小）；
+	# 移动端保持原来的预算，避免中端 GPU 被雨幕拖垮。
+	if _rendering_method == "mobile":
+		total_max = int(total_max * 0.5)
+		splash_max = int(splash_max * 0.8)
 	if mobile_low_end:
 		total_max = int(total_max * 0.55)
 		splash_max = int(splash_max * 0.6)
@@ -733,10 +831,12 @@ func _apply_parameters() -> void:
 		particles.visible = not _compat_fallback
 		particles.emitting = rain_amount > 0.02 and not _compat_fallback
 		material.set_shader_parameter("drop_color", drop_color)
-		material.set_shader_parameter("brightness", drop_brightness * (1.0 - index * 0.07))
+		material.set_shader_parameter("brightness", drop_brightness * CLASS_BRIGHTNESS[index])
 		material.set_shader_parameter("drop_diameter_mm", (float(cfg["d_min"]) + float(cfg["d_max"])) * 0.5 * drop_size_scale)
-		material.set_shader_parameter("terminal_velocity", (float(cfg["v_min"]) + float(cfg["v_max"])) * 0.5)
+		material.set_shader_parameter("terminal_velocity", (float(cfg["v_min"]) + float(cfg["v_max"])) * 0.5 * _fall_speed_scale())
 		material.set_shader_parameter("drop_width_scale", float(cfg["width"]) / maxf(drop_width, 0.001))
+		material.set_shader_parameter("drop_length_scale", _drop_length_scale())
+		material.set_shader_parameter("jitter_strength", jitter_strength)
 		material.set_shader_parameter("min_screen_width_px", min_screen_width_px)
 		material.set_shader_parameter("max_distance", float(cfg["distance"]) * (rain_visibility_distance / 70.0))
 		material.set_shader_parameter("layer_softness", maxf(streak_softness, float(cfg["softness"])))
@@ -747,6 +847,14 @@ func _apply_parameters() -> void:
 		material.set_shader_parameter("frame_time", _frame_dt)
 		material.set_shader_parameter("exposure_gain", exposure_gain)
 		material.set_shader_parameter("background_response", background_response)
+		# 雨丝 fresnel 边缘反射色：取环境雾色/环境光，避免固定蓝白。
+		var sky_tint := Color(0.62, 0.72, 0.85)
+		var ground_tint := Color(0.10, 0.11, 0.13)
+		if _environment != null:
+			sky_tint = _environment.fog_light_color
+			ground_tint = _environment.ambient_light_color.darkened(0.75)
+		material.set_shader_parameter("sky_color", sky_tint)
+		material.set_shader_parameter("ground_color", ground_tint)
 		material.set_shader_parameter("backlit_boost", backlit_boost)
 		material.set_shader_parameter("dof_near", dof_near)
 		material.set_shader_parameter("dof_mid", dof_mid)
@@ -778,13 +886,21 @@ func _apply_parameters() -> void:
 			_splash.amount, effective_ripples])
 
 
+func _fall_speed_scale() -> float:
+	return clampf(fall_speed_mps / FALL_SPEED_REFERENCE_MPS, 0.1, 4.0)
+
+
+func _drop_length_scale() -> float:
+	return (drop_length / DROP_LENGTH_REFERENCE_M) * (stretch_multiplier / STRETCH_REFERENCE)
+
+
 func _class_fractions() -> Array[float]:
 	var shift := (rain_amount - 0.5) * 2.0
 	var weights: Array[float] = [
-		maxf(0.005, 0.10 * (1.0 + 0.55 * shift)),
-		maxf(0.005, 0.30 * (1.0 + 0.18 * shift)),
-		maxf(0.005, 0.35 * (1.0 - 0.18 * shift)),
-		maxf(0.005, 0.25 * (1.0 - 0.45 * shift)),
+		maxf(0.005, 0.05 * (1.0 + 0.60 * shift)),
+		maxf(0.005, 0.20 * (1.0 + 0.20 * shift)),
+		maxf(0.005, 0.42 * (1.0 - 0.10 * shift)),
+		maxf(0.005, 0.33 * (1.0 - 0.20 * shift)),
 	]
 	var total := 0.0
 	for w in weights:
@@ -798,10 +914,24 @@ func _apply_dof() -> void:
 	if _camera == null or not is_instance_valid(_camera):
 		return
 	if not dof_enabled:
+		# 关掉时还原相机原来的 attributes，否则 DOF 会一直挂在相机上。
+		if _dof_applied:
+			_camera.attributes = _dof_previous_attributes
+			_dof_applied = false
+			_dof_attributes = null
+			_dof_previous_attributes = null
 		return
 	# 可选低品质 CameraAttributes DOF：Mobile 走光栅化 bokeh；默认关闭。
 	# 这里只用于近景虚化，不是逐滴 DOF；低配建议保持关闭。
-	var attributes := CameraAttributesPractical.new()
+	#
+	# 只在第一次申请资源，之后调参复用同一个 CameraAttributes，避免每次
+	# `_apply_parameters`（雨量变化时会频繁触发）都 new 一个 Resource。
+	if not _dof_applied:
+		_dof_previous_attributes = _camera.attributes
+		_dof_attributes = CameraAttributesPractical.new()
+		_dof_applied = true
+		_camera.attributes = _dof_attributes
+	var attributes := _dof_attributes
 	attributes.dof_blur_far_enabled = true
 	attributes.dof_blur_far_distance = dof_far
 	attributes.dof_blur_far_transition = maxf(dof_far - dof_mid, 0.1)
@@ -809,7 +939,6 @@ func _apply_dof() -> void:
 	attributes.dof_blur_near_distance = dof_near
 	attributes.dof_blur_near_transition = maxf(dof_mid - dof_near, 0.1)
 	attributes.dof_blur_amount = clampf(defocus_amount * 0.08, 0.0, 0.2)
-	_camera.attributes = attributes
 
 
 func _apply_viewport_quality(tier: int) -> void:
@@ -817,19 +946,30 @@ func _apply_viewport_quality(tier: int) -> void:
 	if viewport == null:
 		return
 	# Mobile 不用 TAA/FSR2；只用 MSAA/FXAA，低配直接用 FXAA。
+	# 桌面全屏开启 RenderQuality 的自动分辨率时，不要在这里把
+	# scaling_3d_scale 拉回 1.0（否则自适应白做）。
+	var adaptive_fullscreen := GameSettings.is_fullscreen() \
+		and bool(GameSettings.get_value("video", "fullscreen_adaptive", true)) \
+		and not OS.has_feature("mobile")
 	match tier:
 		0:
 			viewport.msaa_3d = Viewport.MSAA_DISABLED
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
-			viewport.scaling_3d_scale = 0.85 if mobile_low_end else 0.92
+			if not adaptive_fullscreen:
+				viewport.scaling_3d_scale = 0.85 if mobile_low_end else 0.92
 		1:
 			viewport.msaa_3d = Viewport.MSAA_2X
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
-			viewport.scaling_3d_scale = 0.9 if mobile_low_end else 1.0
+			if not adaptive_fullscreen:
+				viewport.scaling_3d_scale = 0.9 if mobile_low_end else 1.0
 		_:
 			viewport.msaa_3d = Viewport.MSAA_2X
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
-			viewport.scaling_3d_scale = 1.0 if not mobile_low_end else 0.92
+			if not adaptive_fullscreen:
+				viewport.scaling_3d_scale = 1.0 if not mobile_low_end else 0.92
+	if adaptive_fullscreen:
+		# MetalFX/FSR 上采样 + 2x MSAA 已经够；再叠 FXAA 只会把全屏磨糊。
+		viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 
 
 func _update_fall_direction() -> void:
@@ -852,20 +992,29 @@ func _update_particles() -> void:
 	var wind_rad := deg_to_rad(wind_direction_deg)
 	var direction := Vector3(cos(wind_rad) * wind_speed * 0.08, -fall_speed_mps,
 		sin(wind_rad) * wind_speed * 0.08).normalized()
+	var speed_scale := _fall_speed_scale()
 	for layer in _rain_layers:
 		var particles: GPUParticles3D = layer["particles"]
 		var process: ParticleProcessMaterial = layer["process"]
+		var cfg: Dictionary = layer["config"]
 		particles.emitting = emitting and particles.visible
 		process.direction = direction
 		process.spread = 1.0 + turbulence * 2.0
+		# `fall_speed_mps` 是整体倍率：运行时改它要能立刻改变终端速度。
+		process.initial_velocity_min = float(cfg["v_min"]) * speed_scale
+		process.initial_velocity_max = float(cfg["v_max"]) * speed_scale
 
 
 func _update_lighting() -> void:
 	if _rain_layers.is_empty():
 		return
-	if _sun == null or not is_instance_valid(_sun):
-		_sun = _find_first_directional_light()
-	if _local_lights.is_empty():
+	# 灯光发现是场景树遍历，不能每帧做。没有太阳/局部灯的场景（车库、夜晚）
+	# 会让旧逻辑每帧全树 find_children；这里改成到期才重扫，同时让行驶中
+	# 最近的 3 盏灯能随位置更新。
+	if _time >= _next_light_scan:
+		_next_light_scan = _time + LIGHT_SCAN_INTERVAL_S
+		if not _light_is_usable(_sun):
+			_sun = _find_first_directional_light()
 		_local_lights = _find_local_lights()
 	var sun_dir := light_direction_override
 	if sun_dir.length_squared() < 1e-5:
@@ -887,11 +1036,19 @@ func _update_lighting() -> void:
 			var color := Color(0, 0, 0, 1)
 			if index < _local_lights.size():
 				var light := _local_lights[index]
-				if is_instance_valid(light):
+				if is_instance_valid(light) and light.is_inside_tree():
 					position = light.global_position
 					color = light.light_color * clampf(light.light_energy, 0.0, 1.0)
-			material.set_shader_parameter("local_light_pos_%d" % index, position)
-			material.set_shader_parameter("local_light_color_%d" % index, Vector3(color.r, color.g, color.b))
+			material.set_shader_parameter(LOCAL_LIGHT_UNIFORM_NAMES[index], position)
+			material.set_shader_parameter(
+				LOCAL_LIGHT_UNIFORM_NAMES[index + 3],
+				Vector3(color.r, color.g, color.b))
+
+
+## 灯光节点是否还能安全读取 world 变换：不在树里的节点调用 global_position
+## 会每帧刷引擎错误。
+func _light_is_usable(light: Light3D) -> bool:
+	return light != null and is_instance_valid(light) and light.is_inside_tree() and light.visible
 
 
 func _find_first_directional_light() -> DirectionalLight3D:
@@ -899,8 +1056,9 @@ func _find_first_directional_light() -> DirectionalLight3D:
 	if root == null:
 		return null
 	for node in root.find_children("*", "DirectionalLight3D", true, false):
-		if node is DirectionalLight3D:
-			return node as DirectionalLight3D
+		var light := node as DirectionalLight3D
+		if light != null and light.visible and light.is_inside_tree():
+			return light
 	return null
 
 
@@ -910,10 +1068,15 @@ func _find_local_lights() -> Array[Light3D]:
 	if root == null or _camera == null:
 		return result
 	for node in root.find_children("*", "Light3D", true, false):
-		if node is DirectionalLight3D:
+		var light := node as Light3D
+		if light == null or light is DirectionalLight3D:
 			continue
-		if node is OmniLight3D or node is SpotLight3D:
-			result.append(node as Light3D)
+		# 不在树里/已隐藏的灯不能参与排序（global_position 会报错），也不该
+		# 占掉 3 个 shader slot。
+		if not light.visible or not light.is_inside_tree():
+			continue
+		if light is OmniLight3D or light is SpotLight3D:
+			result.append(light)
 	result.sort_custom(func(a: Light3D, b: Light3D) -> bool:
 		return a.global_position.distance_squared_to(_camera.global_position) < b.global_position.distance_squared_to(_camera.global_position))
 	if result.size() > 3:
@@ -961,7 +1124,7 @@ func _update_ground_feedback(delta: float) -> void:
 		var basis := Basis.IDENTITY.scaled(Vector3(size, 1.0, size))
 		_ripple_multimesh.set_instance_transform(index, Transform3D(basis, ripple["position"] as Vector3))
 		var color: Color = drop_color
-		color.a = (1.0 - t) * 0.45 * rain_amount
+		color.a = (1.0 - t) * 0.55 * rain_amount
 		_ripple_multimesh.set_instance_color(index, color)
 
 
@@ -987,6 +1150,7 @@ func _update_wetness() -> void:
 	if absf(ground_wetness - _last_wetness) < 0.02:
 		return
 	_last_wetness = ground_wetness
+	var forward_plus := _rendering_method == "forward_plus"
 	for entry in _wet_entries:
 		var material: StandardMaterial3D = entry["material"]
 		if material == null:
@@ -994,25 +1158,69 @@ func _update_wetness() -> void:
 		var base_albedo: Color = entry["albedo"]
 		var base_roughness: float = entry["roughness"]
 		var wet := clampf(ground_wetness, 0.0, 1.0)
-		material.albedo_color = base_albedo.darkened(0.28 * wet)
-		# Mobile 无 SSR：用 roughness + 环境反射 + 雾近似湿感；不要压到 0，
-		# 否则天空反射在 tile GPU 上容易变成过曝白斑。
-		material.roughness = maxf(lerpf(base_roughness, 0.32, 0.6 * wet), 0.32)
-		material.metallic = minf(material.metallic, 0.10)
+		material.albedo_color = base_albedo.darkened(0.22 * wet)
+		if forward_plus:
+			# 桌面有 SSR + 天空反射：湿沥青可以做到较低的粗糙度，让远处的
+			# 护栏/天空在路面上形成拉长的高光，而不是只有一层均匀的灰。
+			material.roughness = maxf(lerpf(base_roughness, 0.30, 0.85 * wet), 0.24)
+			# 湿沥青是电介质：保留/提高介电高光，但绝不能沿用某些反射类路面
+			# 材质的 metallic=0.85——那会把低角度太阳反射成一整团过曝白斑。
+			material.metallic = minf(material.metallic, 0.12)
+			# 路面类材质的介电高光在加载时被压成 0（避免 AC envmap 缺失导致
+			# 纯白反光）；湿路面必须把它找回一部分，否则 SSR 没有高光可反射。
+			# 0.12 已足够让湿润表面接住天空/护栏的反射；再高会在低太阳角度
+			# 把太阳反射成一整团过曝白斑（Forward+ 的 bloom 会把它放大）。
+			var base_specular: Variant = entry.get("metallic_specular")
+			if base_specular != null:
+				material.set("metallic_specular",
+					lerpf(float(base_specular), 0.10, wet))
+		else:
+			# Mobile 无 SSR：靠低粗糙度 + 天空/环境 cubemap 反射近似湿感。
+			# 粗糙度 0.22~0.24、介电高光 0.20：能看到路面拉长的天光，但
+			# 比桌面（0.24 粗糙度 + SSR）保守，避免低端 GPU 过曝白斑。
+			material.roughness = maxf(lerpf(base_roughness, 0.24, 0.72 * wet), 0.22)
+			material.metallic = minf(material.metallic, 0.08)
+			var base_specular: Variant = entry.get("metallic_specular")
+			if base_specular != null:
+				material.set("metallic_specular",
+					lerpf(float(base_specular), 0.20, wet))
 
 
 func _update_atmosphere() -> void:
 	if _environment == null:
 		return
+	# 值没变就不碰 Environment：每次赋值都会把环境标脏并重算一堆 uniform。
+	# 雨量/湿度以秒级变化，2e-3 的死区足够跳过浮点抖动与无意义重写。
+	if absf(rain_amount - _atmo_rain) < ATMOSPHERE_EPSILON \
+			and absf(ground_wetness - _atmo_wet) < ATMOSPHERE_EPSILON:
+		return
+	_atmo_rain = rain_amount
+	_atmo_wet = ground_wetness
 	var wet := clampf(ground_wetness, 0.0, 1.0)
 	var rain := clampf(rain_amount, 0.0, 1.0)
-	# 仅 depth fog / height fog；Mobile 禁用 volumetric_fog。
+	var forward_plus := _rendering_method == "forward_plus"
+	# 仅 depth fog / height fog；体积雾只在 Forward+ 桌面开。
 	_environment.fog_enabled = rain > 0.02 or wet > 0.05
 	_environment.fog_density = lerpf(0.0004, fog_density, maxf(rain, wet * 0.7))
 	_environment.fog_light_color = Color(0.52, 0.58, 0.68).lerp(Color(0.40, 0.45, 0.55), rain)
+	_environment.fog_aerial_perspective = lerpf(0.3, 0.6, rain)
 	if _environment.get("fog_height") != null:
 		_environment.set("fog_height", 0.0)
 		_environment.set("fog_height_density", lerpf(0.0, 0.08, rain))
+	if forward_plus:
+		# 湿路面 + 雨幕需要屏幕空间反射和体积雾才能“像湿的”：SSR 提供拉长的
+		# 护栏/天空高光，体积雾把雨丝的远景层次压出来。晴天/干地不付这笔钱。
+		_environment.ssr_enabled = rain > 0.02 or wet > 0.05
+		_environment.volumetric_fog_enabled = rain > 0.05 or wet > 0.2
+		if _environment.volumetric_fog_enabled:
+			_environment.volumetric_fog_density = lerpf(0.0015, 0.018, maxf(rain, wet * 0.6))
+			_environment.volumetric_fog_albedo = Color(0.62, 0.68, 0.78)
+			_environment.volumetric_fog_anisotropy = lerpf(0.35, 0.62, rain)
+			_environment.volumetric_fog_length = lerpf(96.0, 56.0, rain)
+			_environment.volumetric_fog_sky_affect = 0.25
+	else:
+		# Mobile / Compatibility 不支持体积雾：显式关掉，避免引擎告警。
+		_environment.volumetric_fog_enabled = false
 	_environment.adjustment_enabled = true
 	_environment.adjustment_contrast = lerpf(1.0, 0.88, rain)
 	_environment.adjustment_saturation = lerpf(1.0, 0.82, rain)
@@ -1040,8 +1248,9 @@ func _update_screen_overlay() -> void:
 	var tier := clampi(int(quality), 0, 2)
 	var allowed := screen_drops_enabled and tier > 0 and not mobile_low_end
 	if _compat_fallback:
-		# Compatibility 没有 GPU 粒子；屏幕雨痕是显式降级路径。
-		allowed = rain_amount > 0.02
+		# Compatibility 没有 GPU 粒子；屏幕雨痕是显式降级路径，但仍然尊重
+		# 用户关掉 screen_drops_enabled 的选择（README 的验证项依赖它）。
+		allowed = screen_drops_enabled and rain_amount > 0.02
 	_screen_rect.visible = allowed
 	if allowed:
 		_screen_material.set_shader_parameter("intensity", clampf(rain_amount * 0.55, 0.0, 0.55))
@@ -1092,6 +1301,9 @@ func _collect_wet_materials() -> void:
 				"material": duplicate,
 				"albedo": duplicate.albedo_color,
 				"roughness": duplicate.roughness,
+				# 桌面湿路面要恢复介电高光（加载时被压成 0 防止纯白反光），
+				# 记下原值，干了再还原。
+				"metallic_specular": duplicate.get("metallic_specular"),
 			})
 			if _wet_entries.size() >= max_wet_materials:
 				break

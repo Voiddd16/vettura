@@ -18,5 +18,5 @@ void fragment() {
     float ring = smoothstep(0.55, 0.72, r) * (1.0 - smoothstep(0.78, 0.98, r));
     float inner = smoothstep(0.10, 0.20, r) * (1.0 - smoothstep(0.24, 0.36, r));
     ALBEDO = ripple_color;
-    ALPHA = (ring * 0.35 + inner * 0.12) * COLOR.a;
+    ALPHA = (ring * 0.50 + inner * 0.18) * COLOR.a;
 }

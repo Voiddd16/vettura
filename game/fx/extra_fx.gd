@@ -46,10 +46,15 @@ func _ensure_environment() -> void:
 				return
 	_world_env = WorldEnvironment.new()
 	_world_env.name = "ExtraFXEnvironment"
-	_environment = Environment.new()
-	_environment.background_mode = Environment.BG_SKY
-	_environment.sky = Sky.new()
-	_environment.sky.sky_material = ProceduralSkyMaterial.new()
+	# 没有现成环境时复用工程默认环境，避免独立挂 ExtraFX 的场景丢掉天空/tonemap。
+	var base := load("res://game_environment.tres") as Environment
+	if base != null:
+		_environment = base.duplicate(true) as Environment
+	else:
+		_environment = Environment.new()
+		_environment.background_mode = Environment.BG_SKY
+		_environment.sky = Sky.new()
+		_environment.sky.sky_material = ProceduralSkyMaterial.new()
 	_world_env.environment = _environment
 	add_child(_world_env)
 
@@ -64,28 +69,38 @@ func _apply_settings() -> void:
 	var forward_plus := RenderingServer.get_current_rendering_method() == "forward_plus"
 
 	_environment.glow_enabled = medium
-	_environment.glow_intensity = _float("strength", 0.28)
-	_environment.glow_bloom = 0.035
-	_environment.glow_hdr_threshold = 1.2
+	_environment.glow_intensity = _float("strength", 0.18)
+	_environment.glow_bloom = _float("bloom", 0.02)
+	_environment.glow_hdr_threshold = _float("threshold", 1.5)
+	_environment.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
 
-	if high and forward_plus:
+	# 桌面 Forward+ 默认开 SSAO/SSIL（基线环境已经配好半径/强度）；ext_config
+	# 只覆盖记录里显式给出的强度，不把天气系统/基线环境的设置整片关掉。
+	if forward_plus and medium:
 		_environment.ssao_enabled = true
-		_environment.ssao_radius = 1.2
-		_environment.ssao_intensity = _float("ssao_strength", 1.5)
 		_environment.ssil_enabled = true
-		_environment.ssil_intensity = 0.4
+		if _settings.has("ssao_strength"):
+			_environment.ssao_intensity = _float("ssao_strength", 1.15)
+		if _settings.has("ssil_strength"):
+			_environment.ssil_intensity = _float("ssil_strength", 0.55)
 	else:
 		_environment.ssao_enabled = false
 		_environment.ssil_enabled = false
 
-	# SSR 在 mobile 渲染器上不可用；即使配置写了也保持关闭。
-	_environment.ssr_enabled = false
+	# SSR 是否开启由天气系统按湿度/降雨决定；ext_config 只有显式写了
+	# `ssr` 时才覆盖，避免这里把湿路面的反射整片关掉。
+	if _settings.has("ssr"):
+		_environment.ssr_enabled = forward_plus and high and _float("ssr", 1.0) > 0.5
 
 	_environment.tonemap_mode = Environment.TONE_MAPPER_ACES
 	_environment.adjustment_enabled = true
-	_environment.adjustment_brightness = _float("brightness", 1.0)
-	_environment.adjustment_contrast = _float("contrast", 1.0)
-	_environment.adjustment_saturation = _float("saturation", 1.0)
+	# 没有记录时保留基线环境调好的轻微 contrast/saturation；有记录才覆盖。
+	_environment.adjustment_brightness = _float("brightness",
+		_environment.adjustment_brightness)
+	_environment.adjustment_contrast = _float("contrast",
+		_environment.adjustment_contrast)
+	_environment.adjustment_saturation = _float("saturation",
+		_environment.adjustment_saturation)
 
 
 func _float(key: String, fallback: float) -> float:

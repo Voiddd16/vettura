@@ -41,10 +41,16 @@ var _grid_rows := 2
 var _track_root := ""
 var _logged := false
 var _variant_weights: Array[float] = []
+var _variant_weight_total := 1.0
+var _density_clamped := 1.0
 var _group_count := 0
 var _mask_main_threshold := 0.0
 var _full_track := false
 var _full_built := false
+var _is_mobile := false
+var _build_radius := BUILD_RADIUS
+var _wetness := 0.0
+var _weather_timer := 0.0
 
 ## Vector2i(chunk_x, chunk_z) -> Array[PackedVector3Array]（每个三角形 3 点）。
 var _chunks: Dictionary = {}
@@ -56,6 +62,9 @@ func setup(world: WorldBody, records: Array, quality_name: String) -> void:
 	_world = world
 	quality = quality_name
 	_rng.seed = 0x5EED
+	_is_mobile = OS.get_name() == "Android" or OS.get_name() == "iOS" \
+		or RenderingServer.get_current_rendering_method() == "mobile"
+	_build_radius = 58.0 if _is_mobile else BUILD_RADIUS
 	_track_root = String(world.track_root())
 	_apply_records(records)
 	_max_instances = _quality_count()
@@ -87,6 +96,8 @@ func _process(delta: float) -> void:
 	if _timer <= 0.0 and moved > REBUILD_MOVE:
 		_timer = 0.9
 		_rebuild()
+
+
 
 
 func _apply_records(records: Array) -> void:
@@ -129,6 +140,20 @@ func _apply_records(records: Array) -> void:
 
 
 func _quality_count() -> int:
+	# 移动端把数量压到大约桌面的 55%，但保留近景密度（build radius 也缩到
+	# 58m），画面不会一眼看出“秃”，GPU/CPU 实例更新成本明显下降。
+	if _is_mobile:
+		match quality:
+			"off":
+				return 0
+			"low":
+				return 900
+			"medium":
+				return 3200
+			"high":
+				return 7200
+			_:
+				return 10000
 	match quality:
 		"off":
 			return 0
@@ -147,6 +172,10 @@ func _create_multimeshes() -> void:
 	_material.shader = GRASS_SHADER
 	_material.set_shader_parameter("grass_atlas", _atlas)
 	_material.set_shader_parameter("tint", Color(1, 1, 1, 1).darkened(1.0 - clampf(color_factor, 0.2, 1.0) * 0.2))
+	# 距离淡出：草只铺到 build radius，边缘用 alpha 淡出，避免移动时出现
+	# 一圈“草突然消失”的硬边；移动端淡出更早，减少远景 overdraw。
+	_material.set_shader_parameter("fade_start", 34.0 if _is_mobile else 46.0)
+	_material.set_shader_parameter("fade_end", 56.0 if _is_mobile else 74.0)
 
 	var cells := mini(_grid_cols * _grid_rows, 8)
 	if _group_count > cells:
@@ -154,6 +183,10 @@ func _create_multimeshes() -> void:
 	if _variant_weights.size() < cells:
 		_variant_weights.resize(cells)
 		_variant_weights.fill(1.0)
+	_variant_weight_total = 0.0
+	for weight in _variant_weights:
+		_variant_weight_total += maxf(0.0, weight)
+	_density_clamped = clampf(density, 0.2, 2.0)
 	for index in cells:
 		var cell := Vector2(index % _grid_cols, index / _grid_cols)
 		var mesh := _make_blade_mesh(cell)
@@ -294,6 +327,7 @@ func _tint_material(mesh_instance: MeshInstance3D, surface: int, material: Mater
 func _rebuild() -> void:
 	if _world == null or _camera == null or _variants.is_empty():
 		return
+	var started := Time.get_ticks_usec()
 	_last_build = _camera.global_position
 	var buckets: Array[Array] = []
 	for _i in _variants.size():
@@ -308,20 +342,16 @@ func _rebuild() -> void:
 		_place_from_surface_map(buckets)
 
 	var total := 0
-	for index in _variants.size():
-		var multimesh := _variant_meshes[index]
-		var items: Array = buckets[index]
-		multimesh.instance_count = 0
-		multimesh.instance_count = items.size()
+	for items: Array in buckets:
 		total += items.size()
-		for item_index in items.size():
-			var item: Dictionary = items[item_index]
-			multimesh.set_instance_transform(item_index, item["transform"])
-			multimesh.set_instance_color(item_index, item["color"])
+	_apply_buckets(buckets)
 	if not _logged:
 		_logged = true
 		print("[grass] instances=%d variants=%d atlas=%s geometry=%s" % [
 			total, _variants.size(), _atlas != null, _used_geometry])
+	if OS.get_environment("VETTURA_GRASS_TIMING") == "1":
+		print("[grass] rebuild %.1f ms instances=%d geometry=%s" % [
+			(Time.get_ticks_usec() - started) / 1000.0, total, _used_geometry])
 
 
 func _candidate_triangles() -> Array:
@@ -330,7 +360,7 @@ func _candidate_triangles() -> Array:
 		return result
 	var cx := int(floor(_last_build.x / CHUNK_SIZE))
 	var cz := int(floor(_last_build.z / CHUNK_SIZE))
-	var reach := int(ceil(BUILD_RADIUS / CHUNK_SIZE))
+	var reach := int(ceil(_build_radius / CHUNK_SIZE))
 	for dx in range(-reach, reach + 1):
 		for dz in range(-reach, reach + 1):
 			var key := Vector2i(cx + dx, cz + dz)
@@ -352,33 +382,58 @@ func _place_from_triangles(candidates: Array, buckets: Array[Array]) -> void:
 			r1 = 1.0 - r1
 			r2 = 1.0 - r2
 		var point := triangle[0] + (triangle[1] - triangle[0]) * r1 + (triangle[2] - triangle[0]) * r2
-		if point.distance_to(_last_build) > BUILD_RADIUS:
+		if point.distance_to(_last_build) > _build_radius:
 			continue
 		_add_instance(point, buckets)
 		placements += 1
 
 
+## 回退撒点的网格步长（米）。旧实现用“随机点 + 拒绝采样”，每次重建要
+## 向 Rust 查询十几万次表面（Daytona 实测 12 次尝试/株 × 14000 株）；
+## 改成先按 1.25 m 网格筛出真正长草的位置，再从候选点里抽样，查询量降一个
+## 数据级，草的宏观分布仍是“草地区域内均匀”，肉眼看不出差别。
+const GRASS_SAMPLE_STEP := 1.25
+
 func _place_from_surface_map(buckets: Array[Array]) -> void:
-	var attempts := _max_instances * 12
-	var placements := 0
-	for _i in attempts:
-		if placements >= _max_instances:
-			break
-		var angle := _rng.randf_range(0.0, TAU)
-		var dist := sqrt(_rng.randf()) * BUILD_RADIUS
-		var x := _last_build.x + cos(angle) * dist
-		var z := _last_build.z + sin(angle) * dist
-		var kind := String(_world.surface_kind_at(x, z))
-		if not _is_grass_kind(kind):
-			continue
-		var y := float(_world.surface_height_at(x, z))
-		_add_instance(Vector3(x, y, z), buckets)
-		placements += 1
+	var points := _grass_candidate_points()
+	if points.is_empty():
+		return
+	# 格心高度代表整格：抖动只在本格内（±0.35 格 ≈ 0.44 m），普通赛道边坡的
+	# 高差在厘米级，草叶 0.9 m 高，看不出台阶；这样每株不用再跨语言查一次
+	# 高度（Daytona 实测能省 14 ms/次重建）。
+	var half := GRASS_SAMPLE_STEP * 0.35
+	for _i in _max_instances:
+		var base: Vector3 = points[_rng.randi_range(0, points.size() - 1)]
+		var point := base + Vector3(
+			_rng.randf_range(-half, half), 0.0, _rng.randf_range(-half, half))
+		_add_instance(point, buckets)
+
+
+## 按网格筛出当前相机附近真正长草（Grass/Gravel/Sand/Dirt）的地面点。
+func _grass_candidate_points() -> Array[Vector3]:
+	var points: Array[Vector3] = []
+	var step := GRASS_SAMPLE_STEP
+	var reach := int(ceil(_build_radius / step))
+	var center_x := int(floor(_last_build.x / step))
+	var center_z := int(floor(_last_build.z / step))
+	var radius_sq := _build_radius * _build_radius
+	for dz in range(-reach, reach + 1):
+		for dx in range(-reach, reach + 1):
+			var x := (center_x + dx) * step
+			var z := (center_z + dz) * step
+			var ox := x - _last_build.x
+			var oz := z - _last_build.z
+			if ox * ox + oz * oz > radius_sq:
+				continue
+			var sample: Vector2 = _world.surface_sample_at(x, z)
+			if _is_grass_kind_id(int(sample.x)):
+				points.append(Vector3(x, sample.y, z))
+	return points
 
 
 func _add_instance(point: Vector3, buckets: Array[Array]) -> void:
 	var variant := _choose_variant()
-	var scale := _rng.randf_range(0.55, 1.6) * clampf(density, 0.2, 2.0)
+	var scale := _rng.randf_range(0.55, 1.6) * _density_clamped
 	var basis := Basis(Vector3.UP, _rng.randf_range(0.0, TAU))
 	basis = basis.scaled(Vector3(scale, scale, scale))
 	var color := Color(
@@ -396,16 +451,11 @@ func _add_instance(point: Vector3, buckets: Array[Array]) -> void:
 func _choose_variant() -> int:
 	if _variants.is_empty():
 		return 0
-	if _variant_weights.is_empty():
+	if _variant_weights.is_empty() or _variant_weight_total <= 0.0:
 		return _rng.randi_range(0, _variants.size() - 1)
-	var total := 0.0
-	for weight in _variant_weights:
-		total += maxf(0.0, weight)
-	if total <= 0.0:
-		return _rng.randi_range(0, _variants.size() - 1)
-	var roll := _rng.randf() * total
+	var roll := _rng.randf() * _variant_weight_total
 	for index in mini(_variants.size(), _variant_weights.size()):
-		roll -= maxf(0.0, _variant_weights[index])
+		roll -= _variant_weights[index]
 		if roll <= 0.0:
 			return index
 	return _variants.size() - 1
@@ -452,7 +502,7 @@ func _build_full_track() -> void:
 				r1 = 1.0 - r1
 				r2 = 1.0 - r2
 			var point := triangle[0] + (triangle[1] - triangle[0]) * r1 + (triangle[2] - triangle[0]) * r2
-			if point.distance_to(_last_build) > BUILD_RADIUS:
+			if point.distance_to(_last_build) > _build_radius:
 				continue
 			_add_instance(point, buckets)
 			local_placed += 1
@@ -483,8 +533,9 @@ func _apply_buckets(buckets: Array[Array]) -> void:
 			multimesh.set_instance_color(item_index, item["color"])
 
 
-func _is_grass_kind(kind: String) -> bool:
-	return kind == "Grass" or kind == "Gravel" or kind == "Dirt" or kind == "Sand"
+func _is_grass_kind_id(kind_id: int) -> bool:
+	# 对应 `vettura_track::SurfaceKind::ALL` 的下标：Grass / Gravel / Sand / Dirt。
+	return kind_id == 3 or kind_id == 4 or kind_id == 5 or kind_id == 6
 
 
 func _under_vehicle(node: Node) -> bool:
@@ -538,9 +589,9 @@ func _make_procedural_atlas() -> Texture2D:
 			var bend := rng.randf_range(-10.0, 10.0)
 			var height := rng.randf_range(34.0, 60.0)
 			var green := Color(
-				rng.randf_range(0.28, 0.45),
-				rng.randf_range(0.55, 0.82),
-				rng.randf_range(0.18, 0.34),
+				rng.randf_range(0.20, 0.34),
+				rng.randf_range(0.40, 0.62),
+				rng.randf_range(0.13, 0.24),
 				1.0
 			)
 			for y in int(height):

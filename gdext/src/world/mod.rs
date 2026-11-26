@@ -573,10 +573,32 @@ impl WorldBody {
                 let sample = map.sample(glam::Vec3::new(x, 10_000.0, z));
                 map.table()
                     .get(sample.surface)
-                    .map(|properties| format!("{:?}", properties.kind))
+                    .map(|properties| properties.kind.name())
             })
-            .map(|name| GString::from(&name))
+            .map(GString::from)
             .unwrap_or_default()
+    }
+
+    /// 一次查询同时拿到表面类型编号与高度，给 Grass/Rain FX 的高频采样用。
+    ///
+    /// 返回 `Vector2(kind_index, height_m)`，`kind_index` 对应
+    /// `vettura_track::SurfaceKind::ALL` 的下标（Grass=3、Gravel=4、Sand=5、
+    /// Dirt=6）；越界/无赛道返回 `x = -1`。比 `surface_kind_at()` +
+    /// `surface_height_at()` 少一次跨语言调用，也不会为每个采样点分配字符串
+    /// ——`GrassFX` 的回退路径每次重建会采样十几万个点。
+    #[func]
+    pub fn surface_sample_at(&self, x: f32, z: f32) -> Vector2 {
+        let Some(world) = self.world.as_ref() else {
+            return Vector2::new(-1.0, 0.0);
+        };
+        let map = world.surface_map();
+        let point = glam::Vec3::new(x, 10_000.0, z);
+        let (sample, height) = map.sample_surface_and_height(point);
+        let kind = map
+            .table()
+            .get(sample.surface)
+            .map_or(-1.0, |properties| properties.kind.index() as f32);
+        Vector2::new(kind, height.unwrap_or(0.0))
     }
 
     /// 该点的积水深度（米）。

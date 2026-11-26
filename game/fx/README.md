@@ -16,7 +16,8 @@ add_child(fx)
 
 - 扫描 track / car 的 `extension/ext_config.ini`；
 - 读 `AcVisualCompat.inspect_json()` 的 `ext_config.records`；
-- 按模块创建下面的 FX；天气从 `WorldBody.get_weather()` 每帧同步。
+- 按模块创建下面的 FX；天气从 `WorldBody.get_weather()` 以 5 Hz 同步
+  （雨量/湿度以秒计，5 Hz + 值死区足够，避免每帧跨语言读取和重写环境）。
 
 也可以手动：
 
@@ -29,8 +30,8 @@ fx.attach(world, [car], camera)
 | 文件 | 效果 | 数据来源 |
 | --- | --- | --- |
 | `rain/rain_system.gd` | Mobile 3D 雨：双层 GPUParticles 雨丝、湿材质、水花、MultiMesh 涟漪、可选屏幕雨痕 | `RAIN_FX` / 天气 |
-| `grass_fx.gd` + `grass_blade.gdshader` | 按 GRASS_MATERIALS 三角形分块铺草 + 图集草卡片 + 风摆 | `GRASS_FX` + track mesh |
-| `lighting_fx.gd` | `LIGHT_SERIES` / `EMISSIVE_LIGHT` / `LIGHT_POLLUTION` → Omni/SpotLight3D | `LIGHTING*` records |
+| `grass_fx.gd` + `grass_blade.gdshader` | 按 GRASS_MATERIALS 三角形分块铺草 + 图集草卡片 + 风摆 + alpha-to-coverage 软边 + 湿草反射 | `GRASS_FX` + track mesh + 天气 |
+| `lighting_fx.gd` | `LIGHT_SERIES` / `EMISSIVE_LIGHT` / `LIGHT_POLLUTION` → Omni/SpotLight3D；赛道/车辆记录分开搜，车灯跟随网格 | `LIGHTING*` records |
 | `particles_fx.gd` | `SMOKE_*` / `PARTICLES_*` → GPUParticles3D | particle records |
 | `brake_disc_fx.gd` | 刹车盘温度 → emission | `BRAKE_DISC*` + `brake_temperature_c()` |
 | `tyres_fx.gd` | `TYRES_FX_CUSTOMTEXTURE_*` → 轮胎贴图（含 zip） | tyre records |
@@ -47,6 +48,14 @@ fx.attach(world, [car], camera)
 
 湿材质默认最多 1400 个 surface；草 medium 6000（相机局部）、high 14000（局部高密度）、ultra 48000（全赛道底色 + 局部高密度）；灯光最多 48 盏。
 这些是 v1 的移动端安全上限，后续按真实性能数据调。
+
+### 每帧预算
+
+- 天气同步 5 Hz；刹车盘发光 20 Hz；赛道灯光能量 4 Hz（值不变不写）；
+- 雨系统的灯光/粒子/雾/屏幕叠层 5~10 Hz 刷新，干燥天气直接跳过整条更新；
+- 草的表面采样按 1.25 m 网格筛候选点（`WorldBody.surface_sample_at`，一次
+  同时返回类型编号与高度），避免每株做一次字符串格式化 + 两次跨语言查询；
+  需要 A/B 时设 `VETTURA_GRASS_TIMING=1` 打印单次重建耗时。
 
 ## 验证
 

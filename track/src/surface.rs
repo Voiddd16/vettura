@@ -55,6 +55,43 @@ impl SurfaceKind {
         SurfaceKind::Water,
     ];
 
+    /// Stable index in [`Self::ALL`]. The GDExtension bridge exposes this to
+    /// GDScript so per-frame surface queries don't have to format an enum into
+    /// a `String` (grass placement does tens of thousands of these).
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            SurfaceKind::Asphalt => 0,
+            SurfaceKind::Concrete => 1,
+            SurfaceKind::Curb => 2,
+            SurfaceKind::Grass => 3,
+            SurfaceKind::Gravel => 4,
+            SurfaceKind::Sand => 5,
+            SurfaceKind::Dirt => 6,
+            SurfaceKind::Snow => 7,
+            SurfaceKind::Ice => 8,
+            SurfaceKind::Water => 9,
+        }
+    }
+
+    /// Human-readable name; same text as `Debug` (kept identical so existing
+    /// GDScript comparisons such as `"Grass"` keep working).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            SurfaceKind::Asphalt => "Asphalt",
+            SurfaceKind::Concrete => "Concrete",
+            SurfaceKind::Curb => "Curb",
+            SurfaceKind::Grass => "Grass",
+            SurfaceKind::Gravel => "Gravel",
+            SurfaceKind::Sand => "Sand",
+            SurfaceKind::Dirt => "Dirt",
+            SurfaceKind::Snow => "Snow",
+            SurfaceKind::Ice => "Ice",
+            SurfaceKind::Water => "Water",
+        }
+    }
+
     /// Baseline properties. Grip values are dimensionless friction
     /// coefficients relative to a dry racing slick on asphalt.
     pub const fn properties(self) -> SurfaceProperties {
@@ -477,6 +514,16 @@ impl SurfaceMap {
         self.mesh_index.as_deref()
     }
 
+    /// 该 `(x, z)` 下方网格表面的高度；没有 mesh surface 时返回 `None`。
+    ///
+    /// 便捷转发到 [`MeshSurfaceIndex::sample_height`]，给贴地效果（Grass/Rain
+    /// FX、碎片、调试标记）用。
+    pub fn sample_height(&self, position: Vec3) -> Option<f32> {
+        self.mesh_index
+            .as_ref()
+            .and_then(|index| index.sample_height(position))
+    }
+
     /// Sample the map at a world-space point.
     ///
     /// Surface patches are evaluated back-to-front (last patch wins). If no
@@ -508,6 +555,43 @@ impl SurfaceMap {
             surface,
             water_depth_m,
         }
+    }
+
+    /// Surface and mesh height from a single triangle lookup.
+    ///
+    /// [`Self::sample`] and [`Self::sample_height`] are convenient but each
+    /// walks the mesh surface index; FX placement (grass) asks for both at the
+    /// same point tens of thousands of times per rebuild, so expose a combined
+    /// query instead of paying for two spatial hash lookups.
+    pub fn sample_surface_and_height(&self, position: Vec3) -> (SurfaceSample, Option<f32>) {
+        let (x, z) = (position.x, position.z);
+        let mesh_entry = self
+            .mesh_index
+            .as_ref()
+            .and_then(|index| index.sample_entry(position));
+        let surface = self
+            .patches
+            .iter()
+            .rev()
+            .find(|patch| patch.shape.contains(x, z))
+            .map(|patch| patch.surface)
+            .or_else(|| mesh_entry.as_ref().map(|(_, surface)| *surface))
+            .unwrap_or(self.default_surface);
+
+        let water_depth_m = self
+            .puddles
+            .iter()
+            .filter(|puddle| puddle.shape.contains(x, z))
+            .map(|puddle| puddle.water_depth_m)
+            .fold(0.0f32, f32::max);
+
+        (
+            SurfaceSample {
+                surface,
+                water_depth_m,
+            },
+            mesh_entry.map(|(height, _)| height),
+        )
     }
 
     /// Convenience: just the surface id at a point.
@@ -803,6 +887,14 @@ mod tests {
         assert!(slope_at_crossing.abs() > 0.3, "{slope_at_crossing}");
         // Sideways travel leaves the phase alone.
         assert!((gravel.bump_m(Vec3::new(5.0, 0.0, 0.0), heading)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn surface_kind_indices_and_names_are_stable() {
+        for (index, kind) in SurfaceKind::ALL.iter().enumerate() {
+            assert_eq!(kind.index(), index);
+            assert_eq!(kind.name(), format!("{kind:?}"));
+        }
     }
 
     #[test]

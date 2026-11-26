@@ -1,4 +1,4 @@
-# Mobile 3D 雨天系统（Godot 4.3+ / Mobile）
+# 3D 雨天系统（Godot 4.3+ / Forward+ 与 Mobile）
 
 目录：
 
@@ -14,7 +14,8 @@ game/fx/rain/
   rain_refraction.gdshader # 可选镜头折射（BackBufferCopy，默认关闭）
 ```
 
-> 依赖：Godot 4.3+（工程 4.7 验证），Mobile / Vulkan / Metal。  
+> 参考：`mods/imitate/acc-shaders/custom/rain/accRainDrops_*`（深度软相交、
+> 法线/Fresnel 环境反射）与 `acc-weatherfx-base`（Garg–Nayar 光度模型）。
 > `RenderingServer.get_current_rendering_method()` 在 4.2+ 可用，返回
 > `forward_plus` / `mobile` / `gl_compatibility`。
 
@@ -23,10 +24,12 @@ game/fx/rain/
 | 部分 | 选择 | 理由 |
 | --- | --- | --- |
 | 雨滴 | **GPUParticles3D + 自定义 spatial shader** | 粒子模拟在 GPU；GDScript 不逐帧遍历粒子。Mobile 的 Vulkan/Metal 有 compute 通道，GPUParticles3D 可用。 |
-| 雨丝形状 | QuadMesh + vertex billboard + 屏幕空间倾斜 | 细长 quad 比 3D BoxMesh 便宜；按全局合速度倾斜；软 alpha 抑制亚像素闪烁。 |
+| 雨丝形状 | QuadMesh + vertex billboard + 屏幕空间倾斜 | 细长 quad 比 3D BoxMesh 便宜；按全局合速度倾斜；软 alpha + 亮头/拖尾抑制“白棍感”。 |
+| 雨丝颜色 | 背景亮度 + 边缘 Fresnel 环境色 | 参考 `accRainDrops_ps.fx`：边缘反射天空、中心偏折射，不再整条纯白。 |
+| 雨丝相交 | `hint_depth_texture` 深度软相交 | 靠近车/路面时淡出，避免硬切进几何体。 |
 | 地面涟漪 | **MultiMesh quad + shader** | Mobile 每 Mesh 最多 8 个 Decal；MultiMesh 无 Decal 投影开销，同屏最多 6 个实例，CPU 只更新这 6 个。 |
 | 水花 | GPUParticles3D + 小 SphereMesh | GPU 模拟；避免近处 quad 变白块。 |
-| 远景 | WorldEnvironment depth fog + height fog | 禁用 volumetric fog / FogVolume；Mobile 的替代方案。 |
+| 远景 | WorldEnvironment depth fog + height fog；Forward+ 加 volumetric fog | Mobile 不付体积雾开销；桌面雨幕有体积层次。 |
 | 全屏雨痕 | CanvasLayer + 程序化 canvas shader | 不读屏幕纹理；默认关闭，低画质强制关闭。 |
 | 抗锯齿 | MSAA 2x + FXAA | 不使用 TAA/FSR2；雨线靠软 alpha + 最小屏幕宽度 + 亮度抖动。 |
 
@@ -40,8 +43,8 @@ CPU 逐粒子会占用主线程，Mobile 上直接吃掉 16.7ms 预算的很大�
 
 目标：1080p、Mobile、60fps（16.7ms）/ 30fps（33.3ms）。
 
-- medium：总雨滴 3000（Large/Medium/Small/Fine 按粒径谱分配），水花 12，涟漪 4。
-- high：总雨滴 6000，水花 24，涟漪 6。
+- medium：桌面总雨滴 10000（Large/Medium/Small/Fine 按粒径谱分配），水花约 12，涟漪 6。
+- high：桌面总雨滴 16000，水花约 24，涟漪 6；移动端约 0.5 倍预算（medium 5000 / high 8000）。
 - 单根雨丝在 10m 处约 1.2–2px 宽、20–50px 长；平均覆盖约 50–100px²。
 - 目标 GPU 雨效：medium ≤1.5ms、high ≤3ms（真机 profiler 为准）。
 - 更多更小、更细的雨滴在 tile GPU 上观感更好，overdraw 也更可控。
@@ -73,42 +76,48 @@ camera.add_child(rain)
 2. 如果不想挂相机下，也可以放在场景根；脚本会自动查找当前 Camera3D。
 3. 与现有 `FxRuntime` 已自动接入：`game/fx/fx_runtime.gd` 会创建它并调用
    `setup(world, cars, records, camera)`。
-4. 世界环境：脚本只使用 `fog_enabled` / `fog_density` / `fog_light_color` /
-   `fog_height` / `fog_height_density`。不要打开 `volumetric_fog_enabled`。
+4. 世界环境：脚本使用 `fog_enabled` / `fog_density` / `fog_light_color` /
+   `fog_height` / `fog_height_density`；Forward+ 下额外按雨量开
+   `volumetric_fog_*` 与 `ssr_enabled`，Mobile 下显式关闭。
 5. Project Settings：
-   - `renderer/rendering_method = mobile`
+   - 桌面 `renderer/rendering_method = forward_plus`，
+     移动端 `rendering_method.mobile = mobile`
    - `rendering/anti_aliasing/quality/msaa_3d = 2x`（或按档位）
    - `rendering/anti_aliasing/quality/screen_space_aa = FXAA`
    - 不要启用 TAA / FSR2。
 6. 地面材质：脚本会复制匹配 `extension/ext_config.ini [RAIN_FX]` 的
    `PUDDLES/SOAKING/SMOOTH/ROUGH/LINES_MATERIALS` 的 `StandardMaterial3D`，
    按 `ground_wetness` 调整 albedo/roughness；没有筛选条件时才作用于全部赛道
-   材质（最多 `max_wet_materials` 个 surface）。
+   材质（最多 `max_wet_materials` 个 surface）。Forward+ 下把粗糙度降到
+   0.24 左右、恢复一部分 `metallic_specular`（0.10）并压低金属度，配合 SSR
+   让湿沥青接住天空/护栏反射；移动端没有 SSR，改为 0.22~0.24 粗糙度 +
+   0.20 介电高光，靠天空 cubemap 出高光。金属度封顶是为了避免低角度太阳
+   反射成白斑。
 
 ## Inspector 参数
 
 | 分组 | 参数 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | Rain | `rain_amount` | 0.6 | 0–1；联动粒子数量、水花、雾、湿度 |
+| Rain | `fall_speed_mps` | 13 | 整体下落速度；13 = 粒径谱的基准速度，其余按比例缩放 |
 | Rain | `wind_speed` / `wind_direction_deg` | 3 / 25 | m/s、度；决定雨丝倾角 |
-| Rain | `fall_speed_mps` | 13 | 雨滴下落速度 |
 | Rain | `turbulence` | 0.25 | 低频水平扰动 |
 | Drop Shape | `drop_width` | 0.011 | 世界宽度（m） |
-| Drop Shape | `drop_length` | 0.34 | 世界长度（m） |
-| Drop Shape | `stretch_multiplier` | 1.15 | 速度拉伸倍率 |
+| Drop Shape | `drop_length` | 0.34 | 拖影长度倍率（0.34 = 物理 `\|v\|·T` 的 1.0×） |
+| Drop Shape | `stretch_multiplier` | 1.15 | 额外长度倍率（1.15 = 1.0×） |
 | Drop Shape | `min_screen_width_px` | 1.25 | 最小屏幕宽度，抑制闪烁 |
-| Drop Shape | `drop_brightness` / `drop_color` | 1 / 蓝白 | 亮度/颜色 |
-| Drop Shape | `jitter_strength` | 0.18 | 每滴亮度抖动 |
+| Drop Shape | `drop_brightness` / `drop_color` | 1 / 灰蓝 | 亮度/颜色（默认不再用高饱和蓝白） |
+| Drop Shape | `jitter_strength` | 0.18 | 每滴亮度抖动，幅度 ±`jitter_strength/2` |
 | Ground | `ground_wetness` | 0.75 | 湿度；`auto_wetness_from_rain` 可自动跟随雨量 |
 | Ground | `splash_strength` | 0.65 | 水花/涟漪生成率 |
-| Ground | `ripple_size` / `max_ripples` | 0.45 / 4 | 涟漪尺寸/上限（硬上限 6） |
+| Ground | `ripple_size` / `max_ripples` | 0.45 / 6 | 涟漪尺寸/上限（硬上限 6） |
 | Atmosphere | `fog_density` | 0.012 | 雾最大密度 |
 | Atmosphere | `rain_visibility_distance` | 70 | 雨幕可见距离 |
-| Optics | `shutter_time` | 1/60 | 曝光积分窗口，范围 1/500–1/15 |
-| Optics | `exposure_gain` | 8 | τ/T 亮度增益，避免物理正确但不可见 |
+| Optics | `shutter_time` | 1/30 | 曝光积分窗口，范围 1/500–1/15；1/30 的拖影更接近雨丝 |
+| Optics | `exposure_gain` | 7 | τ/T 亮度增益；旧版 8 + 硬边 + 高亮让雨丝像白棍 |
 | Optics | `drop_size_scale` | 1 | 粒径谱整体缩放 |
-| Optics | `streak_softness` | 0.35 | 边缘软化 |
-| Optics | `internal_pattern_strength` | 0.55 | 散斑/拖尾高光 |
+| Optics | `streak_softness` | 0.45 | 横向软剖面/近景虚化 |
+| Optics | `internal_pattern_strength` | 0.40 | 纵向亮度扰动（单个弱高光） |
 | Optics | `background_response` | 0.85 | Garg–Nayar 的 β 近似 |
 | Optics | `backlit_boost` | 1.0 | 逆光边缘增强 |
 | Optics | `dof_enabled` | false | 可选 CameraAttributes DOF，Mobile 默认关 |
@@ -180,7 +189,7 @@ rain_visibility_distance=35, quality=MEDIUM
 
 - 改了 `rain_amount` 但地湿没变：检查 `auto_wetness_from_rain` 或 `set_weather`。
 - 粒子为零：检查渲染方法是否 `gl_compatibility`。
-- 雨丝糊成白板：距离相机太近；shader 会在约 1.3–3.8m 处淡出，别把发射盒缩到相机内部。
+- 雨丝糊成白板：距离相机太近；shader 会在约 2.0–5.0m 处淡出，并把长宽比限制在 2:1 以上，别把发射盒缩到相机内部。
 - 雾过头：`fog_density` 是最大值，`rain_amount` 会插值；不要同时开 volumetric fog。
 - 移动时雨跟着飘：保持 `local_coords=false`，只更新根节点位置，不继承相机旋转。
 

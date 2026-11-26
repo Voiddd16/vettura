@@ -9,6 +9,10 @@ var enabled := true
 var glow_threshold := 380.0
 var max_emissive := 1.0
 var _entries: Array = []
+## 刹车盘温度以秒计变化，20 Hz 已比仪表刷新更快；不必每帧重写 emission。
+const UPDATE_INTERVAL_S := 0.05
+const GLOW_EPSILON := 0.004
+var _timer := 0.0
 
 
 func setup(cars: Array, car_records: Array) -> void:
@@ -60,6 +64,10 @@ func _collect_car(car: VehicleBody) -> void:
 func _process(delta: float) -> void:
 	if not enabled or _entries.is_empty():
 		return
+	_timer -= delta
+	if _timer > 0.0:
+		return
+	_timer = UPDATE_INTERVAL_S
 	for entry in _entries:
 		var car: VehicleBody = entry["car"]
 		var material: StandardMaterial3D = entry["material"]
@@ -70,6 +78,11 @@ func _process(delta: float) -> void:
 			temperature = maxf(temperature, car.brake_temperature_c(wheel))
 		var excess := maxf(0.0, temperature - glow_threshold)
 		var glow := clampf(excess / 420.0, 0.0, 1.0)
+		# 温度没跨过可见阈值就不重写材质，避免每 50 ms 标脏同一批材质。
+		var previous: float = entry.get("glow", -1.0)
+		if absf(glow - previous) < GLOW_EPSILON and (glow > 0.001) == (previous > 0.001):
+			continue
+		entry["glow"] = glow
 		if glow <= 0.001:
 			material.emission_enabled = false
 			continue

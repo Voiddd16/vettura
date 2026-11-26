@@ -34,29 +34,38 @@ var _weather_fx: Node3D
 
 var _attached := false
 var _polls := 0
+## 天气转发节流：RainSystem 自己也会轮询 WorldBody，但 FxRuntime 需要把
+## 雨/湿度/风在 attach 后立刻推一次。5 Hz 足够覆盖以秒计的天气变化。
+const WEATHER_FORWARD_INTERVAL_S := 0.2
+var _weather_timer := 0.0
 
 
 func _ready() -> void:
 	set_process(true)
 
 
-func _process(_delta: float) -> void:
-	if not auto_attach:
-		return
+func _process(delta: float) -> void:
 	if not _attached:
+		if not auto_attach:
+			return
 		_polls += 1
 		if _polls % 10 != 0:
 			return
 		_try_attach()
 		return
-	if _world != null and is_instance_valid(_world):
-		var weather: Dictionary = _world.get_weather()
-		if _rain_fx != null and is_instance_valid(_rain_fx):
-			_rain_fx.set_weather(
-				float(weather.get("rain", 0.0)),
-				float(weather.get("wetness", 0.0)),
-				weather.get("wind", Vector3.ZERO) as Vector3
-			)
+	if _world == null or not is_instance_valid(_world):
+		return
+	_weather_timer -= delta
+	if _weather_timer > 0.0:
+		return
+	_weather_timer = WEATHER_FORWARD_INTERVAL_S
+	var weather: Dictionary = _world.get_weather()
+	if _rain_fx != null and is_instance_valid(_rain_fx):
+		_rain_fx.set_weather(
+			float(weather.get("rain", 0.0)),
+			float(weather.get("wetness", 0.0)),
+			weather.get("wind", Vector3.ZERO) as Vector3
+		)
 
 
 func attach(world: WorldBody, cars: Array, camera: Camera3D = null) -> void:
@@ -127,6 +136,11 @@ func _build_effects() -> void:
 		_rain_fx.quality = _quality_enum()
 		add_child(_rain_fx)
 		_rain_fx.setup(_world, _cars, track_records, _camera)
+		# FxRuntime 已经按 5 Hz 统一转发天气，关掉 RainSystem 自己的每帧轮询，
+		# 避免同一条天气数据被跨语言读取两次。手动 attach（auto_attach=false）
+		# 时仍让 RainSystem 自己跟随，避免用户忘了每帧喂天气。
+		_rain_fx.auto_weather = not auto_attach
+		_weather_timer = 0.0
 
 	if enable_grass:
 		_grass_fx = load("res://game/fx/grass_fx.gd").new()
