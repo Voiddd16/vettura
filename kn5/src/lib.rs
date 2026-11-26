@@ -24,8 +24,8 @@ pub mod synth;
 mod tests;
 
 pub use dds::{
-    DdsError, DdsFormat, DdsInfo, DdsLayout, fix_orphan_pitch_value, layout as dds_layout,
-    strip_mip_levels, truncate_to_base_level, truncate_to_declared_mips,
+    DdsError, DdsFormat, DdsInfo, DdsLayout, DecodedBase, decode_base_rgba, fix_orphan_pitch_value,
+    layout as dds_layout, strip_mip_levels, truncate_to_base_level, truncate_to_declared_mips,
 };
 pub use error::{Error, Result};
 pub use model::{

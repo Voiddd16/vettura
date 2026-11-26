@@ -14,6 +14,7 @@ pub mod builder;
 pub mod cache;
 pub mod convert;
 pub mod material;
+pub mod merge;
 pub mod mesh;
 pub mod scene;
 pub mod texture;

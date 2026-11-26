@@ -110,10 +110,20 @@ pub struct MaterialParams {
     pub roughness: f32,
     pub metallic: f32,
     pub specular: f32,
+    /// 是否关掉 Godot 的介电高光（`metallic_specular`）。AC 的反射/多层
+    /// fresnel 类材质靠 envmap+fresnel 表现高光，我们没有 AC 的 envmap，
+    /// 让它走 Godot 默认天空/日光会把路面反射成一整片纯白——见 material.rs。
+    pub specular_suppressed: bool,
     pub normal_scale: f32,
     /// `ksEmissive` 的 ValueC（RGB）。
     pub emission: Color,
     pub emission_enabled: bool,
+    /// 自发光贴图（`ksEmissive` 用 txDiffuse，`*_emissive` 优先 txEmissive）。
+    /// 只有自发光类 shader 才填；普通材质的 ksEmissive 仍只作为纯色发光。
+    pub emission_texture: Option<String>,
+    /// 自发光强度：把 `ksEmissive` 的 RGB 归一化后，最大值作为能量倍率，
+    /// 避免 `Color` 分量 > 1 在部分后端被截断。
+    pub emission_energy: f32,
     /// `ksAlphaRef`；`alpha_tested` 时 Godot 走 alpha scissor。
     pub alpha_scissor: f32,
     pub alpha_tested: bool,
@@ -129,6 +139,10 @@ pub struct MaterialParams {
     pub opacity: f32,
     /// `isAdditive == 2` 且不是轮胎 shader → 车漆（清漆层）。
     pub car_paint: bool,
+    /// 树叶/草/旗帜类材质：双面渲染，否则单面卡片从背面看会消失。
+    pub foliage: bool,
+    /// 车窗/挡风玻璃：Forward+ 下开折射，Mobile 保持纯半透明。
+    pub glass: bool,
     /// `DepthMode::Off` / `NoWrite`。
     pub depth_test_disabled: bool,
     pub depth_opaque_only: bool,
@@ -170,22 +184,100 @@ impl MaterialParams {
             .property("ksAmbient")
             .unwrap_or(0.0)
             .clamp(0.0, 4.0);
-        let albedo_scale = (0.75 * diffuse + 0.25 * ambient).clamp(0.05, 4.0);
+        // 下限 0.35：Nürburgring 等新 mod 的路面常写 ksDiffuse=0.12 /
+        // ksAmbient=0.23（AC 里靠 detail 层 + envmap 提亮），旧下限 0.05 会让
+        // 路面黑成一片。0.35 是“任何贴图都能读出来”的通用下限，同时不影响
+        // 本来就亮的材质。
+        let albedo_scale = (0.75 * diffuse + 0.25 * ambient).clamp(0.35, 4.0);
 
         // `ksPerPixelReflection`（护栏玻璃、看台墙面、水面、车手玻璃）在 AC 里
         // 是“反射环境”的材质：albedo 被刻意压暗，亮度来自环境反射。Godot 没有
         // 纯反射材质，金属度 1.0 是最接近的表达（金属表面对天空/环境反射）。
         // 这类材质的 albedo 不再往下压，否则反射也被染色到看不见。
         let reflective = material.shader.eq_ignore_ascii_case("ksPerPixelReflection");
+        // 反射类 + 多层 fresnel（沥青/湿路面/看台墙）关掉介电高光，避免
+        // Godot 用默认天空/日光把它反射成纯白（AC 原本靠 envmap 控制强度）。
+        // `ksSpecular >= 1` 是 AC 路面/护栏这类"强反射但无 envmap"材质的典型
+        // 特征（车漆一般 0.3~0.4，玻璃走 reflective 分支），一并抑制。
+        let specular_suppressed = reflective
+            || material
+                .shader
+                .eq_ignore_ascii_case("ksMultilayer_fresnel_nm")
+            || material.property("ksSpecular").is_some_and(|s| s >= 1.0);
         // 玻璃是电介质，不能走金属的 0.85——半透明金属在 Godot 里会黑成一片。
         let glass = is_glass(material);
         let metallic = if reflective && !glass { 0.85 } else { 0.0 };
+
+        // 路面/路肩的实际沥青粗糙度在 0.6~0.9 之间；AC 的 `ksSpecularEXP`
+        // 动辄 200+（换算成 roughness 0.08），在 Godot 里会把天空反射成一条
+        // 刺眼的白色亮带（低角度看路面时尤其明显），完全不像沥青。给路面类
+        // 材质设 0.6 的下限——只影响"路面"，车漆/内饰的镜面感保持不变。
+        let mut roughness = roughness_from_specular_exp(material.property("ksSpecularEXP"));
+        let name_lower = material.name.to_ascii_lowercase();
+        let shader_lower = material.shader.to_ascii_lowercase();
+        let road_surface = [
+            "road", "rda", "asph", "tarmac", "oval", "surface", "line", "kerb", "apron", "pitlane",
+            "safara", "safera", "concrete", "conc_",
+        ]
+        .iter()
+        .any(|key| name_lower.contains(key))
+            || material
+                .shader
+                .eq_ignore_ascii_case("ksMultilayer_fresnel_nm");
+        if road_surface {
+            roughness = roughness.max(0.6);
+        }
 
         let opacity = material_opacity(material);
         let emission_values = material.property_values("ksEmissive");
         let emission_rgb = emission_values
             .map(|value| value.value_c)
             .unwrap_or([0.0; 3]);
+
+        // 自发光：`ksEmissive` / `ksPerPixelMultiMap_emissive` 用贴图当发光蒙版。
+        // 旧实现只把 ksEmissive 的 RGB 写成纯色，车灯/屏幕/招牌全部变成一块
+        // 均匀色块；把 txDiffuse（或 txEmissive）接进 EMISSION 才能保留灯罩、
+        // LED 点阵、招牌字形的细节。`Color` 分量归一化、最大值进 energy，
+        // 避免部分后端把 >1 的 Color 截断。
+        let emissive_shader = shader_lower.contains("emissive");
+        let emission_texture = if emissive_shader {
+            texture_slot(material, "txEmissive").or_else(|| texture_slot(material, "txDiffuse"))
+        } else {
+            None
+        };
+        let emission_max = emission_rgb.iter().fold(0.0f32, |acc, v| acc.max(*v));
+        let (emission, emission_energy) = if emission_max > 1.0 {
+            (
+                Color::from_rgb(
+                    emission_rgb[0] / emission_max,
+                    emission_rgb[1] / emission_max,
+                    emission_rgb[2] / emission_max,
+                ),
+                emission_max.min(16.0),
+            )
+        } else {
+            (
+                Color::from_rgb(emission_rgb[0], emission_rgb[1], emission_rgb[2]),
+                1.0,
+            )
+        };
+
+        // 树叶/草/旗帜：KN5 里常是单面卡片，双面渲染能从任意角度看。
+        let foliage = shader_lower.contains("kstree")
+            || shader_lower.contains("ksgrass")
+            || shader_lower.contains("ksflags")
+            || [
+                "tree",
+                "leaf",
+                "leaves",
+                "grass",
+                "bush",
+                "foliage",
+                "vegetation",
+                "shrub",
+            ]
+            .iter()
+            .any(|key| name_lower.contains(key));
 
         let alpha_scissor = material
             .property("ksAlphaRef")
@@ -204,7 +296,13 @@ impl MaterialParams {
         let car_paint = material.property("isAdditive") == Some(2.0)
             && !material.shader.to_ascii_lowercase().contains("tyres");
 
-        let albedo_multiplier = if reflective {
+        // 起跑/终点线（`startfinishline` → `sfline.dds`）在 AC 里是 `ksMultilayer`
+        // 材质，贴图本身就是最终黑白格：`ksDiffuse = 0.3` 是多层混合里的权重，
+        // 不该像普通贴图那样乘进 albedo——乘了之后白格变灰、黑格被环境光染成
+        // 深蓝，看起来像渲染错误。这类材质直接用 1.0 保留贴图原色。
+        let albedo_multiplier = if is_start_finish_material(material) {
+            1.0
+        } else if reflective {
             (diffuse.max(0.5)).clamp(0.0, 4.0)
         } else {
             albedo_scale
@@ -217,12 +315,15 @@ impl MaterialParams {
                 albedo_multiplier,
                 opacity,
             ),
-            roughness: roughness_from_specular_exp(material.property("ksSpecularEXP")),
+            roughness,
             metallic,
             specular: material.property("ksSpecular").unwrap_or(0.5),
+            specular_suppressed,
             normal_scale: material.property("normalMult").unwrap_or(1.0).max(0.0),
-            emission: Color::from_rgb(emission_rgb[0], emission_rgb[1], emission_rgb[2]),
-            emission_enabled: emission_rgb.iter().any(|channel| *channel > 0.0),
+            emission,
+            emission_enabled: emission_max > 0.0,
+            emission_texture,
+            emission_energy,
             alpha_scissor,
             alpha_tested: material.alpha_tested,
             alpha_blended: is_alpha_blended(material, opacity),
@@ -230,6 +331,8 @@ impl MaterialParams {
             detail_uv_scale: if use_detail { detail_uv_scale } else { 0.0 },
             opacity,
             car_paint,
+            foliage,
+            glass,
             depth_test_disabled: material.depth_mode == DepthMode::Off,
             depth_opaque_only: material.depth_mode == DepthMode::NoWrite,
             textures: MaterialTextures {
@@ -267,6 +370,17 @@ fn is_glass(material: &Material) -> bool {
     }
     let name = material.name.to_ascii_lowercase();
     name.contains("window") || name.contains("glass")
+}
+
+/// 是否为起跑/终点线材质（各赛道的名字里一般带 `startfinish` / `sfline`）。
+///
+/// 这类 KN5 网格贴在路面上、与路面共面，需要单独处理颜色（避免被 ksDiffuse
+/// 压暗）和深度（见 `super::mesh::finish_instance` 的微小平移）。
+pub(crate) fn is_start_finish_material(material: &Material) -> bool {
+    let name = material.name.to_ascii_lowercase();
+    ["startfinish", "sfline", "finishline", "startline"]
+        .iter()
+        .any(|pattern| name.contains(pattern))
 }
 
 /// 整体不透明度：`ksOpacity`（通用 shader）或 `alpha`（`ksPerPixelAlpha`）。
@@ -507,6 +621,21 @@ mod tests {
     }
 
     #[test]
+    fn start_finish_line_keeps_its_checker_colors() {
+        // Daytona 的终点线材质：ksDiffuse = 0.3 是多层混合权重，不是 albedo 系数。
+        let material = material_with(&[("ksDiffuse", 0.3), ("ksAmbient", 0.3)], &[]);
+        let mut line = material.clone();
+        line.name = "startfinishline".to_owned();
+        let params = MaterialParams::from_material(&line);
+        assert_eq!(params.albedo.r, 1.0, "终点线不该被 ksDiffuse 压暗");
+
+        let normal = MaterialParams::from_material(&material);
+        assert!(normal.albedo.r < 1.0, "普通材质仍按 ksDiffuse 压暗");
+        assert!(is_start_finish_material(&line));
+        assert!(!is_start_finish_material(&material));
+    }
+
+    #[test]
     fn alpha_test_and_coverage_cut_out() {
         let mut material = material_with(&[("ksAlphaRef", 0.4)], &[]);
         material.alpha_tested = true;
@@ -530,5 +659,64 @@ mod tests {
         assert_eq!(params.roughness, 0.5);
         assert_eq!(params.specular, 0.5);
         assert!(params.textures == MaterialTextures::default());
+    }
+
+    #[test]
+    fn emissive_shader_uses_texture_and_normalized_energy() {
+        let mut material = material_with(
+            &[],
+            &[
+                ("txDiffuse", "lamp_diffuse.dds"),
+                ("txEmissive", "lamp_mask.dds"),
+            ],
+        );
+        material.shader = "ksPerPixelMultiMap_emissive".to_owned();
+        material.properties.push(MaterialProperty {
+            name: "ksEmissive".to_owned(),
+            value_a: 0.0,
+            value_b: [0.0; 2],
+            value_c: [2.0, 1.0, 0.5],
+            value_d: [0.0; 4],
+        });
+
+        let params = MaterialParams::from_material(&material);
+        assert!(params.emission_enabled);
+        // txEmissive 优先于 txDiffuse。
+        assert_eq!(params.emission_texture.as_deref(), Some("lamp_mask.dds"));
+        assert!((params.emission_energy - 2.0).abs() < 1e-6);
+        assert!((params.emission.r - 1.0).abs() < 1e-6);
+        assert!((params.emission.g - 0.5).abs() < 1e-6);
+
+        // 普通 shader 的 ksEmissive 仍是纯色发光，不把 albedo 贴图接进 EMISSION。
+        let mut plain = material_with(&[], &[("txDiffuse", "plain.dds")]);
+        plain.properties.push(MaterialProperty {
+            name: "ksEmissive".to_owned(),
+            value_a: 0.0,
+            value_b: [0.0; 2],
+            value_c: [0.2, 0.0, 0.0],
+            value_d: [0.0; 4],
+        });
+        assert!(
+            MaterialParams::from_material(&plain)
+                .emission_texture
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn foliage_and_glass_are_classified() {
+        let mut tree = material_with(&[], &[]);
+        tree.shader = "ksTree".to_owned();
+        assert!(MaterialParams::from_material(&tree).foliage);
+
+        let mut windscreen = material_with(&[], &[]);
+        windscreen.shader = "ksWindscreen".to_owned();
+        let params = MaterialParams::from_material(&windscreen);
+        assert!(params.glass);
+        assert!((params.opacity - GLASS_OPACITY).abs() < 1e-6);
+
+        let plain = MaterialParams::from_material(&material_with(&[], &[]));
+        assert!(!plain.foliage);
+        assert!(!plain.glass);
     }
 }

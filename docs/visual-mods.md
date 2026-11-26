@@ -36,6 +36,15 @@
 
 未知 shader → fallback + 报告，不阻断加载。
 
+材质层现在还会：
+
+- 把 `ksEmissive` / `*_emissive` 的 `txEmissive`（没有则 `txDiffuse`）接进
+  EMISSION，车灯/屏幕/招牌保留贴图细节；
+- 树叶/草/旗帜类 shader 双面渲染（KN5 里常见单面卡片）；
+- 车窗在 Forward+ 下开屏幕空间折射；
+- 湿路面由 RainSystem 运行时恢复部分介电高光（细节见
+  [`docs/rendering.md`](rendering.md)）。
+
 ### 2.2 `ext_config.ini`
 
 已解析/映射：
@@ -85,7 +94,7 @@
 | Particles | SMOKE / PARTICLES → GPUParticles3D |
 | Brake Disc | 刹车盘温度 → emission |
 | Tyres | TYRES_FX 贴图替换（含 `extension/textures` zip） |
-| Extra | Bloom/tonemap/adjustment，高画质 SSAO/SSIL |
+| Extra | Bloom/tonemap/adjustment，桌面 Forward+ 的 SSAO/SSIL/SSR；体积雾由天气开 |
 | Generic | 未识别 `*_FX*` section 的兜底记录 |
 
 入口：把 `game/fx/fx_runtime.tscn` 放到 `WorldBody` 同级；它会自动 attach。

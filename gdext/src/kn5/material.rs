@@ -21,7 +21,7 @@
 //! AC 专有 shader（树、草、玻璃、发光贴花）暂不特殊处理，统一映射到
 //! 标准 PBR 参数上，让 mod 至少能完整显示。
 
-use godot::classes::{StandardMaterial3D, base_material_3d};
+use godot::classes::{RenderingServer, StandardMaterial3D, base_material_3d};
 use godot::prelude::*;
 use vettura_kn5::Material as Kn5Material;
 
@@ -65,13 +65,47 @@ pub fn apply(
     godot_material.set_specular(params.specular);
     godot_material.set_normal_scale(params.normal_scale);
 
-    // 车漆（`isAdditive == 2`）在 AC 里是单独的清漆层。不要用 1.0：清漆的
-    // 高光会把环境光的反射整片刷成白色，红色车漆在大白天直接变白车。
-    // 0.35 + 0.1 粗糙度≈一层薄蜡，够亮而不抢走底色。
+    // 介电高光强度（Godot 4.7 的真实属性名是 `metallic_specular`，旧名
+    // `specular` 的 setter 在这版不写到它）。AC 的赛道反射类材质——
+    // `ksPerPixelReflection`（护栏玻璃/看台墙/水面）和 `ksMultilayer_fresnel_nm`
+    // （沥青/湿路面）——在 AC 里靠 envmap + fresnel 边缘反射表现，强度被精心
+    // 控制；我们没有 AC 的 envmap，Godot 用默认天空 cubemap + 直射光近似，
+    // 低粗糙度路面会把日光反射成一整片纯白高光（起跑区右侧路面发白就是这个）。
+    // 对这类材质关掉介电高光，保留 albedo/环境色，路面恢复正常的漫反射灰。
+    // 车漆（clearcoat）和其它普通材质不受影响。
+    if params.specular_suppressed {
+        set_property(godot_material, "metallic_specular", 0.0f32.to_variant());
+        // 金属材质（reflective → metallic 0.85）的高光来自金属流程，
+        // metallic_specular 管不到；它的粗糙度若被 AC 的高 ksSpecularEXP 压到
+        // 0.09，会把天空反射成一整片纯白。给这类材质设粗糙度下限 0.3。
+        if params.metallic > 0.5 && params.roughness < 0.3 {
+            godot_material.set_roughness(0.3);
+        }
+    }
+
+    // 车漆（`isAdditive == 2`）在 AC 里是单独的清漆层。带天空/云层的 IBL 之后
+    // 清漆可以比旧版更明显：0.5 的 clearcoat + 0.06~0.1 的粗糙度，反射里
+    // 能看到天光和云的结构，又不会把红色车漆刷成白车。
     if params.car_paint {
-        godot_material.set_clearcoat(0.35);
-        godot_material.set_clearcoat_roughness(params.roughness.max(0.1));
+        godot_material.set_clearcoat(0.3);
+        godot_material.set_clearcoat_roughness(params.roughness.max(0.12));
         godot_material.set_feature(base_material_3d::Feature::CLEARCOAT, true);
+    }
+
+    // 树叶/草/旗帜：单面卡片在 KN5 里很常见，双面渲染避免转视角时整片消失。
+    if params.foliage {
+        godot_material.set_cull_mode(base_material_3d::CullMode::DISABLED);
+    }
+
+    // 车窗/挡风玻璃：Forward+ 下开屏幕空间折射，玻璃后面的赛道会有轻微
+    // 位移，不再是“一大块均匀 alpha”；Mobile 没有折射，保持纯半透明。
+    if params.glass {
+        godot_material.set_metallic(0.0);
+        godot_material.set_roughness(params.roughness.min(0.12));
+        if is_forward_plus() {
+            godot_material.set_feature(base_material_3d::Feature::REFRACTION, true);
+            godot_material.set_refraction(0.035);
+        }
     }
 
     // 法线贴图。
@@ -139,9 +173,19 @@ pub fn apply(
         godot_material.set_texture(base_material_3d::TextureParam::AMBIENT_OCCLUSION, &texture);
     }
 
-    // 自发光。
+    // 自发光。`ksEmissive` 类 shader 会把 txDiffuse/txEmissive 接进 EMISSION，
+    // 车灯/屏幕/招牌保留贴图细节；普通材质的 ksEmissive 仍然只是纯色发光。
     godot_material.set_emission(params.emission);
+    godot_material.set_emission_energy_multiplier(params.emission_energy);
     godot_material.set_feature(base_material_3d::Feature::EMISSION, params.emission_enabled);
+    if let Some(texture) = params
+        .emission_texture
+        .as_deref()
+        .and_then(|name| cache.texture_by_name(name, TextureKind::Diffuse))
+    {
+        godot_material.set_texture(base_material_3d::TextureParam::EMISSION, &texture);
+        godot_material.set_emission_operator(base_material_3d::EmissionOperator::MULTIPLY);
+    }
 
     // 混合与裁剪。
     if params.uses_alpha() {
@@ -167,4 +211,12 @@ pub fn apply(
     if params.depth_opaque_only {
         godot_material.set_depth_draw_mode(base_material_3d::DepthDrawMode::OPAQUE_ONLY);
     }
+}
+
+/// 当前是否 Forward+ 桌面后端（折射/屏幕空间效果可用）。
+fn is_forward_plus() -> bool {
+    RenderingServer::singleton()
+        .get_current_rendering_method()
+        .to_string()
+        == "forward_plus"
 }

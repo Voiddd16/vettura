@@ -25,6 +25,8 @@ use super::scene::SceneOptions;
 struct Task {
     name: String,
     active: bool,
+    /// 网格自身的可见性（KN5 `is_visible && is_renderable`）；dummy 恒为 true。
+    visible: bool,
     /// 父任务的下标；`None` 表示这是根任务。
     parent: Option<usize>,
     kind: TaskKind,
@@ -176,7 +178,11 @@ impl Build {
         let Some(mut node) = node else {
             return;
         };
-        node.set_visible(task.active);
+        // 湿滑路面层（`_WET`）在 `finish_instance` 里已默认隐藏，不要被 KN5
+        // 的 active 标志重新打开——它由天气系统按湿度切换。
+        if !node.has_meta("vettura_wet_layer") {
+            node.set_visible(task.active && task.visible);
+        }
 
         if let Some(mut parent_node) = parent_node {
             parent_node.add_child(&node.clone().upcast::<Node>());
@@ -197,21 +203,30 @@ fn flatten(kn5: &Kn5, options: SceneOptions) -> Vec<Task> {
     let mut stack: Vec<(&Kn5Node, Option<usize>)> = vec![(&kn5.root, None)];
 
     while let Some((node, parent)) = stack.pop() {
-        // 根节点无条件保留；其余节点在 `skip_hidden` 下按 active 过滤，
-        // 语义与旧的递归 `build_node` 一致。
-        if parent.is_some() && options.skip_hidden && !node.active {
+        // 与 `scene.rs` 的文档一致：只有 active && is_visible && is_renderable
+        // 的网格才渲染。`is_renderable=false` 是 AC 的物理/辅助网格标记
+        // （例如 Nordschleife 的 `nords.kn5` 护墙），画出来会是大块未贴图墙面。
+        let (kind, visible) = match &node.kind {
+            NodeKind::Dummy { transform } => (TaskKind::Dummy(*transform), true),
+            NodeKind::Mesh(mesh) => (
+                TaskKind::Static(Arc::clone(mesh)),
+                mesh.flags.is_visible && mesh.is_renderable,
+            ),
+            // SkinnedMesh 没有 is_renderable 字段，只尊重 is_visible。
+            NodeKind::SkinnedMesh(mesh) => {
+                (TaskKind::Skinned(Arc::clone(mesh)), mesh.flags.is_visible)
+            }
+        };
+        // 根节点无条件保留；其余节点在 `skip_hidden` 下过滤不可见网格。
+        if parent.is_some() && options.skip_hidden && (!node.active || !visible) {
             continue;
         }
 
         let index = tasks.len();
-        let kind = match &node.kind {
-            NodeKind::Dummy { transform } => TaskKind::Dummy(*transform),
-            NodeKind::Mesh(mesh) => TaskKind::Static(Arc::clone(mesh)),
-            NodeKind::SkinnedMesh(mesh) => TaskKind::Skinned(Arc::clone(mesh)),
-        };
         tasks.push(Task {
             name: node.name.clone(),
             active: node.active,
+            visible,
             parent,
             kind,
         });

@@ -10,6 +10,7 @@
 //! 正常路径优先加载真实视觉 KN5（见 [`super::track_models`]），只有视觉模型
 //! 全部缺失/损坏时才落到这里。
 
+use godot::classes::geometry_instance_3d::ShadowCastingSetting;
 use godot::classes::mesh::{ArrayType, PrimitiveType};
 use godot::classes::{ArrayMesh, MeshInstance3D, StandardMaterial3D};
 use godot::prelude::*;
@@ -37,6 +38,8 @@ pub(crate) fn collider_mesh_instance(track: &TrackModule) -> Option<Gd<MeshInsta
     let mut instance = MeshInstance3D::new_alloc();
     instance.set_mesh(&array_mesh);
     instance.set_name("TrackCollider");
+    // 与视觉赛道一致：低模路面只接收阴影，不投射（大面积共面网格的 shadow acne）。
+    instance.set_cast_shadows_setting(ShadowCastingSetting::OFF);
     Some(instance)
 }
 

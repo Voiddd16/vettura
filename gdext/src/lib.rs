@@ -57,4 +57,15 @@ unsafe impl ExtensionLibrary for VetturaNative {
     fn on_main_loop_frame() {
         logging::poll_config_reload();
     }
+
+    /// 引擎关闭前清空跨文件贴图去重表。
+    ///
+    /// 去重表用 `thread_local` 持有 `Gd<ImageTexture>` 强引用；如果留到进程
+    /// 退出才析构，那时 Godot 引擎已经销毁，释放会访问失效指针并 SIGABRT。
+    /// 在 Scene 阶段的 deinit 里清空，退出流程就干净了。
+    fn on_stage_deinit(stage: InitStage) {
+        if stage == InitStage::Scene {
+            kn5::cache::clear_texture_cache();
+        }
+    }
 }

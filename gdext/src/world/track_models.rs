@@ -15,7 +15,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use godot::classes::{Node, Node3D};
+use godot::classes::geometry_instance_3d::ShadowCastingSetting;
+use godot::classes::{MeshInstance3D, Node, Node3D};
 use godot::prelude::*;
 use vettura_assets::TrackModule;
 
@@ -35,7 +36,15 @@ pub(crate) fn visual_models_instance(
     let mut loaded = 0usize;
     let mut skipped = 0usize;
     for entry in track.models() {
-        if entry.is_collider() {
+        let lower = entry.file.to_ascii_lowercase();
+        // 物理模型不渲染：`physics.kn5` 里是路面/护墙的碰撞网格（很多是
+        // 未贴图的灰模/白模），画出来就是两侧巨大的橙/白墙。
+        // `spawns_*.kn5` / `sounds.kn5` 是发车点与音源标记，同样不该出现在画面里。
+        if entry.is_collider()
+            || lower.contains("physics")
+            || lower.contains("spawns")
+            || lower.contains("sounds")
+        {
             continue;
         }
         // `acstobjects.kn5` 是 AC 编辑器放的实例标记（起终点/维修区 digital
@@ -45,14 +54,25 @@ pub(crate) fn visual_models_instance(
         if entry.file.eq_ignore_ascii_case("acstobjects.kn5") {
             continue;
         }
-        let path = track.root().join(&entry.file);
+        let mut path = track.root().join(&entry.file);
         if !path.is_file() {
-            godot_warn!(
-                "WorldBody: track model '{}' not found; skipping visual",
-                entry.file
-            );
-            skipped += 1;
-            continue;
+            // mod 常见的文件名笔误（`models.ini` 写 `marshals.kn5`，目录里是
+            // `marshal.kn5`）。尝试单复数互换，找到就用——比整块模型跳过强。
+            if let Some(fixed) = singular_plural_variant(&path) {
+                godot_warn!(
+                    "WorldBody: track model '{}' not found; using '{}' instead",
+                    entry.file,
+                    fixed.file_name().unwrap_or_default().to_string_lossy()
+                );
+                path = fixed;
+            } else {
+                godot_warn!(
+                    "WorldBody: track model '{}' not found; skipping visual",
+                    entry.file
+                );
+                skipped += 1;
+                continue;
+            }
         }
 
         // 与车模同一份按文件路径的缓存：同一文件只解析一次、贴图只解码一次。
@@ -88,6 +108,7 @@ pub(crate) fn visual_models_instance(
         let options = crate::kn5::scene::SceneOptions { skip_hidden: true };
         let mut host = wrapper.clone().upcast::<Node>();
         if crate::kn5::scene::instantiate(&resources, &mut host, None, options).is_some() {
+            disable_shadow_casting(&wrapper.clone().upcast::<Node>());
             loaded += 1;
         } else {
             // 一个节点都没建出来（空模型 / 根任务失败）：撤掉空 wrapper。
@@ -112,6 +133,55 @@ pub(crate) fn visual_models_instance(
         skipped,
         started.elapsed().as_secs_f32()
     );
+    // 跨文件贴图去重统计：Nürburgring 这种把同一张图嵌进多个 KN5 的模组，
+    // 这里能看到实际共享了多少张（省下的显存）。
+    crate::kn5::cache::log_texture_dedup_stats();
+
+    // 按材质合并静态网格：几千个 `MeshInstance3D` → 几百个 draw call，
+    // 解决高速行驶时 CPU 主线程被护栏等小网格的绘制提交拖慢的问题。
+    // `VETTURA_NO_MERGE=1` 可关闭合并，用于 A/B 排查合并引入的渲染问题。
+    let merge_disabled = std::env::var("VETTURA_NO_MERGE")
+        .map(|value| !value.is_empty() && value != "0")
+        .unwrap_or(false);
+    if !merge_disabled {
+        let merge_stats = crate::kn5::merge::merge_static_children(&mut container);
+        godot_print!(
+            "WorldBody: merged {} static meshes into {} material batches",
+            merge_stats.merged_nodes,
+            merge_stats.groups
+        );
+    }
     parent.add_child(&container.clone().upcast::<Node>());
     Some(container)
+}
+
+/// 文件不存在时尝试单复数互换（`marshals.kn5` ↔ `marshal.kn5`）。
+fn singular_plural_variant(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let stem = path.file_stem()?.to_string_lossy();
+    let extension = path.extension().unwrap_or_default();
+    let candidates = if let Some(base) = stem.strip_suffix('s') {
+        vec![base.to_string()]
+    } else {
+        vec![format!("{stem}s")]
+    };
+    candidates
+        .into_iter()
+        .map(|name| path.with_file_name(format!("{name}.{}", extension.to_string_lossy())))
+        .find(|candidate| candidate.is_file())
+}
+
+/// 赛道视觉网格只接收阴影、不投射阴影。
+///
+/// 赛道路面是跨度数公里的近共面大网格（Daytona 的 `daytonamesh.kn5` 单文件
+/// 44 张路面），定向光阴影图的深度精度在这么大的范围里不够，路面会投到
+/// 自己身上形成细密的自遮挡条纹（shadow acne），起跑区尤其明显。单纯抬高
+/// bias/normal_bias 要么条纹消不干净，要么把车体阴影推离地面（peter-panning）。
+/// 赛道不需要在路面上投出自己的影子，关掉投射即可根治；车辆仍照常投射。
+fn disable_shadow_casting(node: &Gd<Node>) {
+    if let Ok(mut mesh) = node.clone().try_cast::<MeshInstance3D>() {
+        mesh.set_cast_shadows_setting(ShadowCastingSetting::OFF);
+    }
+    for child in node.get_children().iter_shared() {
+        disable_shadow_casting(&child);
+    }
 }

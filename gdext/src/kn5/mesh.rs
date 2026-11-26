@@ -184,6 +184,8 @@ pub fn static_mesh_instance(
         mesh.flags,
         mesh.material_index(),
         resources,
+        mesh.lod_in,
+        mesh.lod_out,
     )
 }
 
@@ -201,6 +203,8 @@ pub fn skinned_mesh_instance(
         mesh.flags,
         mesh.material_index(),
         resources,
+        mesh.lod_in,
+        mesh.lod_out,
     )?;
     if !mesh.bones.is_empty() {
         attach_skeleton(&mut instance, mesh);
@@ -215,6 +219,8 @@ fn finish_instance(
     flags: MeshFlags,
     material_index: Option<usize>,
     resources: &FileResources,
+    lod_in: f32,
+    lod_out: f32,
 ) -> Option<Gd<MeshInstance3D>> {
     // 网格为空的节点在 `static_array_mesh` 里已被拒绝；这里只做挂载。
     let mut instance = MeshInstance3D::new_alloc();
@@ -240,6 +246,50 @@ fn finish_instance(
     instance.set_mesh(&array_mesh);
     instance.set_visible(flags.is_visible);
     instance.set_cast_shadows_setting(shadow_setting(flags.cast_shadows));
+
+    // 不要用 KN5 的 `lod_in`/`lod_out` 设置 `visibility_range`。
+    //
+    // AC 的这两个字段是“**这一级 LOD** 的可见距离范围”：超出 `lod_out` 时游戏
+    // 会切换到下一级（更简的）LOD 模型继续显示。我们只加载主网格这一份几何，
+    // 直接按 `lod_out` 裁掉就变成“整块网格凭空消失”——Daytona 看台的分层
+    // （`gar_*_KSLAYER4` 的 `lod_out=400`）因此 400 m 外只剩上层结构、下半截
+    // 消失，看上去就是观众席悬空。这两个字段保留解析（模型信息 / 未来真做
+    // LOD 替换时用），但不参与渲染裁剪。
+    let _ = (lod_in, lod_out);
+
+    // AC 赛道 KN5 会把“干/湿”两套路面网格放在**完全相同的坐标**上（Daytona
+    // 有 396 个 `_WET` 材质网格），由游戏按天气只渲染其中一套。我们以前两套全画，
+    // 于是起跑线附近出现大面积 z-fighting 条纹/闪烁。给湿滑层打标记并默认隐藏，
+    // 由天气视觉系统按湿度切换（见 `gdext/weather_visuals.gd`）。
+    let wet_layer = material_index
+        .and_then(|index| resources.kn5().materials.get(index))
+        .is_some_and(|material| {
+            let name = material.name.to_ascii_lowercase();
+            name.contains("_wet") || name.ends_with("wet") || name.contains("wet_")
+        });
+    if wet_layer {
+        instance.set_meta("vettura_wet_layer", &true.to_variant());
+        // 湿层整体下移 3 mm：与干层不再共面，移动时的 z-fighting 消失；
+        // 同时又保留几何——赛道边（路肩/缓冲区）往往只有湿层、没有干层
+        // 替代，隐藏它们会让赛道边整圈消失、看起来悬空。3 mm 在正常视角
+        // 下不可见，干燥时干层盖在上面，雨天湿层露出来。
+        let mut position = instance.get_position();
+        position.y -= 0.003;
+        instance.set_position(position);
+    }
+
+    // 起跑/终点线的黑白格网格与路面完全共面（AABB 一模一样），深度测试会在这
+    // 两套三角形之间来回翻转，表现为格子撕裂/缺角/闪烁。沿局部 Y 抬 4 mm：
+    // 足够拉开深度差，又不至于让黑格与别层分离（实测 2 cm 会把黑格挡掉）。
+    let start_finish = material_index
+        .and_then(|index| resources.kn5().materials.get(index))
+        .is_some_and(super::convert::is_start_finish_material);
+    if start_finish {
+        let mut position = instance.get_position();
+        position.y += 0.004;
+        instance.set_position(position);
+    }
+
     Some(instance)
 }
 

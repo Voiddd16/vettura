@@ -39,6 +39,73 @@ pub struct FileResources {
 
 thread_local! {
     static REGISTRY: RefCell<HashMap<PathBuf, Weak<FileResources>>> = RefCell::new(HashMap::new());
+    /// 跨文件贴图去重表：内容哈希 → 已解码的 `ImageTexture`。
+    ///
+    /// AC 赛道模组会把同一张贴图分别嵌进多个 KN5 里（Nürburgring 的
+    /// `curb2.dds`/`global_logos.dds`/`walls_new.dds` 等同时出现在
+    /// `fn_nurburgring.kn5` 和 `gp.kn5`，按名统计能省 197 MB 显存）。
+    /// Godot 的 `Gd` 没有 `Weak`，这里持强引用，并在 `WorldBody.load_track`
+    /// 开头调用 [`clear_texture_cache`]——切换赛道时旧纹理自然释放。
+    static TEXTURE_CACHE: RefCell<HashMap<u64, Gd<ImageTexture>>> =
+        RefCell::new(HashMap::new());
+    /// 去重命中/未命中计数（诊断日志用）。
+    static TEXTURE_CACHE_STATS: RefCell<(usize, usize)> = const { RefCell::new((0, 0)) };
+}
+
+/// 清空跨文件贴图去重表（切换赛道前调用，避免旧赛道的纹理常驻显存）。
+pub(crate) fn clear_texture_cache() {
+    TEXTURE_CACHE.with(|cache| cache.borrow_mut().clear());
+    TEXTURE_CACHE_STATS.with(|stats| *stats.borrow_mut() = (0, 0));
+}
+
+/// 取去重命中的贴图（`None` = 首次见到这个内容）。
+fn cached_texture(hash: u64) -> Option<Gd<ImageTexture>> {
+    TEXTURE_CACHE.with(|cache| {
+        let hit = cache.borrow().get(&hash).cloned();
+        TEXTURE_CACHE_STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            if hit.is_some() {
+                stats.0 += 1;
+            } else {
+                stats.1 += 1;
+            }
+        });
+        hit
+    })
+}
+
+fn remember_texture(hash: u64, texture: &Gd<ImageTexture>) {
+    TEXTURE_CACHE.with(|cache| {
+        cache.borrow_mut().insert(hash, texture.clone());
+    });
+}
+
+/// 内容哈希：8 字节块混合，速度足够（贴图解码+压缩本身更慢），用途只是
+/// 判断“两个 KN5 里同名/同字节的贴图能否共享同一份 GPU 纹理”。
+fn content_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0x9e37_79b9_7f4a_7c15u64 ^ bytes.len() as u64;
+    for chunk in bytes.chunks(8) {
+        let mut word = [0u8; 8];
+        word[..chunk.len()].copy_from_slice(chunk);
+        hash ^= u64::from_le_bytes(word).wrapping_mul(0x1000_0000_01b3);
+        hash = hash.rotate_left(27).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    }
+    hash
+}
+
+fn texture_cache_stats() -> (usize, usize) {
+    TEXTURE_CACHE_STATS.with(|stats| *stats.borrow())
+}
+
+/// 打印跨文件贴图去重的统计（命中数 / 新建数）——模块级函数，不依赖
+/// `FileResources` 实例（赛道加载完成后实例可能已被释放）。
+pub(crate) fn log_texture_dedup_stats() {
+    let (hits, misses) = texture_cache_stats();
+    godot_print!(
+        "KN5 texture dedup: {} hit(s) shared across files, {} unique decoded",
+        hits,
+        misses
+    );
 }
 
 /// 取（或新建）某个文件的共享解码缓存。
@@ -99,8 +166,18 @@ impl FileResources {
             return None;
         }
 
+        // 跨文件去重：同一张贴图被多个 KN5 各嵌一份时只解一次、只占一份显存。
+        let hash = content_hash(texture.data.as_slice());
+        if let Some(existing) = cached_texture(hash) {
+            *slot = Some(existing.clone());
+            return Some(existing);
+        }
+
         let decoded = super::texture::decode(&texture.name, texture.data.as_slice(), kind);
         *slot = decoded.clone();
+        if let Some(texture) = decoded.as_ref() {
+            remember_texture(hash, texture);
+        }
         decoded
     }
 

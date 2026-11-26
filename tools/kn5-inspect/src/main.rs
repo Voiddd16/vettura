@@ -145,7 +145,7 @@ fn main() -> Result<()> {
             match &node.kind {
                 NodeKind::Dummy { .. } => println!("{indent}{}", node.name),
                 NodeKind::Mesh(mesh) => println!(
-                    "{indent}{} [mesh: {} verts, {} tris, material {}, layer {}, lod {:.0}-{:.0}, renderable={}]",
+                    "{indent}{} [mesh: {} verts, {} tris, material {}, layer {}, lod {:.0}-{:.0}, renderable={}, visible={}, cast_shadows={}]",
                     node.name,
                     mesh.vertices.len(),
                     mesh.triangle_count(),
@@ -153,7 +153,9 @@ fn main() -> Result<()> {
                     mesh.layer,
                     mesh.lod_in,
                     mesh.lod_out,
-                    mesh.is_renderable
+                    mesh.is_renderable,
+                    mesh.flags.is_visible,
+                    mesh.flags.cast_shadows
                 ),
                 NodeKind::SkinnedMesh(mesh) => println!(
                     "{indent}{} [skinned: {} verts, {} tris, {} bones, material {}, layer {}, lod {:.0}-{:.0}]",

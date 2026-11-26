@@ -363,11 +363,11 @@ pub fn parse(data: &[u8]) -> Result<DdsInfo, DdsError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// 构造一个只填了必要字段的 128 字节 DDS 头。
-    fn dds_header(width: u32, height: u32, mipmaps: u32, fourcc: &[u8; 4]) -> Vec<u8> {
+    pub(crate) fn dds_header(width: u32, height: u32, mipmaps: u32, fourcc: &[u8; 4]) -> Vec<u8> {
         let mut bytes = vec![0; 128];
         bytes[..4].copy_from_slice(b"DDS ");
         bytes[4..8].copy_from_slice(&124u32.to_le_bytes());
@@ -569,5 +569,379 @@ mod tests {
         assert_eq!(layout.level_bytes(0), 256);
         assert_eq!(layout.available_levels(), 1);
         assert!(strip_mip_levels(&bytes).is_none()); // 只有一层，无需修补
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 兜底像素解码：Godot 的 `Image::load_dds_from_buffer` 对头部极挑剔（mip 链
+// 完整性、linear size 精确匹配、非 4 倍数尺寸的块对齐……），Nürburgring 等
+// mod 的 DDS 无论怎么修头都会被拒绝。这里的块级解码在 Rust 侧直接把 base
+// level 解成 RGBA8，任何 Godot 拒收的 DDS 都能救回——是“覆盖更多赛道
+// mod”的最后一道防线。只解基础层，mip 交给 Godot 重新生成。
+// ---------------------------------------------------------------------------
+
+/// [`decode_base_rgba`] 的产物：基础层的 RGBA8 像素。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedBase {
+    pub width: u32,
+    pub height: u32,
+    /// RGBA8，每像素 4 字节，行优先。
+    pub pixels: Vec<u8>,
+}
+
+/// 把 DDS 的**基础层**解成 RGBA8。支持 BC1/BC2/BC3/BC4/BC5 与未压缩格式；
+/// BC7/BC6H 的解码太复杂、KN5 里也罕见，返回 `None` 交给上层报错。
+///
+/// 用途：Godot 的 DDS 加载器拒绝（或修复链全部失败）时兜底，因此对 payload
+/// 长度宽容——只解 `payload_len` 能容纳的块，缺的块按黑色补齐。
+pub fn decode_base_rgba(data: &[u8]) -> Option<DecodedBase> {
+    let l = layout(data).ok()?;
+    let (w, h) = (l.width, l.height);
+    let payload = data.get(l.payload_offset..)?;
+
+    let mut pixels = vec![0u8; w as usize * h as usize * 4];
+    match l.format {
+        DdsFormat::Bc1 | DdsFormat::Bc2 | DdsFormat::Bc3 | DdsFormat::Bc4 | DdsFormat::Bc5 => {
+            let bpb = l.bytes_per_block.unwrap_or(8) as usize;
+            for block_y in (0..h).step_by(4) {
+                for block_x in (0..w).step_by(4) {
+                    let index =
+                        (block_y / 4) as usize * (w.div_ceil(4) as usize) + (block_x / 4) as usize;
+                    let block = &payload.get(index * bpb..(index + 1) * bpb)?;
+                    let rgba = match l.format {
+                        DdsFormat::Bc1 => decode_bc1(block),
+                        DdsFormat::Bc2 => decode_bc2(block),
+                        DdsFormat::Bc3 => decode_bc3(block),
+                        DdsFormat::Bc4 => decode_bc4(block),
+                        _ => decode_bc5(block),
+                    };
+                    blit_block(&mut pixels, w, h, block_x, block_y, &rgba);
+                }
+            }
+        }
+        DdsFormat::Uncompressed => {
+            // 通道掩码在 DDS_PIXELFORMAT：r/g/b/a = 88/92/96/100。
+            let u32_at = |offset: usize| -> u32 {
+                data.get(offset..offset + 4)
+                    .and_then(|slice| slice.try_into().ok())
+                    .map(u32::from_le_bytes)
+                    .unwrap_or(0)
+            };
+            let masks = [u32_at(88), u32_at(92), u32_at(96), u32_at(100)];
+            let bits_per_pixel = (l.bytes_per_pixel().unwrap_or(4)) as usize;
+            for y in 0..h {
+                for x in 0..w {
+                    let src = payload.get(
+                        y as usize * w as usize * bits_per_pixel + x as usize * bits_per_pixel..,
+                    )?[..bits_per_pixel]
+                        .to_vec();
+                    let out = (y as usize * w as usize + x as usize) * 4;
+                    for (channel, mask) in masks.iter().enumerate() {
+                        pixels[out + channel] = mask_extract(&src, *mask, bits_per_pixel);
+                    }
+                    // 没有 alpha 通道的图（aMask == 0）填不透明。
+                    if masks[3] == 0 {
+                        pixels[out + 3] = 255;
+                    }
+                }
+            }
+        }
+        DdsFormat::Bc7 => return None,
+    }
+
+    Some(DecodedBase {
+        width: w,
+        height: h,
+        pixels,
+    })
+}
+
+/// 一个 4x4 块的 RGBA（16 像素 × 4 通道，行优先）。
+type Block16 = [u8; 64];
+
+/// 把块像素写到整图缓冲里（越界部分裁掉——右/下边缘不满 4x4 的块）。
+fn blit_block(pixels: &mut [u8], width: u32, height: u32, bx: u32, by: u32, block: &Block16) {
+    for py in 0..4usize {
+        for px in 0..4usize {
+            let x = bx + px as u32;
+            let y = by + py as u32;
+            if x >= width || y >= height {
+                continue;
+            }
+            let src = (py * 4 + px) * 4;
+            let dst = (y as usize * width as usize + x as usize) * 4;
+            pixels[dst..dst + 4].copy_from_slice(&block[src..src + 4]);
+        }
+    }
+}
+
+/// 按通道掩码从 LSB 位串里抽一个字节的值（0..=255）。
+fn mask_extract(src: &[u8], mask: u32, _bytes_per_pixel: usize) -> u8 {
+    if mask == 0 {
+        return 0;
+    }
+    let shift = mask.trailing_zeros();
+    let bits = (mask >> shift).count_ones();
+    let value = (u32::from_le_bytes(pad4(src)) >> shift) & ((1u32 << bits) - 1);
+    // 任意位宽缩放到 0..=255（高位补齐）。
+    (value << (8 - bits.min(8))) as u8
+}
+
+fn pad4(src: &[u8]) -> [u8; 4] {
+    let mut out = [0u8; 4];
+    for (index, byte) in src.iter().take(4).enumerate() {
+        out[index] = *byte;
+    }
+    out
+}
+
+/// RGB565 → 8 位 RGB。
+fn rgb565(value: u16) -> [u8; 3] {
+    let r = ((value >> 11) & 0x1f) as u32 * 255 / 31;
+    let g = ((value >> 5) & 0x3f) as u32 * 255 / 63;
+    let b = (value & 0x1f) as u32 * 255 / 31;
+    [r as u8, g as u8, b as u8]
+}
+
+fn decode_bc1(block: &[u8]) -> Block16 {
+    let c0 = u16::from_le_bytes([block[0], block[1]]);
+    let c1 = u16::from_le_bytes([block[2], block[3]]);
+    let a = rgb565(c0);
+    let b = rgb565(c1);
+    let (c2, c3) = if c0 > c1 {
+        // 四色模式：两个 2/3 插值色。
+        (mix2_1(a, b), mix1_2(a, b))
+    } else {
+        // 三色 + 透明模式。
+        (mix1_1(a, b), [0, 0, 0])
+    };
+    let palette: [[u8; 3]; 4] = [a, b, c2, c3];
+    let indices = u32::from_le_bytes([block[4], block[5], block[6], block[7]]);
+    let mut out = [0u8; 64];
+    for pixel in 0..16usize {
+        let index = ((indices >> (2 * pixel)) & 3) as usize;
+        out[pixel * 4..pixel * 4 + 3].copy_from_slice(&palette[index]);
+        // 三色模式的索引 3 是 1-bit alpha 透明（c0 <= c1 时）。
+        if c0 <= c1 && index == 3 {
+            out[pixel * 4 + 3] = 0;
+        } else {
+            out[pixel * 4 + 3] = 255;
+        }
+    }
+    out
+}
+
+fn decode_bc2(block: &[u8]) -> Block16 {
+    let mut out = decode_bc1(&block[8..16]);
+    for pixel in 0..16usize {
+        // 每 2 字节 2 像素的 4bit alpha（LSB 是更靠前的像素）。
+        let alpha = (block[pixel / 2] >> (4 * (pixel % 2))) & 0xf;
+        out[pixel * 4 + 3] = alpha * 17;
+    }
+    out
+}
+
+fn decode_bc3(block: &[u8]) -> Block16 {
+    let mut out = decode_bc1(&block[8..16]);
+    let alphas = decode_alpha8(&block[..8]);
+    // 只合并 alpha 通道（decode_alpha8 的 RGB 是清零占位）。
+    for pixel in 0..16usize {
+        out[pixel * 4 + 3] = alphas[pixel * 4 + 3];
+    }
+    out
+}
+
+fn decode_bc4(block: &[u8]) -> Block16 {
+    let alphas = decode_alpha8(block);
+    let mut out = [0u8; 64];
+    for pixel in 0..16usize {
+        out[pixel * 4] = alphas[pixel * 4 + 3];
+        out[pixel * 4 + 1] = 0;
+        out[pixel * 4 + 2] = 0;
+        out[pixel * 4 + 3] = 255;
+    }
+    out
+}
+
+fn decode_bc5(block: &[u8]) -> Block16 {
+    let red = decode_alpha8(&block[..8]);
+    let green = decode_alpha8(&block[8..16]);
+    let mut out = [0u8; 64];
+    for pixel in 0..16usize {
+        let r = red[pixel * 4 + 3] as f32 / 255.0;
+        let g = green[pixel * 4 + 3] as f32 / 255.0;
+        // 双通道法线：从 x/y 重建 z（越界值夹到 0，非法组合填灰）。
+        let z = if r * r + g * g <= 1.0 {
+            (1.0 - r * r - g * g).sqrt()
+        } else {
+            0.0
+        };
+        out[pixel * 4] = red[pixel * 4 + 3];
+        out[pixel * 4 + 1] = green[pixel * 4 + 3];
+        out[pixel * 4 + 2] = (z * 255.0).round() as u8;
+        out[pixel * 4 + 3] = 255;
+    }
+    out
+}
+
+/// 8 字节 alpha 块（BC3/BC4/BC5 共用）：2 个端点 + 16 个 3bit 索引。
+/// 返回 16 像素的 alpha 通道（放在每像素第 4 字节，RGB 清零）。
+fn decode_alpha8(block: &[u8]) -> Block16 {
+    let a0 = block[0];
+    let a1 = block[1];
+    let mut palette = [0u8; 8];
+    if a0 > a1 {
+        for (index, palette_slot) in palette.iter_mut().enumerate().take(8) {
+            if index < 2 {
+                continue;
+            }
+            let weight = index as u32 - 1;
+            *palette_slot = ((a0 as u32 * (7 - weight) + a1 as u32 * weight) / 7) as u8;
+        }
+        palette[0] = a0;
+        palette[1] = a1;
+    } else {
+        // 六级插值 + 0 / 255（标准 DXT5 行为）。
+        palette[0] = a0;
+        palette[1] = a1;
+        for index in 2..8 {
+            let weight = index as u32 - 1;
+            let divisor = 5;
+            if weight <= divisor {
+                palette[index] =
+                    ((a0 as u32 * (divisor - weight) + a1 as u32 * weight) / divisor) as u8;
+            }
+        }
+        palette[6] = 0;
+        palette[7] = 255;
+    }
+
+    let mut out = [0u8; 64];
+    // 16 个 3bit 索引 = 48 bit，LSB 优先。
+    for pixel in 0..16usize {
+        let bit = pixel * 3;
+        let byte = 2 + bit / 8;
+        let offset = bit % 8;
+        let chunk = u16::from_le_bytes([block[byte], block.get(byte + 1).copied().unwrap_or(0)]);
+        let index = ((chunk >> offset) & 7) as usize;
+        out[pixel * 4] = 0;
+        out[pixel * 4 + 1] = 0;
+        out[pixel * 4 + 2] = 0;
+        out[pixel * 4 + 3] = palette[index];
+    }
+    out
+}
+
+fn mix2_1(a: [u8; 3], b: [u8; 3]) -> [u8; 3] {
+    // (2a + b) / 3
+    [
+        ((a[0] as u32 * 2 + b[0] as u32) / 3) as u8,
+        ((a[1] as u32 * 2 + b[1] as u32) / 3) as u8,
+        ((a[2] as u32 * 2 + b[2] as u32) / 3) as u8,
+    ]
+}
+
+fn mix1_2(a: [u8; 3], b: [u8; 3]) -> [u8; 3] {
+    [
+        ((a[0] as u32 + 2 * b[0] as u32) / 3) as u8,
+        ((a[1] as u32 + 2 * b[1] as u32) / 3) as u8,
+        ((a[2] as u32 + 2 * b[2] as u32) / 3) as u8,
+    ]
+}
+
+fn mix1_1(a: [u8; 3], b: [u8; 3]) -> [u8; 3] {
+    [
+        (a[0] / 2 + b[0] / 2),
+        (a[1] / 2 + b[1] / 2),
+        (a[2] / 2 + b[2] / 2),
+    ]
+}
+
+#[cfg(test)]
+mod decoder_tests {
+    use super::tests::dds_header;
+    use super::*;
+
+    /// 4x4 纯红 BC3：c0=红、a0=255、全索引 0。
+    #[test]
+    fn bc3_solid_red_block() {
+        let mut block = [0u8; 16];
+        // alpha 块：a0=255, a1=0 → 索引 0 = 255。
+        block[0] = 255;
+        block[1] = 0;
+        // 颜色块：c0 = RGB565 红 (0xF800)，c1 = 0，索引全 0。
+        block[8] = 0x00;
+        block[9] = 0xF8;
+        let decoded = decode_bc3(&block);
+        // c0 > c1 → 索引 0 是 c0 本色。RGB565 红的 G/B 是 0，R = 31*255/31 = 255。
+        assert_eq!(decoded[0], 255);
+        assert_eq!(decoded[1], 0);
+        assert_eq!(decoded[2], 0);
+        assert_eq!(decoded[3], 255);
+        assert_eq!(decoded[63], 255);
+    }
+
+    /// BC1 三色透明模式：c0 == c1 → 索引 3 是透明。
+    #[test]
+    fn bc1_three_color_transparent() {
+        let mut block = [0u8; 8];
+        block[0] = 0x00;
+        block[1] = 0x7C; // c0 = 中灰（0b011111000000_0000 → G=31）
+        block[2] = 0x00;
+        block[3] = 0x7C;
+        // 全部索引 = 3（16 像素 × 2bit = 0xFFFFFFFF）。
+        block[4..8].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        let decoded = decode_bc1(&block);
+        assert_eq!(decoded[3], 0, "三色模式下索引 3 应为透明");
+    }
+
+    /// BC4：端点 0..255、索引全 0 → R = 255。
+    #[test]
+    fn bc4_endpoint_zero_index() {
+        let mut block = [0u8; 8];
+        block[0] = 255;
+        block[1] = 0;
+        let decoded = decode_bc4(&block);
+        assert_eq!(decoded[0], 255);
+        assert_eq!(decoded[1], 0);
+        assert_eq!(decoded[3], 255);
+    }
+
+    /// BC5：x=1、y=0 → 单位圆边界上，z 重建为 0。
+    #[test]
+    fn bc5_reconstructs_z() {
+        let mut block = [0u8; 16];
+        // R 块：a0=255, a1=0 → 全 255。
+        block[0] = 255;
+        // G 块：全 0（a0=a1=0 → 插值全 0）。
+        let decoded = decode_bc5(&block);
+        assert_eq!(decoded[0], 255);
+        assert_eq!(decoded[1], 0);
+        // r²+g² = 1 恰好在单位圆边界 → z = sqrt(1-1-0) = 0。
+        assert_eq!(decoded[2], 0);
+    }
+
+    /// 完整管线：合法的 4x4 DXT5 DDS → decode_base_rgba。
+    #[test]
+    fn decode_base_rgba_end_to_end() {
+        let mut bytes = dds_header(4, 4, 1, b"DXT5");
+        let mut payload = [0u8; 16];
+        payload[0] = 255; // alpha a0
+        payload[8] = 0x00;
+        payload[9] = 0xF8; // c0 红
+        bytes.extend_from_slice(&payload);
+        let decoded = decode_base_rgba(&bytes).expect("4x4 DXT5 应能解出");
+        assert_eq!(decoded.width, 4);
+        assert_eq!(decoded.height, 4);
+        assert_eq!(decoded.pixels.len(), 4 * 4 * 4);
+        assert_eq!(decoded.pixels[0], 255);
+        assert_eq!(decoded.pixels[3], 255);
+    }
+
+    /// PNG 不是 DDS → 返回 None（上层用 Godot 的 PNG 加载器）。
+    #[test]
+    fn decode_base_rgba_rejects_png() {
+        let png = b"\x89PNG\r\n\x1a\n not a real body";
+        assert!(decode_base_rgba(png).is_none());
     }
 }

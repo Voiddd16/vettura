@@ -368,6 +368,7 @@ pub fn collect_collider_triangles(
     kn5: &Kn5,
     model_transform: Mat4,
     default_surface: SurfaceId,
+    all_meshes: bool,
     mut surface_of: impl FnMut(&str) -> Option<SurfaceId>,
 ) -> Vec<ColliderTriangle> {
     let mut triangles = Vec::new();
@@ -376,6 +377,7 @@ pub fn collect_collider_triangles(
         model_transform,
         None,
         false,
+        all_meshes,
         default_surface,
         &mut surface_of,
         &mut triangles,
@@ -388,6 +390,7 @@ fn walk_meshes(
     parent_transform: Mat4,
     inherited_surface: Option<SurfaceId>,
     inherited_physical: bool,
+    all_meshes: bool,
     default_surface: SurfaceId,
     surface_of: &mut dyn FnMut(&str) -> Option<SurfaceId>,
     out: &mut Vec<ColliderTriangle>,
@@ -403,7 +406,10 @@ fn walk_meshes(
     // A leading `1` on either this node or an ancestor marks AC's collidable
     // geometry. Node names such as `10pits` are not physical: the surface key
     // parser rejects names without a letter after the marker.
-    let physical = inherited_physical || node_surface_key(&node.name).is_some();
+    //
+    // `physics.kn5` / `collision.kn5` 是物理模型，里面所有网格都可碰撞（有些
+    // mod 用 `01ROAD`、`02ASPH` 这类两位数字材质组前缀，不是 `1`）。
+    let physical = all_meshes || inherited_physical || node_surface_key(&node.name).is_some();
     // Negative scale mirrors the mesh, so its triangles must be reversed to
     // keep the front faces on the same side after the transform.
     let flip_winding = world.determinant() < 0.0;
@@ -437,6 +443,7 @@ fn walk_meshes(
             world,
             Some(surface),
             physical,
+            all_meshes,
             default_surface,
             surface_of,
             out,
@@ -661,11 +668,12 @@ impl TrackModule {
                         rotation_deg: Vec3::ZERO,
                     };
                     let kn5 = Kn5::from_path(&path)?;
-                    let surface_of = surface_lookup(&surfaces, &surface_ids, &surface_map);
+                    let surface_of = surface_lookup(&surfaces, &surface_ids, &surface_map, true);
                     triangles.extend(collect_collider_triangles(
                         &kn5,
                         entry.transform(),
                         default_surface,
+                        true,
                         surface_of,
                     ));
                     collider_path = Some(path);
@@ -686,12 +694,20 @@ impl TrackModule {
                     continue;
                 }
                 let kn5 = Kn5::from_path(&path)?;
-                let surface_of = surface_lookup(&surfaces, &surface_ids, &surface_map);
+                // 物理模型（physics.kn5 / collision.kn5）里的所有网格都可碰撞；
+                // 视觉模型仍只收 `1` 前缀的节点，避免把装饰件当地面。
+                let lower = entry.file.to_ascii_lowercase();
+                let physics_model = lower.contains("physics")
+                    || lower.contains("collision")
+                    || lower.contains("collider");
+                let surface_of =
+                    surface_lookup(&surfaces, &surface_ids, &surface_map, physics_model);
                 let before = triangles.len();
                 triangles.extend(collect_collider_triangles(
                     &kn5,
                     entry.transform(),
                     default_surface,
+                    physics_model,
                     surface_of,
                 ));
                 // Keep a conventional collider path for diagnostics, falling
@@ -1229,9 +1245,14 @@ fn surface_lookup<'a>(
     surfaces: &'a [SurfaceDef],
     surface_ids: &'a [SurfaceId],
     surface_map: &'a SurfaceMap,
+    relaxed: bool,
 ) -> impl FnMut(&str) -> Option<SurfaceId> + 'a {
     move |name| {
-        let key = node_surface_key(name)?;
+        let key = if relaxed {
+            node_surface_key_relaxed(name)
+        } else {
+            node_surface_key(name)
+        }?;
         if let Some(id) = surfaces
             .iter()
             .zip(surface_ids)
@@ -1254,6 +1275,24 @@ fn surface_lookup<'a>(
 fn node_surface_key(name: &str) -> Option<&str> {
     let name = name.trim();
     let stripped = name.strip_prefix('1')?;
+    let end = stripped
+        .char_indices()
+        .find(|(_, c)| *c == '_' || c.is_ascii_digit() || c.is_whitespace())
+        .map_or(stripped.len(), |(index, _)| index);
+    let key = &stripped[..end];
+    (!key.is_empty()).then_some(key)
+}
+
+/// 宽松版本：允许任意位数的前导数字（`01ROAD`、`02ASPH`、`1WALL`）。
+///
+/// 仅用于 `physics.kn5` / `collision.kn5` 这类物理模型：这些文件里的网格
+/// 全部可碰撞，前缀数字是材质分组而不是 `1` 标记。
+fn node_surface_key_relaxed(name: &str) -> Option<&str> {
+    let name = name.trim();
+    let stripped = name.trim_start_matches(|c: char| c.is_ascii_digit());
+    if stripped.len() == name.len() {
+        return None; // 必须至少有一个前导数字
+    }
     let end = stripped
         .char_indices()
         .find(|(_, c)| *c == '_' || c.is_ascii_digit() || c.is_whitespace())
@@ -1512,7 +1551,7 @@ IS_VALID_TRACK=1
         };
 
         let triangles =
-            collect_collider_triangles(&kn5, Mat4::IDENTITY, SurfaceId::ASPHALT, |_| None);
+            collect_collider_triangles(&kn5, Mat4::IDENTITY, SurfaceId::ASPHALT, false, |_| None);
         assert_eq!(triangles.len(), 2, "only `1`-prefixed nodes are physical");
     }
 
