@@ -176,7 +176,13 @@ impl MergeGroup {
         }
 
         let basis = transform.basis;
-        let normal_basis = basis.inverse().transposed();
+        // 轨道放置矩阵理论上可逆；零缩放/退化矩阵的 inverse 会产生 inf/NaN，
+        // 直接用单位基，避免把 NaN 写进法线。
+        let normal_basis = if basis.determinant().abs() > 1.0e-9 {
+            basis.inverse().transposed()
+        } else {
+            Basis::IDENTITY
+        };
         let base_index = self.vertices.len() as i32;
         for index in 0..count {
             let vertex = vertices.get(index).unwrap_or(Vector3::ZERO);

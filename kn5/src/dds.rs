@@ -631,10 +631,11 @@ pub fn decode_base_rgba(data: &[u8]) -> Option<DecodedBase> {
             let bits_per_pixel = (l.bytes_per_pixel().unwrap_or(4)) as usize;
             for y in 0..h {
                 for x in 0..w {
-                    let src = payload.get(
-                        y as usize * w as usize * bits_per_pixel + x as usize * bits_per_pixel..,
-                    )?[..bits_per_pixel]
-                        .to_vec();
+                    // 逐像素用 checked range：最后几个像素 payload 不足时返回
+                    // None，而不是 `[..bpp]` 在短 slice 上 panic。
+                    let start =
+                        y as usize * w as usize * bits_per_pixel + x as usize * bits_per_pixel;
+                    let src = payload.get(start..start + bits_per_pixel)?.to_vec();
                     let out = (y as usize * w as usize + x as usize) * 4;
                     for (channel, mask) in masks.iter().enumerate() {
                         pixels[out + channel] = mask_extract(&src, *mask, bits_per_pixel);
@@ -919,6 +920,14 @@ mod decoder_tests {
         assert_eq!(decoded[1], 0);
         // r²+g² = 1 恰好在单位圆边界 → z = sqrt(1-1-0) = 0。
         assert_eq!(decoded[2], 0);
+    }
+
+    /// 未压缩 DDS 的 payload 被截断（KN5 偶尔写短）时返回 None，不能 panic。
+    #[test]
+    fn decode_base_rgba_uncompressed_truncated_payload_returns_none() {
+        let mut bytes = dds_header(8, 8, 1, b"\0\0\0\0");
+        bytes.extend_from_slice(&[1, 2, 3]);
+        assert!(decode_base_rgba(&bytes).is_none());
     }
 
     /// 完整管线：合法的 4x4 DXT5 DDS → decode_base_rgba。
