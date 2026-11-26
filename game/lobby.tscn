@@ -1,0 +1,279 @@
+[gd_scene load_steps=7 format=3 uid="uid://bvetturalobby"]
+
+[ext_resource type="Script" path="res://game/lobby.gd" id="1_lobby"]
+[ext_resource type="PackedScene" path="res://game/render/weather_rig.tscn" id="2_rig"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_info"]
+bg_color = Color(0.045, 0.055, 0.075, 0.86)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.35, 0.44, 0.55)
+corner_radius_top_left = 14
+corner_radius_top_right = 14
+corner_radius_bottom_right = 14
+corner_radius_bottom_left = 14
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_accent"]
+bg_color = Color(0.86, 0.31, 0.1, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_accent_hover"]
+bg_color = Color(0.96, 0.42, 0.16, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_accent_pressed"]
+bg_color = Color(0.7, 0.22, 0.06, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="Lobby" type="Node3D"]
+script = ExtResource("1_lobby")
+
+[node name="WeatherRig" parent="." instance=ExtResource("2_rig")]
+
+[node name="GarageRoot" type="Node3D" parent="."]
+
+[node name="CarPivot" type="Node3D" parent="."]
+
+[node name="OrbitPivot" type="Node3D" parent="."]
+
+[node name="Camera3D" type="Camera3D" parent="OrbitPivot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.65, 7.0)
+current = true
+fov = 55.0
+near = 0.1
+far = 600.0
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation = Vector3(-0.96, -0.61, 0)
+light_color = Color(1, 0.96, 0.9, 1)
+light_energy = 1.25
+shadow_enabled = true
+directional_shadow_max_distance = 80.0
+
+[node name="CarKeyLight" type="OmniLight3D" parent="."]
+light_color = Color(1, 0.86, 0.7, 1)
+light_energy = 2.2
+omni_range = 14.0
+omni_attenuation = 1.4
+
+[node name="GarageFill" type="OmniLight3D" parent="."]
+light_color = Color(0.62, 0.76, 1, 1)
+light_energy = 1.4
+omni_range = 17.0
+omni_attenuation = 1.6
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Root" type="Control" parent="UI"]
+unique_name_in_owner = true
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Margin" type="MarginContainer" parent="UI/Root"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="Layout" type="VBoxContainer" parent="UI/Root/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="TopBar" type="HBoxContainer" parent="UI/Root/Margin/Layout"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Brand" type="VBoxContainer" parent="UI/Root/Margin/Layout/TopBar"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Title" type="Label" parent="UI/Root/Margin/Layout/TopBar/Brand"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.65)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 46
+text = "VETTURA"
+
+[node name="Subtitle" type="Label" parent="UI/Root/Margin/Layout/TopBar/Brand"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.78, 0.84, 0.94, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.6)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_font_sizes/font_size = 17
+text = "GARAGE  /  游戏大厅"
+
+[node name="Spacer" type="Control" parent="UI/Root/Margin/Layout/TopBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+
+[node name="SettingsButton" type="Button" parent="UI/Root/Margin/Layout/TopBar"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(112, 46)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "设置"
+
+[node name="FullscreenButton" type="Button" parent="UI/Root/Margin/Layout/TopBar"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(112, 46)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "全屏"
+
+[node name="Flexible" type="Control" parent="UI/Root/Margin/Layout"]
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 2
+
+[node name="InfoPanel" type="PanelContainer" parent="UI/Root/Margin/Layout"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_info")
+
+[node name="InfoMargin" type="MarginContainer" parent="UI/Root/Margin/Layout/InfoPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 16
+
+[node name="InfoBox" type="VBoxContainer" parent="UI/Root/Margin/Layout/InfoPanel/InfoMargin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="InfoLabel" type="Label" parent="UI/Root/Margin/Layout/InfoPanel/InfoMargin/InfoBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.88, 0.92, 0.98, 1)
+theme_override_font_sizes/font_size = 20
+text = "车辆：（未加载）
+车库：（未加载）"
+autowrap_mode = 3
+
+[node name="Buttons" type="HFlowContainer" parent="UI/Root/Margin/Layout/InfoPanel/InfoMargin/InfoBox"]
+layout_mode = 2
+theme_override_constants/h_separation = 10
+theme_override_constants/v_separation = 10
+alignment = 2
+
+[node name="DriveButton" type="Button" parent="UI/Root/Margin/Layout/InfoPanel/InfoMargin/InfoBox/Buttons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(170, 54)
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+theme_override_styles/normal = SubResource("StyleBoxFlat_accent")
+theme_override_styles/hover = SubResource("StyleBoxFlat_accent_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_accent_pressed")
+text = "开始驾驶"
+
+[node name="CarButton" type="Button" parent="UI/Root/Margin/Layout/InfoPanel/InfoMargin/InfoBox/Buttons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(140, 54)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "车辆库"
+
+[node name="GarageButton" type="Button" parent="UI/Root/Margin/Layout/InfoPanel/InfoMargin/InfoBox/Buttons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(140, 54)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "车库模组"
+
+[node name="QuitButton" type="Button" parent="UI/Root/Margin/Layout/InfoPanel/InfoMargin/InfoBox/Buttons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(112, 54)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "退出"
+
+[node name="Hint" type="Label" parent="UI/Root/Margin/Layout"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.72, 0.78, 0.88, 0.9)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.6)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_font_sizes/font_size = 15
+text = "拖动画面旋转镜头 · 滚轮缩放 · 车库与车辆都可以随时替换"
+horizontal_alignment = 2
+
+[node name="Loading" type="Control" parent="UI/Root"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Dim" type="ColorRect" parent="UI/Root/Loading"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.02, 0.025, 0.035, 0.93)
+
+[node name="Center" type="CenterContainer" parent="UI/Root/Loading"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Stack" type="VBoxContainer" parent="UI/Root/Loading/Center"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="LoadingTitle" type="Label" parent="UI/Root/Loading/Center/Stack"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 38
+text = "VETTURA"
+horizontal_alignment = 1
+
+[node name="LoadingLabel" type="Label" parent="UI/Root/Loading/Center/Stack"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.78, 0.84, 0.94, 1)
+theme_override_font_sizes/font_size = 18
+text = "正在准备车库…"
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="LoadingBar" type="ProgressBar" parent="UI/Root/Loading/Center/Stack"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 12)
+layout_mode = 2
+value = 0.0
+show_percentage = false

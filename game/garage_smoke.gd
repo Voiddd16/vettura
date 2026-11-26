@@ -5,13 +5,13 @@ extends Node3D
 ## 用法：
 ##
 ## ```bash
-## /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://test_visual/garage_smoke.tscn
+## /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://game/garage_smoke.tscn
 ## ```
 ##
 ## 期望最后一行 `[garage-smoke] PASS`，退出码 0。
 
-const GARAGE := "res://test_visual/garage.tscn"
-const IMPORT_ROOT := "user://imported_cars/"
+const GARAGE := "res://game/garage.tscn"
+const IMPORT_ROOT := "user://mods/imported_cars/"
 
 var _garage: Control
 var _ok := true
@@ -21,10 +21,14 @@ func _ready() -> void:
 	await get_tree().process_frame  # 让 Control 完成布局
 	await _make_cars()
 	await _check_import_and_list()
+	await _check_mod_library()
 	await _check_search()
 	await _check_rename()
 	await _check_delete()
 	await _check_lazy_stats()
+	# 不在用户目录里留下测试车。
+	_reset_library()
+	ModLibrary.rescan()
 
 	if _ok:
 		print("[garage-smoke] PASS")
@@ -51,6 +55,11 @@ func _make_cars() -> void:
 		if data:
 			data.store_buffer(PackedByteArray(range(64)))  # 占位，不是真 acd
 			data.close()
+		# ModLibrary 的车辆判定要求目录里存在主模型。
+		var model := FileAccess.open(directory.path_join(name + ".kn5"), FileAccess.WRITE)
+		if model:
+			model.store_buffer(PackedByteArray([1, 2, 3, 4]))
+			model.close()
 		var textures := directory.path_join("textures")
 		DirAccess.make_dir_recursive_absolute(textures)
 		for file in 3:
@@ -85,6 +94,24 @@ func _check_import_and_list() -> void:
 	print("[garage-smoke] library: %s" % str(cars))
 
 # ---------------------------------------------------------------- 用例
+
+## 车模库面板现在从 ModLibrary 取列表，验证导入目录里的车确实出现在列表里。
+func _check_mod_library() -> void:
+	ModLibrary.rescan()
+	var garage: Control = load("res://game/garage.tscn").instantiate()
+	add_child(garage)
+	await get_tree().process_frame
+	var list := garage.get_node("%CarList") as ItemList
+	var names: Array[String] = []
+	for index in list.item_count:
+		names.append(list.get_item_text(index))
+	if not names.has("zz_car_a") or not names.has("zz_car_b"):
+		_fail("车模库没有列出 ModLibrary 发现的测试车：%s" % str(names))
+	else:
+		print("[garage-smoke] mod library ok")
+	garage.queue_free()
+	await get_tree().process_frame
+
 
 func _check_search() -> void:
 	# 直接把列表过滤函数拿出来跑（不弹 UI），验证大小写/子串匹配。

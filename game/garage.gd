@@ -1,26 +1,30 @@
 extends Control
 ## 车模库管理面板：导入 / 选择 / 重命名 / 删除 / 搜索。
 ##
-## 数据模型很薄：`user://imported_cars/` 下一级目录就是一台车，列表渲染只需要
-## 目录名；尺寸、`.kn5` 统计、物理参数这些**贵的东西一律懒加载**——只有真正选中
-## 一台车时才去扫它的文件，因此十几台车的车库打开和单台一样快。
+## 车辆列表来自统一的 `ModLibrary`：递归扫描 `mods/` 并自动识别车辆，不再由
+## 本面板自己遍历目录。列表只保存轻量元信息；目录大小、`.kn5` 数量、物理
+## 数据这些**贵的东西一律懒加载**——只有真正选中一台车时才去扫文件。
+##
+## 导入的 mod 也写进 `user://mods/imported_cars/`，和用户手动放进 mods 目录的
+## 车一样被自动发现。
 ##
 ## 用法：
 ##
 ## ```gdscript
-## var garage_scene: PackedScene = preload("res://test_visual/garage.tscn")
+## var garage_scene: PackedScene = preload("res://game/garage.tscn")
 ## var garage: Control = garage_scene.instantiate()
 ## garage.car_selected.connect(_on_garage_car_selected)
 ## add_child(garage)
 ## ```
 
-const IMPORT_ROOT := "user://imported_cars/"
+const IMPORT_ROOT := "user://mods/imported_cars/"
 
-const SafeArea := preload("res://test_visual/safe_area.gd")
+const SafeArea := preload("res://game/safe_area.gd")
 
 ## 单台车的元信息。`size_bytes` / `kn5_count` 留空 = 还没算过（懒加载）。
 class GarageCar:
 	var name: String
+	var folder_name: String
 	var path: String
 	var size_bytes: int = -1
 	var kn5_count: int = -1
@@ -52,45 +56,47 @@ var _filter := ""
 func _ready() -> void:
 	_search.text_changed.connect(_on_search_changed)
 	_list.item_selected.connect(_on_car_selected)
+	_list.item_activated.connect(func(_index: int) -> void: _on_load_pressed())
 	_import_button.pressed.connect(_on_import_pressed)
 	_load_button.pressed.connect(_on_load_pressed)
 	_rename_button.pressed.connect(_on_rename_pressed)
 	_delete_button.pressed.connect(_on_delete_pressed)
 	_open_button.pressed.connect(_on_open_pressed)
 	_close_button.pressed.connect(_close)
+	GameInput.push_nav_handler(_handle_nav)
 	_apply_safe_area()
 	get_viewport().size_changed.connect(_apply_safe_area)
 	refresh()
+
+
+func _exit_tree() -> void:
+	GameInput.pop_nav_handler(_handle_nav)
+
+
+func _handle_nav(_kind: String) -> bool:
+	_close()
+	return true
 
 ## 手机旋转 / 分屏变化时重算安全区边距：面板各按钮不被刘海、挖孔挡住。
 func _apply_safe_area() -> void:
 	SafeArea.apply(_margin)
 
-## 重新扫描 `user://imported_cars/`（只读一级目录，不做深扫描）。
+## 用 `ModLibrary` 的最新扫描结果重建车辆列表。打开面板时主动 rescan，
+## 这样用户运行中把车丢进 mods/ 目录后重新打开也能看到。
 func refresh() -> void:
 	_cars.clear()
-	var root := ProjectSettings.globalize_path(IMPORT_ROOT)
-	DirAccess.make_dir_recursive_absolute(root)
-
-	var dir := DirAccess.open(root)
-	if dir == null:
-		_warn("打不开车模目录：%s" % root)
-		return
-	dir.list_dir_begin()
-	var entry := dir.get_next()
-	while entry != "":
-		# 只列一级目录；隐藏目录（例如 macOS 的 `.TemporaryItems`）跳过。
-		if dir.current_is_dir() and not entry.begins_with(".") and not entry.begins_with("__"):
-			var car := GarageCar.new()
-			car.name = entry
-			car.path = root.path_join(entry)
-			_cars.append(car)
-		entry = dir.get_next()
-	dir.list_dir_end()
+	ModLibrary.rescan()
+	for entry in ModLibrary.cars():
+		var car := GarageCar.new()
+		car.name = entry.display_name
+		car.folder_name = entry.folder_name
+		car.path = entry.path
+		_cars.append(car)
 
 	_cars.sort_custom(func(a: GarageCar, b: GarageCar) -> bool:
 			return a.name.naturalcasecmp_to(b.name) < 0)
 	_apply_filter()
+	_list.grab_focus()
 	library_changed.emit()
 
 ## 搜索：只重排已有数据，绝不碰磁盘。
@@ -102,8 +108,11 @@ func _on_search_changed(text: String) -> void:
 func _apply_filter() -> void:
 	_list.clear()
 	for car in _cars:
-		if _filter.is_empty() or car.name.to_lower().contains(_filter):
-			_list.add_item(car.name)
+		var haystack := (car.name + " " + car.folder_name).to_lower()
+		if _filter.is_empty() or haystack.contains(_filter):
+			var index := _list.add_item(car.name)
+			# 用路径做列表项身份，显示名重复也不会选错车。
+			_list.set_item_metadata(index, car.path)
 	_select_first()
 
 func _select_first() -> void:
@@ -128,6 +137,7 @@ func _on_car_selected(index: int) -> void:
 
 	var lines: PackedStringArray = PackedStringArray([
 			"名称：%s" % car.name,
+			"目录：%s" % car.folder_name,
 			"路径：%s" % car.path,
 			"大小：%s" % _human_bytes(car.size_bytes),
 			"网格：%d 个 .kn5" % car.kn5_count,
@@ -139,9 +149,11 @@ func _on_car_selected(index: int) -> void:
 
 ## 取“当前可见的第 index 行”对应的车（搜索时列表是过滤视图）。
 func _visible_car(index: int) -> GarageCar:
-	var label := _list.get_item_text(index)
+	if index < 0 or index >= _list.item_count:
+		return null
+	var path := String(_list.get_item_metadata(index))
 	for car in _cars:
-		if car.name == label:
+		if car.path == path:
 			return car
 	return null
 
@@ -233,20 +245,22 @@ func _on_system_dialog_result(status: bool, paths: PackedStringArray,
 		return
 	_import_from(paths[0], null)
 
-## 把外部路径复制/解压成 `user://imported_cars/<名字>/`，然后刷新列表。
+## 把外部路径复制/解压成 `user://mods/imported_cars/<名字>/`，然后刷新列表。
 ## `picker` 只在桌面分支有值（用于关闭对话框）；Android 回调进来时是 null。
 func _import_from(source: String, picker: FileDialog = null) -> void:
 	if picker != null:
 		picker.queue_free()
 	var name: String = source.get_file().get_basename()
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(IMPORT_ROOT))
 	var target := ProjectSettings.globalize_path(IMPORT_ROOT.path_join(name))
 
 	if source.to_lower().ends_with(".zip"):
 		if not _unpack(source, target):
 			_warn("解压失败：%s" % source)
 			return
-	elif FileAccess.file_exists(source.path_join("data.acd")) or \
-			DirAccess.dir_exists_absolute(source.path_join("data")):
+	elif ModLibrary.classify_path(source) != null \
+			or FileAccess.file_exists(source.path_join("data.acd")) \
+			or DirAccess.dir_exists_absolute(source.path_join("data")):
 		_copy_directory(source, target)
 	elif source.to_lower().ends_with(".kn5"):
 		# 单个 .kn5：旁边只要再有一个 data 目录就能开；裸 .kn5 也允许导入看模型。
@@ -255,10 +269,13 @@ func _import_from(source: String, picker: FileDialog = null) -> void:
 		_warn("不是车模：%s" % source)
 		return
 
+	# mods 目录变了，refresh() 会重建索引再刷新列表。
 	refresh()
-	# 选中刚导入的那台。
+	# 选中刚导入的那台（zip 可能把车包在多层目录里，按路径前缀找）。
+	var imported_root := ProjectSettings.globalize_path(target)
 	for index in _list.item_count:
-		if _visible_car(index) != null and _visible_car(index).name == name:
+		var visible := _visible_car(index)
+		if visible != null and ProjectSettings.globalize_path(visible.path).begins_with(imported_root):
 			_list.select(index)
 			_on_car_selected(index)
 			break
@@ -339,7 +356,7 @@ func _on_rename_pressed() -> void:
 	var dialog := AcceptDialog.new()
 	dialog.title = "重命名车模"
 	var input := LineEdit.new()
-	input.text = car.name
+	input.text = car.folder_name
 	input.custom_minimum_size = Vector2(360, 0)
 	dialog.add_child(input)
 	dialog.ok_button_text = "确定"

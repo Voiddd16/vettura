@@ -1,0 +1,132 @@
+[gd_scene load_steps=3 format=3 uid="uid://bvetturagaragemod"]
+
+[ext_resource type="Script" path="res://game/garage_mod_picker.gd" id="1_picker"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_background"]
+bg_color = Color(0.065, 0.075, 0.095, 0.97)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[node name="GarageModPicker" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_picker")
+
+[node name="Background" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_background")
+
+[node name="Margin" type="MarginContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="Body" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Header" type="HBoxContainer" parent="Margin/Body"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="Margin/Body/Header"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 30
+text = "车库模组"
+
+[node name="Spacer" type="Control" parent="Margin/Body/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+
+[node name="RescanButton" type="Button" parent="Margin/Body/Header"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(100, 42)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "重新扫描"
+
+[node name="BrowseButton" type="Button" parent="Margin/Body/Header"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 42)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "浏览目录…"
+
+[node name="CloseButton" type="Button" parent="Margin/Body/Header"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 42)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "返回"
+
+[node name="Columns" type="HBoxContainer" parent="Margin/Body"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 20
+
+[node name="Left" type="VBoxContainer" parent="Margin/Body/Columns"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="ModList" type="ItemList" parent="Margin/Body/Columns/Left"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_font_sizes/font_size = 20
+
+[node name="ScanHint" type="Label" parent="Margin/Body/Columns/Left"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.68, 0.78, 1)
+theme_override_font_sizes/font_size = 15
+text = "递归扫描 mods/ 与 user://mods/，自动识别赛道和车库 mod。"
+autowrap_mode = 3
+
+[node name="Right" type="VBoxContainer" parent="Margin/Body/Columns"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 12
+
+[node name="Preview" type="TextureRect" parent="Margin/Body/Columns/Right"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(280, 180)
+layout_mode = 2
+size_flags_vertical = 3
+expand_mode = 1
+stretch_mode = 6
+
+[node name="InfoLabel" type="Label" parent="Margin/Body/Columns/Right"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 120)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "选择一个车库模组"
+autowrap_mode = 3
+
+[node name="SelectButton" type="Button" parent="Margin/Body/Columns/Right"]
+unique_name_in_owner = true
+disabled = true
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "使用这个车库"

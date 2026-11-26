@@ -1,0 +1,334 @@
+[gd_scene load_steps=3 format=3 uid="uid://bvetturasettings"]
+
+[ext_resource type="Script" path="res://game/settings_popup.gd" id="1_settings"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.075, 0.085, 0.105, 0.98)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.32, 0.36, 0.44, 0.7)
+corner_radius_top_left = 16
+corner_radius_top_right = 16
+corner_radius_bottom_right = 16
+corner_radius_bottom_left = 16
+
+[node name="SettingsPopup" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_settings")
+
+[node name="Dim" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.62)
+
+[node name="Margin" type="MarginContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="Center" type="CenterContainer" parent="Margin"]
+layout_mode = 2
+
+[node name="Panel" type="PanelContainer" parent="Margin/Center"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(560, 380)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="PanelMargin" type="MarginContainer" parent="Margin/Center/Panel"]
+layout_mode = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 18
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 18
+
+[node name="Body" type="VBoxContainer" parent="Margin/Center/Panel/PanelMargin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Header" type="HBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Header"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 30
+text = "设置"
+
+[node name="Spacer" type="Control" parent="Margin/Center/Panel/PanelMargin/Body/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+
+[node name="CloseButton" type="Button" parent="Margin/Center/Panel/PanelMargin/Body/Header"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "✕"
+
+[node name="Tabs" type="TabContainer" parent="Margin/Center/Panel/PanelMargin/Body"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_font_sizes/font_size = 19
+
+[node name="音频" type="ScrollContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs"]
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="AudioBox" type="VBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/音频"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 18
+
+[node name="AudioTitle" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/音频/AudioBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.78, 0.83, 0.92, 1)
+theme_override_font_sizes/font_size = 18
+text = "主音量影响游戏内所有声音（引擎、环境、界面）。"
+
+[node name="MasterRow" type="HBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/音频/AudioBox"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="MasterLabel" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/音频/AudioBox/MasterRow"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "主音量"
+
+[node name="MasterSlider" type="HSlider" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/音频/AudioBox/MasterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 100.0
+step = 1.0
+value = 80.0
+
+[node name="MasterValue" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/音频/AudioBox/MasterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(74, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "80%"
+horizontal_alignment = 2
+
+[node name="画面" type="ScrollContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs"]
+visible = false
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="VideoBox" type="VBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 12
+
+[node name="FullscreenCheck" type="CheckBox" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "全屏"
+
+[node name="BorderlessCheck" type="CheckBox" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "无边框全屏（隐藏标题栏）"
+
+[node name="AdaptiveCheck" type="CheckBox" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "全屏自动分辨率（推荐，MetalFX/FSR 上采样）"
+
+[node name="AdaptiveLabel" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.68, 0.78, 1)
+theme_override_font_sizes/font_size = 16
+text = "全屏自动：按帧率在 35%~100% 之间调整 3D 渲染分辨率。"
+autowrap_mode = 3
+
+[node name="WindowHint" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.68, 0.78, 1)
+theme_override_font_sizes/font_size = 16
+text = "F11 / Alt+Enter 可在游戏中随时切换全屏。macOS 上“无边框全屏”等同原生全屏；移动端由系统全屏策略接管。"
+autowrap_mode = 3
+
+[node name="VsyncCheck" type="CheckBox" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "垂直同步（减少画面撕裂）"
+
+[node name="ShadowsCheck" type="CheckBox" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "实时阴影"
+
+[node name="ScaleRow" type="HBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="ScaleLabel" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox/ScaleRow"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "3D 分辨率"
+
+[node name="ScaleSlider" type="HSlider" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox/ScaleRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+min_value = 50.0
+max_value = 100.0
+step = 5.0
+value = 100.0
+
+[node name="ScaleValue" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox/ScaleRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(74, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "100%"
+horizontal_alignment = 2
+
+[node name="ScaleHint" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.68, 0.78, 1)
+theme_override_font_sizes/font_size = 16
+text = "低端设备可以把 3D 分辨率降到 70% 左右，UI 仍保持清晰。"
+autowrap_mode = 3
+
+[node name="车库" type="ScrollContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs"]
+visible = false
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="GarageBox" type="VBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/车库"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 18
+
+[node name="OrbitSpeedRow" type="HBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/车库/GarageBox"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="OrbitSpeedLabel" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/车库/GarageBox/OrbitSpeedRow"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "环绕速度"
+
+[node name="OrbitSpeedSlider" type="HSlider" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/车库/GarageBox/OrbitSpeedRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 60.0
+step = 1.0
+value = 18.0
+
+[node name="OrbitSpeedValue" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/车库/GarageBox/OrbitSpeedRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "0.18 rad/s"
+horizontal_alignment = 2
+
+[node name="OrbitRadiusRow" type="HBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/车库/GarageBox"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="OrbitRadiusLabel" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/车库/GarageBox/OrbitRadiusRow"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "镜头距离"
+
+[node name="OrbitRadiusSlider" type="HSlider" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/车库/GarageBox/OrbitRadiusRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+min_value = 3.0
+max_value = 10.0
+step = 0.5
+value = 7.0
+
+[node name="OrbitRadiusValue" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/车库/GarageBox/OrbitRadiusRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "7.0 m"
+horizontal_alignment = 2
+
+[node name="GarageHint" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/车库/GarageBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.68, 0.78, 1)
+theme_override_font_sizes/font_size = 16
+text = "当前车库模组："
+autowrap_mode = 3
+
+[node name="输入" type="ScrollContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs"]
+visible = false
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="InputBox" type="VBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/输入"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 10
+
+[node name="Footer" type="HBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="ResetButton" type="Button" parent="Margin/Center/Panel/PanelMargin/Body/Footer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 44)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "恢复默认"
+
+[node name="Spacer" type="Control" parent="Margin/Center/Panel/PanelMargin/Body/Footer"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+
+[node name="ApplyButton" type="Button" parent="Margin/Center/Panel/PanelMargin/Body/Footer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 44)
+layout_mode = 2
+theme_override_font_sizes/font_size = 19
+text = "完成"

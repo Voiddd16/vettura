@@ -371,9 +371,10 @@ def step_lib(args: argparse.Namespace) -> None:
             print(f"  已拷贝 -> {destination / source.name}")
 
 
-MCP_AUTOLOAD_RE = re.compile(
-    r"\[autoload\]\n\nMCPRuntimeProbe=[^\n]*\n\n", re.MULTILINE
-)
+# 只删 `MCPRuntimeProbe` 这一行，不依赖它在 `[autoload]` 里的位置或前后空行。
+# 大厅的 `GameSettings` 也是 autoload，原先“整段匹配”的正则会因它插在中间而
+# 静默失效，导致 APK 启动报 Unrecognized UID。
+MCP_AUTOLOAD_RE = re.compile(r"^MCPRuntimeProbe=[^\n]*\n", re.MULTILINE)
 
 
 def strip_mcp_autoload() -> tuple[bool, str]:

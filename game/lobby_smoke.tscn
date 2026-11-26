@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://bvetturalobbysmoke"]
+
+[ext_resource type="Script" path="res://game/lobby_smoke.gd" id="1_lobby_smoke"]
+
+[node name="LobbySmoke" type="Node3D"]
+script = ExtResource("1_lobby_smoke")

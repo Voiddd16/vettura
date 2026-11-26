@@ -6,7 +6,7 @@ extends RefCounted
 ## `viewport.size_changed`（旋转、窗口拖动、分屏都会变安全区）：
 ##
 ## ```gdscript
-## const SafeArea := preload("res://test_visual/safe_area.gd")
+## const SafeArea := preload("res://game/safe_area.gd")
 ##
 ## func _apply_safe_area() -> void:
 ## 	SafeArea.apply(panel)                       # panel: MarginContainer

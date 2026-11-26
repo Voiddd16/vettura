@@ -5,12 +5,12 @@ extends Node3D
 ## 用法：
 ##
 ## ```bash
-## godot --headless --path . res://test_visual/smoke.tscn --quit-after 240
+## godot --headless --path . res://game/smoke.tscn --quit-after 240
 ## ```
 ##
 ## 期望输出 `[visual-smoke] PASS`，退出码 `0`。
 
-const MAIN_SCENE := preload("res://test_visual/main.tscn")
+const MAIN_SCENE := preload("res://game/main.tscn")
 
 var _main: Node3D
 var _ok := true
@@ -56,23 +56,24 @@ func _check_touch() -> void:
 	var brake_button := _main.get_node("CanvasLayer/TouchOverlay/BrakeArea/BrakeButton") as Button
 	throttle_button.emit_signal("button_down")
 	brake_button.emit_signal("button_down")
-	await get_tree().process_frame
+	await get_tree().create_timer(0.15).timeout
 
-	if not _main._throttle:
+	if _main._throttle <= 0.5:
 		_fail("throttle button did not drive _throttle")
-	if not _main._brake:
+	if _main._brake <= 0.5:
 		_fail("brake button did not drive _brake")
 
 	# 左侧刹车/右侧油门是同一个 HUD 文本域里的两个状态位，直接看文本最省事。
 	var info := _main.get_node("HUD/Panel/Columns/Column/InfoLabel") as Label
-	if info.text.find("油门（右半屏 / W）：ON") == -1 or info.text.find("刹车（左半屏 / S）：ON") == -1:
+	if info.text.find("油门：100%") == -1 or info.text.find("刹车：100%") == -1:
 		_fail("HUD did not reflect touch state: %s" % info.text)
 
 	# 松手后状态必须能回落，否则真机上手指离开后车会永远算在加油。
 	throttle_button.emit_signal("button_up")
 	brake_button.emit_signal("button_up")
 	await get_tree().process_frame
-	if _main._throttle or _main._brake:
+	await get_tree().process_frame
+	if _main._throttle > 0.01 or _main._brake > 0.01:
 		_fail("touch state did not clear on release")
 
 func _check_camera_modes() -> void:

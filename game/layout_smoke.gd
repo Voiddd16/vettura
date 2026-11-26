@@ -8,7 +8,7 @@ extends Node3D
 ## 用法：
 ##
 ## ```bash
-## godot --headless --path . res://test_visual/layout_smoke.tscn --quit-after 2000
+## godot --headless --path . res://game/layout_smoke.tscn --quit-after 2000
 ## ```
 ##
 ## 期望最后一行 `[layout-smoke] PASS`，退出码 0。
@@ -26,9 +26,9 @@ const SIZES := [
 var _ok := true
 
 func _ready() -> void:
-	var main: Node3D = load("res://test_visual/main.tscn").instantiate()
+	var main: Node3D = load("res://game/main.tscn").instantiate()
 	add_child(main)
-	var garage: Control = load("res://test_visual/garage.tscn").instantiate()
+	var garage: Control = load("res://game/garage.tscn").instantiate()
 	garage.set_anchors_preset(Control.PRESET_FULL_RECT, true)
 	add_child(garage)
 	await get_tree().process_frame
@@ -47,6 +47,8 @@ func _ready() -> void:
 		var ok := _check_group(label + " HUD", [
 			main.get_node("HUD/Panel/Columns/Column/InfoLabel"),
 			main.get_node("HUD/Panel/Columns/Column/ImportButton"),
+			main.get_node("HUD/Panel/Columns/Column/SettingsButton"),
+			main.get_node("HUD/Panel/Columns/Column/LobbyButton"),
 			main.get_node("HUD/Panel/Columns/ModeButton"),
 		]) and _check_group(label + " Garage", [
 			garage.get_node("%ImportButton"),

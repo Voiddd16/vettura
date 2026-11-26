@@ -5,7 +5,7 @@ extends Node
 ## 用法：
 ##
 ## ```bash
-## /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://test_visual/log_smoke.tscn
+## /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://game/log_smoke.tscn
 ## ```
 ##
 ## 期望最后一行 `[log-smoke] PASS`，退出码 0。
@@ -13,7 +13,7 @@ extends Node
 ## panic 转储验证（会触发一次真实 Rust panic，进程由布好的定时器退出）：
 ##
 ## ```bash
-## LOG_SMOKE_PANIC=1 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://test_visual/log_smoke.tscn
+## LOG_SMOKE_PANIC=1 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://game/log_smoke.tscn
 ## grep "simulated panic" "$HOME/Library/Application Support/Godot/app_userdata/Vettura/logs/last-crash.log"
 ## ```
 ##
