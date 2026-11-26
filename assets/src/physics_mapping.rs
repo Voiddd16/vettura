@@ -18,6 +18,25 @@ use vettura_physics::{
 use crate::car::CarData;
 use crate::error::{AssetError, Result};
 
+/// One of AC's `[DIFFERENTIAL] POWER`/`COAST` lock fractions.
+///
+/// `0` is a fully open differential and a legitimate authored value, not a
+/// missing one, so only negative or non-finite values fall back to the spec
+/// default (which keeps unknown mods locked).
+fn diff_lock_fraction(drivetrain: &Ini, key: &str, fallback: f32) -> f32 {
+    // 兜底值来自 `VehicleSpec`，手写/反序列化也可能带 NaN；非法时按锁定处理。
+    let fallback = if fallback.is_finite() && fallback >= 0.0 {
+        fallback.min(1.0)
+    } else {
+        1.0
+    };
+    drivetrain
+        .get_f32("DIFFERENTIAL", key)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map(|value| value.min(1.0))
+        .unwrap_or(fallback)
+}
+
 pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> {
     let car = optional_ini(data, "car.ini");
     let suspensions = optional_ini(data, "suspensions.ini");
@@ -224,14 +243,8 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
         layout: drivetrain_layout(&drivetrain),
         efficiency: spec.drivetrain.efficiency,
         diff: DiffSpec {
-            power_lock: drivetrain
-                .get_f32("DIFFERENTIAL", "POWER")
-                .filter(|value| value.is_finite() && *value > 0.0)
-                .unwrap_or(spec.drivetrain.diff.power_lock),
-            coast_lock: drivetrain
-                .get_f32("DIFFERENTIAL", "COAST")
-                .filter(|value| value.is_finite() && *value > 0.0)
-                .unwrap_or(spec.drivetrain.diff.coast_lock),
+            power_lock: diff_lock_fraction(&drivetrain, "POWER", spec.drivetrain.diff.power_lock),
+            coast_lock: diff_lock_fraction(&drivetrain, "COAST", spec.drivetrain.diff.coast_lock),
             preload_nm: drivetrain
                 .get_f32("DIFFERENTIAL", "PRELOAD")
                 .filter(|value| value.is_finite() && *value >= 0.0)
@@ -1194,17 +1207,23 @@ mod tests {
         let spec = VehicleSpec::default();
         let mapping = |ini: &str| {
             let drivetrain = Ini::parse(ini);
-            vec![
-                drivetrain
-                    .get_f32("DIFFERENTIAL", "POWER")
-                    .unwrap_or(spec.drivetrain.diff.power_lock),
-                drivetrain
-                    .get_f32("DIFFERENTIAL", "COAST")
-                    .unwrap_or(spec.drivetrain.diff.coast_lock),
+            [
+                diff_lock_fraction(&drivetrain, "POWER", spec.drivetrain.diff.power_lock),
+                diff_lock_fraction(&drivetrain, "COAST", spec.drivetrain.diff.coast_lock),
             ]
         };
         assert_eq!(mapping("")[0], 1.0);
         assert_eq!(mapping("[DIFFERENTIAL]\nPOWER=0.25\n")[0], 0.25);
+        // AC authors a fully open differential as `0`; it must stay open
+        // instead of falling back to the locked default.
+        assert_eq!(mapping("[DIFFERENTIAL]\nPOWER=0\nCOAST=0\n"), [0.0, 0.0]);
+        // Non-finite and out-of-range values still fall back / clamp.
+        assert_eq!(mapping("[DIFFERENTIAL]\nPOWER=-1\n")[0], 1.0);
+        assert_eq!(mapping("[DIFFERENTIAL]\nPOWER=4\n")[0], 1.0);
+        // A corrupt spec fallback must not leak NaN or >1 into the diff.
+        let drivetrain = Ini::parse("");
+        assert_eq!(diff_lock_fraction(&drivetrain, "POWER", f32::NAN), 1.0);
+        assert_eq!(diff_lock_fraction(&drivetrain, "COAST", 4.0), 1.0);
     }
 
     #[test]

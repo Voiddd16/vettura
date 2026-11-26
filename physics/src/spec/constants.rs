@@ -9,12 +9,23 @@ pub const AIR_DENSITY_KG_M3: f32 = 1.225;
 /// Friction table for a backend: `(slip, friction coefficient)` points.
 pub type FrictionTable = Vec<(f32, f32)>;
 
+/// Slip angle at which the fallback lateral curve peaks, degrees.
+///
+/// Also the peak the self-aligning moment uses when a car publishes no
+/// `FRICTION_LIMIT_ANGLE`: the moment has to turn where the force curve it is
+/// derived from actually peaks.
+pub const DEFAULT_LATERAL_PEAK_SLIP_DEG: f32 = 3.0;
+
 /// Friction curve used when a car publishes nothing: the long-standing default,
 /// a peak at 6 % longitudinal slip and 3 degrees of slip angle.
 pub const DEFAULT_LONGITUDINAL_CURVE: [(f32, f32); 4] =
     [(0.0, 0.0), (0.06, 1.0), (0.18, 0.93), (0.5, 0.8)];
-pub const DEFAULT_LATERAL_CURVE: [(f32, f32); 4] =
-    [(0.0, 0.0), (3.0, 1.0), (10.0, 0.95), (20.0, 0.82)];
+pub const DEFAULT_LATERAL_CURVE: [(f32, f32); 4] = [
+    (0.0, 0.0),
+    (DEFAULT_LATERAL_PEAK_SLIP_DEG, 1.0),
+    (10.0, 0.95),
+    (20.0, 0.82),
+];
 
 /// Vertical rate of two springs in series, N/m.
 ///

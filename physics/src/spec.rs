@@ -24,8 +24,8 @@ pub mod wheel;
 pub use aero::{AeroSpec, WingSpec};
 pub use brakes::BrakeSpec;
 pub use constants::{
-    AERO_REFERENCE_SPEED_MPS, AIR_DENSITY_KG_M3, DEFAULT_LATERAL_CURVE, DEFAULT_LONGITUDINAL_CURVE,
-    FrictionTable, series_spring_rate,
+    AERO_REFERENCE_SPEED_MPS, AIR_DENSITY_KG_M3, DEFAULT_LATERAL_CURVE,
+    DEFAULT_LATERAL_PEAK_SLIP_DEG, DEFAULT_LONGITUDINAL_CURVE, FrictionTable, series_spring_rate,
 };
 pub use drivetrain::{DiffSpec, DrivetrainLayout, DrivetrainSpec, GearboxSpec};
 pub use drs::DrsSpec;

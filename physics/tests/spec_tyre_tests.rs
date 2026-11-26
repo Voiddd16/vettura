@@ -1,6 +1,6 @@
 //! Tests for the tyre spec: grip, thermal, wear, slip curves and rolling resistance.
 
-use vettura_physics::spec::{TyreSpec, TyreThermalSpec};
+use vettura_physics::spec::{DEFAULT_LATERAL_PEAK_SLIP_DEG, TyreSpec, TyreThermalSpec};
 
 #[test]
 fn tyre_pressure_rises_with_temperature() {
@@ -180,6 +180,16 @@ fn aligning_torque_and_rolling_resistance_come_from_the_tyre_data() {
         ..tyre.clone()
     };
     assert_eq!(no_trail.aligning_torque_nm(0.5 * peak, 1_000.0), 0.0);
+    // A car that publishes no FRICTION_LIMIT_ANGLE falls back to the flat
+    // default lateral table (peak at 3°). The moment has to turn there too,
+    // not at a near-zero peak that would invert it while the tyre still grips.
+    let unpublished = TyreSpec {
+        lateral_peak_slip_deg: 0.0,
+        ..tyre.clone()
+    };
+    let default_peak = DEFAULT_LATERAL_PEAK_SLIP_DEG.to_radians();
+    assert!((unpublished.aligning_torque_nm(0.5 * default_peak, 1_000.0) - 35.0).abs() < 1e-3);
+    assert!(unpublished.aligning_torque_nm(1.5 * default_peak, 1_000.0) > 0.0);
     // Nonsense lateral force is harmless; a nonsense slip angle reads as zero
     // slip (full aligning) rather than poisoning the chassis.
     assert_eq!(tyre.aligning_torque_nm(0.5 * peak, f32::NAN), 0.0);

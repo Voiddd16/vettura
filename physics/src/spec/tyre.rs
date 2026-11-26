@@ -1,9 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-use crate::spec::constants::{DEFAULT_LATERAL_CURVE, DEFAULT_LONGITUDINAL_CURVE};
+use crate::spec::constants::{
+    DEFAULT_LATERAL_CURVE, DEFAULT_LATERAL_PEAK_SLIP_DEG, DEFAULT_LONGITUDINAL_CURVE,
+};
 use crate::spec::tyre_thermal::TyreThermalSpec;
 use crate::spec::tyre_wear::TyreWearSpec;
 use crate::tyre_model::SlipCurve;
+
+/// Share of the peak moment the de-aligning branch reaches in the opposite
+/// direction once the tyre is fully sliding (real Mz curves settle around a
+/// third of the peak).
+const DEALIGNING_MOMENT_SHARE: f32 = 0.35;
 
 /// Complete tyre specification from AC `tyres.ini` and compound data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -346,14 +353,24 @@ impl TyreSpec {
         } else {
             0.0
         };
-        let peak = self.lateral_peak_slip_deg.to_radians().max(0.01);
+        // A car that does not author `FRICTION_LIMIT_ANGLE` falls back to the
+        // flat default lateral table, whose peak sits at 3°. Use that same
+        // peak here: treating the missing `0` as "peaks immediately" would
+        // flip the moment while the tyre is still building grip.
+        let peak_deg = if self.lateral_peak_slip_deg.is_finite() && self.lateral_peak_slip_deg > 0.0
+        {
+            self.lateral_peak_slip_deg
+        } else {
+            DEFAULT_LATERAL_PEAK_SLIP_DEG
+        };
+        let peak = peak_deg.to_radians().max(0.01);
         let ratio = if lean <= peak {
             1.0
         } else {
             // 1 at the peak slip → 0 at ~2.1× → −0.35 beyond ~3× (smoothstep).
             let t = ((lean - peak) / (2.0 * peak)).clamp(0.0, 1.0);
             let s = t * t * (3.0 - 2.0 * t);
-            1.0 - 1.35 * s
+            1.0 - (1.0 + DEALIGNING_MOMENT_SHARE) * s
         };
         (lateral_force_n * self.pneumatic_trail_m * ratio).clamp(-2_000.0, 2_000.0)
     }

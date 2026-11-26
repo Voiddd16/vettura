@@ -221,6 +221,43 @@ fn engine_max_torque_nm(spec: &VehicleSpec, tuning: &VehicleTuning) -> f32 {
         .clamp(1.0, 5_000.0)
 }
 
+/// Equivalent Jolt limited-slip ratio for AC's single differential: `1` is
+/// fully locked, larger is more open.
+///
+/// AC's differential is a clutch-type unit: `POWER`/`COAST` are the locking
+/// rates under drive/overrun, `PRELOAD` is the base locking torque that acts
+/// even with no speed difference. Jolt only has one speed-ratio based model
+/// (1 = fully locked, larger = more open) and no drive/overrun state, so the
+/// three numbers collapse into one ratio. `PRELOAD` is folded in as extra base
+/// locking — it used to be read into the spec and then never used. A true
+/// ramp/preload differential needs a custom unit; Jolt cannot express it.
+fn differential_lock_ratio(spec: &VehicleSpec) -> f32 {
+    let diff = &spec.drivetrain.diff;
+    // A non-finite lock would poison the ratio (and Jolt's assert), so a car
+    // we cannot read keeps the locked default.
+    let lock_fraction = |lock: f32| {
+        if lock.is_finite() {
+            lock.clamp(0.01, 1.0)
+        } else {
+            1.0
+        }
+    };
+    // `PRELOAD` is torque at the differential, so normalise it by the engine's
+    // peak torque; the floor keeps a missing figure from dividing by zero.
+    let preload_lock = if diff.preload_nm.is_finite() {
+        (diff.preload_nm / (2.0 * spec.engine.peak_torque_nm.max(1.0))).clamp(0.0, 0.5)
+    } else {
+        0.0
+    };
+    let lock = (0.5 * (lock_fraction(diff.power_lock) + lock_fraction(diff.coast_lock))
+        + preload_lock)
+        .clamp(0.01, 1.0);
+    // Jolt needs a ratio strictly above 1. `lock` never drops below 0.01, so
+    // the ratio tops out at 100: an open diff is effectively open without
+    // handing Jolt `f32::MAX`.
+    (1.0 / lock).clamp(1.0001, 100.0)
+}
+
 pub(crate) fn vehicle_settings(
     spec: &VehicleSpec,
     tuning: &VehicleTuning,
@@ -303,29 +340,11 @@ pub(crate) fn vehicle_settings(
     } else {
         3.2
     };
-    // AC's differential is a clutch-type unit: `POWER`/`COAST` are the locking
-    // rates under drive/overrun, `PRELOAD` is the base locking torque that acts
-    // even with no speed difference. Jolt only has one speed-ratio based
-    // limited-slip model (1 = fully locked, larger = more open) and no
-    // drive/overrun state, so the three numbers collapse into one equivalent
-    // ratio. `PRELOAD` is folded in as extra base locking — it used to be read
-    // into the spec and then never used. A true ramp/preload differential needs
-    // a custom unit; Jolt's model cannot express it.
-    let diff = &spec.drivetrain.diff;
-    let preload_lock = if diff.preload_nm.is_finite() {
-        (diff.preload_nm / (2.0 * spec.engine.peak_torque_nm.max(1.0))).clamp(0.0, 0.5)
-    } else {
-        0.0
-    };
-    let lock = (0.5 * (diff.power_lock.clamp(0.01, 1.0) + diff.coast_lock.clamp(0.01, 1.0))
-        + preload_lock)
-        .clamp(0.01, 1.0);
-    // Jolt needs a ratio strictly above 1: fully locked becomes just over 1, an
-    // open diff becomes a large number. This single ratio is what the per-axle
-    // differentials use; for RWD/FWD it is the *only* thing that shapes the
-    // left/right torque split (the controller's global ratio only matters when
-    // several axles share the engine, i.e. AWD).
-    let lock_ratio = (1.0 / lock).clamp(1.0001, 100.0);
+    // AC's differential mapping (POWER/COAST/PRELOAD → one Jolt speed ratio)
+    // lives in `differential_lock_ratio`. The per-axle differentials get that
+    // ratio because they are what shape the left/right torque split; the
+    // controller's global ratio only engages when several axles are driven.
+    let lock_ratio = differential_lock_ratio(spec);
 
     let differentials = match spec.drivetrain.layout {
         DrivetrainLayout::Rwd => vec![
@@ -455,6 +474,73 @@ mod geometry_probe {
                 spec.wheels[index].suspension.travel_m,
                 spec.wheels[index].suspension.spring_rate_n_per_m,
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod differential_tests {
+    use super::*;
+
+    const PEAK_TORQUE_NM: f32 = 500.0;
+
+    fn ratio(power: f32, coast: f32, preload: f32) -> f32 {
+        let mut spec = VehicleSpec::default();
+        spec.engine.peak_torque_nm = PEAK_TORQUE_NM;
+        spec.drivetrain.diff.power_lock = power;
+        spec.drivetrain.diff.coast_lock = coast;
+        spec.drivetrain.diff.preload_nm = preload;
+        differential_lock_ratio(&spec)
+    }
+
+    #[test]
+    fn ac_lock_fractions_become_one_jolt_ratio() {
+        // Fully locked: Jolt wants a ratio strictly above 1.
+        assert!((ratio(1.0, 1.0, 0.0) - 1.0001).abs() < 1.0e-4);
+        // Quarter lock (a typical F1 diff) is four times the speed ratio.
+        assert!((ratio(0.25, 0.25, 0.0) - 4.0).abs() < 1.0e-4);
+        // Power and coast are averaged.
+        assert!((ratio(0.25, 0.75, 0.0) - 2.0).abs() < 1.0e-4);
+        // Fully open stays effectively open.
+        assert!((ratio(0.0, 0.0, 0.0) - 100.0).abs() < 1.0e-3);
+    }
+
+    #[test]
+    fn preload_adds_base_locking() {
+        // 500 N·m preload on a 500 N·m engine is 0.5 of extra locking, so a
+        // quarter-lock diff behaves like a 0.75 one.
+        assert!((ratio(0.25, 0.25, PEAK_TORQUE_NM) - 4.0 / 3.0).abs() < 1.0e-3);
+        // Preload alone locks a fully open diff.
+        assert!(ratio(0.0, 0.0, PEAK_TORQUE_NM) < 2.0);
+        // Nonsense preload is ignored rather than becoming max locking.
+        assert!((ratio(0.25, 0.25, f32::NAN) - 4.0).abs() < 1.0e-4);
+        assert!((ratio(0.25, 0.25, -100.0) - 4.0).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn nonsense_lock_values_stay_finite_and_locked() {
+        // A hand-authored or deserialised spec can carry NaN/inf; the ratio
+        // must stay finite and inside Jolt's legal range instead of panicking.
+        for nonsense in [f32::NAN, f32::INFINITY, -1.0, 2.0] {
+            let value = ratio(nonsense, nonsense, 0.0);
+            assert!(value.is_finite(), "{nonsense}: {value}");
+            assert!((1.0001..=100.0).contains(&value), "{nonsense}: {value}");
+        }
+    }
+
+    #[test]
+    fn zero_or_negative_peak_torque_stays_finite() {
+        // A spec that never went through validate_spec can have a nonsense
+        // torque; the preload normalisation must not divide by zero or flip.
+        for torque in [0.0, -100.0] {
+            let mut spec = VehicleSpec::default();
+            spec.engine.peak_torque_nm = torque;
+            spec.drivetrain.diff.power_lock = 0.5;
+            spec.drivetrain.diff.coast_lock = 0.5;
+            spec.drivetrain.diff.preload_nm = 100.0;
+            let value = differential_lock_ratio(&spec);
+            assert!(value.is_finite(), "{torque}: {value}");
+            assert!((1.0001..=100.0).contains(&value), "{torque}: {value}");
         }
     }
 }
