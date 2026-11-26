@@ -73,7 +73,11 @@ workspace 根就是 Godot 工程根，每个 crate 一个顶层目录：
 | 位置 | 角色 | 场景 |
 | --- | --- | --- |
 | `gdext/*.tscn` | Rust 扩展验证探针（headless 可跑） | `baseline`（真实赛道+车）、`kn5_probe`、`fmod_probe`、`load_probe` |
-| `test_visual/*.tscn` | 游戏性预览页与回归冒烟 | `main`（主场景）、`garage`、`smoke`、`garage_smoke`、`layout_smoke` |
+| `game/*.tscn` | 主游戏场景与回归冒烟 | `lobby`（主场景/游戏大厅）、`main`、`garage`、`garage_mod_picker`、`settings_popup`、`smoke`、`garage_smoke`、`lobby_smoke`、`layout_smoke` |
+
+`game/render/` 放所有场景共享的渲染基线（天空 shader、Forward+/Mobile 档位、
+屏幕后处理），`game/fx/` 放赛道/车辆级 FX（雨、草、灯光、粒子）。渲染层的
+设计取舍与验证命令见 [`rendering.md`](rendering.md)。
 
 本地 AC 资产（车模/赛道）放 `mods/`（gitignore + `.gdignore`），一律以 `res://mods/...` 引用。
 

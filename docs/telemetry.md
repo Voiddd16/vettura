@@ -145,5 +145,5 @@ cargo test -p vettura-world telemetry          # 配置解析 / 节流 / 帧序�
 真机联动（需 `mods/`，跑起来后改 `user://telemetry.cfg` 观察热更新日志）：
 
 ```bash
-/Applications/Godot.app/Contents/MacOS/Godot --path . res://test_visual/main.tscn
+/Applications/Godot.app/Contents/MacOS/Godot --path . res://game/main.tscn
 ```

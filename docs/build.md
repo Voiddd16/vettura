@@ -163,6 +163,44 @@ godot --headless --path . --editor --quit
 > `res://target/...`，改变 target 目录会导致 Godot 找不到库。
 > 如确需修改，请同步修改 `.gdextension`。
 
+### 4.5 macOS 导出（.app）
+
+`export_presets.cfg` 的 `macOS` preset 使用 **universal** 模板（Apple Silicon
+原生 + Intel 兼容），GDExtension 仍是本机架构。导出前先编 release 扩展：
+
+```bash
+cargo build -p vettura-godot --release            # 无音频
+cargo build -p vettura-godot --release --features fmod   # 接真 FMOD
+```
+
+导出（`addons/*` 被 exclude，导出期间需临时摘掉 `MCPRuntimeProbe` autoload，
+否则包内会引用不存在的 UID）：
+
+```bash
+# 1) 让 Godot 先完成资源导入
+godot --headless --path . --editor --quit
+
+# 2) 导出（按需先备份/恢复 project.godot 的 MCPRuntimeProbe 行）
+godot --headless --path . --export-release "macOS" build/macos/Vettura.app
+
+# 3) FMOD runtime（启用 --features fmod 时）；放在 GDExtension 同目录
+python3 scripts/pack_fmod.py --platform macos \
+  --dest build/macos/Vettura.app/Contents/Frameworks --profile release
+
+# 4) mods 放在 .app 同级（不要放进 .app，AC 的 extension/*.lua 会破坏代码签名）
+mkdir -p build/macos/mods
+ditto "mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari" \
+  "build/macos/mods/F1 2008/assettocorsa/content/cars/cim_2008_ferrari"
+
+# 5) ad-hoc 签名（本地可运行；未做 Apple 公证）
+find build/macos/Vettura.app/Contents/Frameworks -name '*.dylib' \
+  -exec codesign --force --sign - {} \;
+codesign --force --sign - build/macos/Vettura.app
+```
+
+`ModLibrary` 会扫描 `.app` 同级的 `mods/`（以及 `user://mods` 和可执行文件
+旁的 `mods/`），所以移动时把 `Vettura.app` 和 `mods/` 放在同一个文件夹即可。
+
 ## 5. 命令行工具
 
 两个工具都支持 `cargo run` 直接运行，也支持单独编译后执行。

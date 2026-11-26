@@ -211,7 +211,7 @@ backtrace:
 - [x] 配置热重载（mtime 轮询 0.5s，级别类键热更，sink 结构变化只 warn；
       缺文件 warn 一次并保留当前配置）；
 - [x] warn 聚合计数（per-sink gate，5s 窗口，单聚合者发聚合行）；
-- [x] 冒烟页 `test_visual/log_smoke.tscn`（VetturaLogger API + reload 链路 +
+- [x] 冒烟页 `game/log_smoke.tscn`（VetturaLogger API + reload 链路 +
       `LOG_SMOKE_PANIC=1` 验证 last-crash.log）。
 
 **Phase 3（可选）**
@@ -241,15 +241,15 @@ backtrace:
 cargo test -p vettura-godot          # logging 的 parse/ring/gate 单测（headless，不依赖引擎）
 
 # 日志冒烟：VetturaLogger API + reload 链路（ring 内容来自启动 banner）
-/Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://test_visual/log_smoke.tscn
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://game/log_smoke.tscn
 # 期望最后一行 [log-smoke] PASS、退出码 0
 
 # panic 转储链路：真实触发一次 Rust panic（进程由布好的定时器退出）
-LOG_SMOKE_PANIC=1 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://test_visual/log_smoke.tscn
+LOG_SMOKE_PANIC=1 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://game/log_smoke.tscn
 grep "simulated panic" "$HOME/Library/Application Support/Godot/app_userdata/Vettura/logs/last-crash.log"
 
 # 端到端：headless 跑任意场景，检查 user 目录日志落盘
-/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --quit-after 1500 res://test_visual/garage_smoke.tscn
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --quit-after 1500 res://game/garage_smoke.tscn
 ls ~/Library/Application\ Support/Godot/app_userdata/Vettura/logs/   # macOS
 
 # 热重载 / warn 聚合（手动 e2e，需要进程活过 5s 窗口，用 main.tscn 这类不自行退出的场景）

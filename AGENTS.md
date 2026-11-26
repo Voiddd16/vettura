@@ -23,13 +23,13 @@ FMOD 音频直连；GDScript 只做 UI/流程。加载时直读 AC 原格式，�
 | `track/` | `vettura-track`：赛道/环境**纯数据**——表面表、橡胶进化、天气、AI 线（`AiSpline`）、计时分段（**无 Jolt、不解析资产**） | 不含控制律/世界/解析 |
 | `world/` | `vettura-world`：Jolt 世界——碰撞三角网安装、多车调度、车辆适配、AI 控制律、圈速计时、遥测、碎片（**只吃纯数据，不解析资产**） | 不做渲染 |
 | `audio/` | `vettura-audio`：`sfx/GUIDs.txt` 事件表 + bank 定位 + **FMOD Studio runtime 直连** | 不解析 bank/FSB（FMOD 负责） |
-| `gdext/` | `vettura-godot`：GDExtension 桥（cdylib）+ 4 个 Rust 验证探针场景；内含全系统日志（`src/logging`，`user://log.cfg` 驱动，见 docs/logging.md） | 不是游戏 UI |
-| `test_visual/` | 游戏性预览页与冒烟（GDScript）：车库/触摸/多视角/布局 | 不是 Rust 冒烟 |
+| `gdext/` | `vettura-godot`：GDExtension 桥（cdylib）+ Rust/桌面验证探针；内含全系统日志（`src/logging`，`user://log.cfg` 驱动，见 docs/logging.md） | 不是游戏 UI |
+| `game/` | 主游戏场景与回归冒烟（GDScript）：大厅/车库/车辆预览/设置/布局 | 不是 Rust 冒烟 |
 | `stylized/` | 风格化渲染子项目：玻璃/HUD/颜色/形状/光照/滤镜 shader 框架（纯 shader+GDScript，见其 README） | 不放游戏逻辑/物理/Rust |
 | `tools/` | `kn5-inspect` / `acd-inspect` CLI（格式逆向排查用） | — |
 | `scripts/` | Python(uv) 构建脚本：`build.py`（host/android/apk/check/test）、`android.py`、`clean.py`、`fetch_fmod.py`、`load_probe.py` | 不是游戏代码 |
 | `docs/` | 设计文档 + `plans/`（方案文档，如主项目方案评审稿） | — |
-| `mods/` | **本地 AC 资产**（车模/赛道/actools，数 GB，gitignore + `.gdignore`） | **不是测试代码！** |
+| `mods/` | **游戏 mod 根目录**（车模/赛道/车库，递归扫描自动分类；数 GB，gitignore + `.gdignore`） | **不是测试代码！** |
 | `addons/` | `godot_mcp` 编辑器插件（AI 操作 Godot 的 MCP 服务） | 导出 APK 时会被临时摘除（见下） |
 | `third_party/` | Chrono C++ 源码（按需拉取，gitignore，只跟踪 README） | — |
 | `android/` `build/` `target/` `.godot/` `.cache/` | 构建产物 / 缓存 | 全部 gitignore，别提交 |
@@ -37,14 +37,17 @@ FMOD 音频直连；GDScript 只做 UI/流程。加载时直读 AC 原格式，�
 
 ## Godot 场景分工约定
 
-- **`gdext/*.tscn` = Rust 扩展验证探针**：`baseline`（真实赛道+车 20s）、`kn5_probe`、
-  `fmod_probe`、`load_probe`。headless 可跑，验证的是 Rust/GDExtension 链路。
-- **`test_visual/*.tscn` = 游戏性预览页**：`main`（默认浮空车+触摸+多视角+HUD，也是
-  `project.godot` 主场景）、`garage`（车模库）、`smoke` / `garage_smoke` / `layout_smoke`
+- **`gdext/*.tscn` = Rust / 桌面验证探针**：`baseline`（真实赛道+车 20s）、`kn5_probe`、
+  `fmod_probe`、`load_probe`、`desktop_probe`。headless 或桌面窗口可跑，验证的是
+  Rust/GDExtension 链路与真实渲染结果。
+- **`game/*.tscn` = 主游戏场景**：`lobby`（游戏大厅：车库模组 + 选车 +
+  环绕镜头，也是 `project.godot` 主场景）、`main`（默认浮空车+触摸+多视角+HUD）、
+  `garage`（车模库）、`garage_mod_picker`（车库模组选择）、`settings_popup`
+  （游戏内设置弹窗）、`smoke` / `garage_smoke` / `lobby_smoke` / `layout_smoke`
   （回归冒烟）、`log_smoke`（日志/GDScript API 冒烟，含 `LOG_SMOKE_PANIC=1` panic 转储验证）。
 - **`stylized/showcase.tscn` = 风格化效果展示页**：六大类 shader 各一个展台（纯合成几何，
   不依赖 `mods/`），桌面窗口运行看效果。
-- 新增页面/控件实验放 `test_visual/`；shader 效果放 `stylized/`；不要往 `gdext/` 里加游戏 UI。
+- 新增游戏页面/控件放 `game/`；shader 效果放 `stylized/`；不要往 `gdext/` 里加游戏 UI。
 
 ## 常用命令
 
@@ -57,7 +60,7 @@ python3 scripts/build.py check|test|host|android|apk|all   # 一站式构建（�
 python3 scripts/build.py apk                        # 导出 build/android/Vettura.apk
 
 # 冒烟（--quit-after N 是帧数不是秒！）
-/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --quit-after 1500 res://test_visual/garage_smoke.tscn
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --quit-after 1500 res://game/garage_smoke.tscn
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://gdext/baseline.tscn   # 需 mods/ 真车
 
 # 日志冒烟：上面任一场景跑完后，user 目录应有 vettura.<日期>.log
@@ -77,7 +80,7 @@ cargo test -p vettura-assets --test real_car     -- --ignored   # 真车数据�
 ## 代码约定
 
 - **语言**：注释与文档用中文（现状一致）；代码标识符英文。
-- **位置**：GDScript 场景→`test_visual/`；Python 脚本→`scripts/`；新 crate→顶层新目录
+- **位置**：GDScript 场景→`game/`；Python 脚本→`scripts/`；新 crate→顶层新目录
   （workspace 根就是 Godot 工程根，`Cargo.toml` 在 `project.godot` 旁边）。
 - **crate 边界**：格式解析/物理不依赖 godot-rust；只有 `gdext/` 认识 Godot。
   插件（`kn5`/`acdata`/`audio`）之间零依赖，编排只在
@@ -89,8 +92,9 @@ cargo test -p vettura-assets --test real_car     -- --ignored   # 真车数据�
 
 ## 已知坑（都踩过，别再踩）
 
-1. **`mods/` 是本地资产不是测试**：车模/赛道放这里，几 GB，gitignore + `.gdignore`
-   （Godot 不导入）。新代码引用路径一律 `res://mods/...`。
+1. **`mods/` 是游戏 mod 根目录不是测试**：车模/赛道/车库放这里，几 GB，
+   gitignore + `.gdignore`（Godot 不导入）。运行时由 `game/mod_library.gd` 递归
+   扫描并自动分类；工程内路径写 `res://mods/...`，用户导入写 `user://mods/...`。
 2. **导出 APK 与 godot_mcp**：`addons/*` 被 exclude_filter 排除，但插件注册的
    `MCPRuntimeProbe` autoload 指向 addons，真机启动报 Unrecognized UID。
    `scripts/android.py` 会在导出期临时摘除 autoload + `[editor_plugins]` 条目再恢复，
@@ -116,6 +120,7 @@ cargo test -p vettura-assets --test real_car     -- --ignored   # 真车数据�
 | [`docs/architecture.md`](docs/architecture.md) | **先读这个**：crate 图、职责与"不放入"、数据流 |
 | [`docs/physics.md`](docs/physics.md) | 物理子系统全覆盖清单、设计取舍、Chrono 映射边界 |
 | [`docs/godot.md`](docs/godot.md) | Godot 集成：扩展类、场景探针、冒烟层次 |
+| [`docs/rendering.md`](docs/rendering.md) | 渲染层：Forward+/Mobile 后端、天空、后处理、材质映射、湿路面 |
 | [`docs/build.md`](docs/build.md) | 构建、环境、导出细节 |
 | [`docs/audio.md`](docs/audio.md) | FMOD 版本/兼容规则、GUID 事件表 |
 | [`docs/telemetry.md`](docs/telemetry.md) | 实时遥测：`telemetry.cfg` 配置全表、JSON 帧格式、UDP/TCP 输出 |

@@ -1,12 +1,12 @@
 # Vettura
 
-Vettura 是一款以 **Godot 4** 为运行时的赛车游戏主工程，目标是导入 Assetto Corsa 的车模与物理数据（KN5 / ACD），并在移动端风格的渲染管线下运行。Rust 原生部分（KN5/ACD 解析、车辆物理、FMOD 声音）作为 workspace 直接放在本工程里。
+Vettura 是一款以 **Godot 4** 为运行时的赛车游戏主工程，目标是导入 Assetto Corsa 的车模与物理数据（KN5 / ACD），并在桌面 Forward+ / 移动端 Mobile 双渲染管线下运行。Rust 原生部分（KN5/ACD 解析、车辆物理、FMOD 声音）作为 workspace 直接放在本工程里。
 
 ## 环境要求
 
 | 项目 | 版本 |
 | --- | --- |
-| Godot | 4.7（`mobile` 渲染后端） |
+| Godot | 4.7（桌面 Forward+ / 移动端 Mobile） |
 | Rust | stable ≥ 1.94（`rust-toolchain.toml` 锁定） |
 | 物理引擎 | Jolt Physics（`project.godot` 中已启用） |
 | 目标平台 | 移动端为主，桌面端可运行 |
@@ -30,16 +30,18 @@ vettura/
 ├── tools/                     # kn5-inspect / acd-inspect 命令行工具
 ├── scripts/                   # Python（uv）工程脚本：构建 / Android 导出 / FMOD 下载与打包
 ├── docs/                      # 架构、构建、Godot 集成、音频、物理文档 + plans/（方案文档）
-├── test_visual/               # 测试性开发页面：默认车模浮空预览 + 触摸 + 多视角
+├── game/                      # 主游戏场景：大厅 / 车库 / 车辆预览 / 设置
+│   ├── render/                # 渲染基线：天空 shader / 后端档位 / 屏幕后处理
+│   └── fx/                    # 赛道/车辆级 FX：雨、草、灯光、粒子
 ├── stylized/                  # 风格化渲染子项目：玻璃/HUD/颜色/形状/光照/滤镜 shader 框架
 ├── addons/
 │   └── godot_mcp/             # Godot MCP 编辑器插件，供 AI/CLI 操作场景与脚本
-├── mods/                      # 本地 AC 资源（车模/赛道，不纳入版本库，见下文）
+├── mods/                      # 游戏 mod 根目录（递归扫描自动分类，不纳入版本库）
 └── target/                    # cargo 构建产物（.gdignore，Godot 不导入）
 ```
 
 `.godot/` 为编辑器导入缓存，`mods/` 为本地大体积资源，二者均被 `.gitignore` 排除。
-每个 crate 目录内有自己的 `README.md`（模块地图 / 关键入口 / 边界 / 验证命令）；
+每个 crate 目录与 `game/` 内都有自己的 `README.md`（模块地图 / 关键入口 / 边界 / 验证命令）；
 AI 助手的仓库导航见根目录 [`AGENTS.md`](AGENTS.md)。
 
 ## Rust / native 部分
@@ -126,7 +128,8 @@ godot --headless --path . res://gdext/kn5_probe.tscn
 ```
 
 细节见 [`docs/build.md`](docs/build.md)、[`docs/godot.md`](docs/godot.md)、
-[`docs/architecture.md`](docs/architecture.md)、[`docs/audio.md`](docs/audio.md)。
+[`docs/architecture.md`](docs/architecture.md)、[`docs/audio.md`](docs/audio.md)、
+[`docs/rendering.md`](docs/rendering.md)。
 
 ## 加载性能探针
 
@@ -144,15 +147,25 @@ uv run scripts/load_probe.py --meshes 64 --vertices 1024   # 小模型快速迭�
 
 1. 用 Godot 4.7 打开本目录下的 `project.godot`。
 2. 首次打开时编辑器会重新生成 `.godot/` 导入缓存。
-3. 按 `F5` 运行主场景：`res://test_visual/main.tscn`。
+3. 按 `F5` 运行主场景：`res://game/lobby.tscn`（游戏大厅）。
 4. 也可以用无头模式验证交互链路：
 
 ```bash
-godot --headless --path . res://test_visual/smoke.tscn
-# 期望最后一行 [visual-smoke] PASS，退出码 0
+godot --headless --path . res://game/mod_library_smoke.tscn
+godot --headless --path . res://game/lobby_smoke.tscn
+godot --headless --path . res://game/smoke.tscn
+# 期望最后一行 [mod-library-smoke] PASS / [lobby-smoke] PASS / [visual-smoke] PASS，退出码 0
 ```
 
-`test_visual/main.tscn` 这一版做的是：
+`game/lobby.tscn` 这一版做的是：
+
+- 用可替换的 AC 车库（track）模组做 3D 背景，默认 `mods/ltk_csr_garage`；
+- 把当前选择的车辆停在车库的 `AC_PIT_0` / `AC_START_0` 或室内地坪上；
+- 慢速环绕镜头，可拖动旋转、滚轮缩放；
+- 「车辆库」「车库模组」「设置」三个入口，选择与设置写入 `user://settings.cfg`；
+- 「开始驾驶」进入原来的车辆预览页 `game/main.tscn`。
+
+`game/main.tscn` 这一版做的是：
 
 - 默认 F1 2008 Ferrari 车模浮空预览（不接赛道物理）；
 - 左半屏触摸 = 刹车，右半屏触摸 = 油门；
@@ -163,15 +176,27 @@ godot --headless --path . res://test_visual/smoke.tscn
 
 `addons/godot_mcp` 提供 MCP 服务，让外部工具（AI 助手、CLI）可以直接查询节点树、读写脚本、修改场景。插件默认在编辑器启动时加载，配置项位于 编辑器 → 项目设置 → `godot_mcp`。使用说明见 `addons/godot_mcp/README.zh.md`。
 
-## 本地资源（`mods/`）
+## 游戏 mods 目录（`mods/`）
 
-`mods/` 目录用于存放导入验证用的 Assetto Corsa 内容，体积达数 GB（含多个 100 MB+ 的 `.kn5` / `.psd`），超出 GitHub 的仓库与 LFS 配额，因此 **不提交到版本库**。需要复现测试时，请在本地按下列结构放置：
+`mods/` 是游戏统一的 mod 存放目录，游戏启动时由 `ModLibrary` 递归扫描并自动分类：
+
+- **车辆**：`data.acd` / `data/car.ini` + `.kn5`；
+- **赛道**：`models*.ini`、`surfaces.ini`、`ai/fast_lane.ai` 或 `ui_track.json`；
+- **车库**：有 `.kn5` 但不是车/赛道的展示场景。
+
+扫描顺序是 `res://mods` → `user://mods`（自动创建、Android 可用）→ 桌面导出版
+可执行文件旁的 `mods/`。包目录（如 `某车包/assettocorsa/content/cars/xxx`）会
+继续向下递归，识别到 mod 根后停止。车模库、车库模组选择器和大厅都直接复用
+这份索引；通过「导入」加入的车也会写进 `user://mods/imported_cars/`。
+
+`mods/` 体积可达数 GB（含多个 100 MB+ 的 `.kn5` / `.psd`），因此 **不提交到版本库**。本地按下列结构放置即可：
 
 ```
 mods/
-├── F1 2008 by Cimmerian_Iter/   # 测试用车模（KN5 + 纹理 + data.acd）
-├── daytona_2017/                # 测试用赛道（models*.ini / surfaces.ini / AI 线）
-└── actools/                     # KN5/ACD 解析参考实现（第三方仓库克隆）
+├── F1 2008 by Cimmerian_Iter/   # 车模包（KN5 + 纹理 + data.acd）
+├── daytona_2017/                # 赛道（models*.ini / surfaces.ini / AI 线）
+├── ltk_csr_garage/              # 车库展示场景
+└── actools/                     # KN5/ACD 解析参考实现（第三方仓库克隆，扫描时跳过）
 ```
 
 资源仅用于本地开发验证，请勿将其提交或再分发。

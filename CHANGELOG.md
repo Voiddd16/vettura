@@ -5,7 +5,405 @@
 
 ## 未发布
 
+### 功能
+
+- **输入系统重构**：新增 autoload `GameInput`（`game/input/game_input.gd`），
+  运行时注册油门/刹车/转向/视角/车辆库/设置/返回/全屏动作；支持键鼠、手柄、
+  触屏，以及手机陀螺仪/手柄体感（开关、灵敏度、反转、校准）。键位可在
+  设置「输入」页重绑并持久化到 `user://controls.cfg`；手柄 UI 补 A/B 映射。
+- **返回与焦点**：统一的返回栈（`push_nav_handler`）；Esc/手柄 Start 打开
+  菜单，手柄 B/鼠标右键/Android 返回键关闭弹窗或返回上一页；大厅返回弹
+  退出确认。驾驶页 HUD 不再抢手柄焦点（A 给油门），大厅加载完成后自动
+  聚焦「开始驾驶」，车库/车库模组列表支持手柄确认。
+- **显示模式**：`video/window_mode` 支持窗口 / 全屏 / 无边框（macOS 上无边框
+  等价原生全屏），保存窗口尺寸；F11 / Alt+Enter / HUD 与大厅「全屏」按钮
+  均可切换，启动时恢复上次模式。
+- **驾驶页**：油门/刹车/转向改为模拟量，前轮可见转向；鼠标左键拖动、右摇杆、
+  陀螺仪给相机自由视角；移动端底部新增触摸转向滑杆。
+
+### 构建与平台
+
+- 新增 macOS 导出预设（universal 模板，GDExtension 按本机架构）与
+  `docs/build.md` 的 macOS 导出步骤；导出产物 `Vettura.app` 与同级 `mods/`
+  组成可玩目录。
+- `ModLibrary` 在 macOS 导出版额外扫描 `.app` 同级的 `mods/`：AC mod 的
+  `extension/*.lua` 放进 `.app/Contents/MacOS` 会被 `codesign` 当成嵌套代码，
+  导致签名失败，所以 mod 目录保持在包外。
+
+### 全屏性能
+
+- **全屏自适应分辨率**：桌面全屏默认把 3D 内部渲染控制在屏幕宽度约 90%
+  （上限 2880），再按帧率在 35%~100% 之间调整；macOS 用 MetalFX Spatial、
+  其他 Forward+ 用 FSR1 上采样，UI/后处理保持原生分辨率。全屏 MSAA 从
+  4x 降到 2x，后处理切性能模式（保留暗角/锐化，去掉色散/桶形畸变）。
+  M1 大厅全屏从约 14 fps 提升到 50~60 fps。
+- **全屏锐化/模糊修复**：后处理锐化的 `viewport_size` 改用真实屏幕纹理尺寸，
+  不再按 1280 设计分辨率算 texel；全屏/Retina 下锐化半径不再放大 2~3 倍。
+- **全屏窗口尺寸修复**：进入全屏前先把窗口铺到当前屏幕，避免 macOS 沿用
+  1280×720 窗口并把 3D 放大成模糊的 720p；窗口尺寸被写坏到接近整屏时启动
+  自动重置为 1280×720，防止后续窗口/全屏继续以超高内部尺寸渲染。
+- **全屏雨系统不再覆盖自适应比例**：`RainSystem` 在桌面全屏自动分辨率开启
+  时不再把 `scaling_3d_scale` 拉回 1.0，也不再叠 FXAA。
+
+### 性能（既有）
+
+- **去掉每帧重复的 FX/UI 工作（全平台）**：天气同步 5 Hz、赛道灯光能量 4 Hz、
+  刹车盘发光 20 Hz；雨系统的灯光/粒子/雾/屏幕叠层按 5~10 Hz 刷新，干燥天气
+  跳过整条更新；大厅环绕缓存设置值，主页面 HUD 10 Hz 刷新；天空
+  `cloud_offset` 改为 10 Hz 写入，避免每帧触发 radiance cubemap 重算。
+- **GrassFX 重建去字符串/重复查询**：新增
+  `WorldBody.surface_sample_at(x, z)`（一次返回表面类型编号 + 高度）和
+  `SurfaceKind::index/name`；回退撒点改为 1.25 m 网格候选点。Daytona 的
+  草重建从 43~142 ms 降到约 30 ms，实测平均帧时间 19.3 ms → 17.6 ms
+  （M1 / 2560×1600 / 暴雨 + 全 FX）。
+- **屏幕后处理不再生成 mip 链**：`post_fx.gdshader` / `rain_refraction.gdshader`
+  只采样 LOD 0，`filter_linear_mipmap` 改为 `filter_linear`，省掉每帧全屏
+  纹理 mip 生成，采样结果不变。
+
+### 修复
+
+- **起跑点雨天/夜晚出现滞留点光源**（`game/fx/lighting_fx.gd`）：LightingFX
+  旧实现把赛道记录和车辆记录合在一起搜索，F1 车上的
+  `[EMISSIVE_LIGHT_...] NAME=LED` 会匹配到起点附近几十个同名/同材质网格，
+  给每个网格生成一盏默认 8 m 点光；车开走后灯留在起跑线。现在赛道记录只搜
+  赛道、车辆记录只搜车辆；非 `LIGHT_SERIES` 只取一个代表网格；车灯直接挂到
+  对应网格下跟随车辆移动，默认范围收到 2 m。
+
+### 渲染
+
+- **桌面切到 Forward+，移动端仍走 Mobile**（`project.godot`）。修正了
+  `rendering/renderer/rendering_method` 与各向异性过滤键的错误前缀（旧值写成了
+  `rendering/renderer/...`，实际落在 `rendering/rendering/...` 下，移动端覆盖
+  从未生效）。新增
+  `game/render/render_quality.gd`（autoload `RenderQuality`）按后端打开
+  SSAO/SSIL/SSR/体积雾参数，避免把桌面专属特性写进共享 `.tres` 后在
+  Android 上刷警告。
+- 新增程序化天空 `game/render/sky.gdshader`：大气渐变 + 太阳盘/光晕 + 月亮 +
+  云 + 夜间星空。云噪声改成预生成的 `NoiseTexture2D`（FastNoiseLite fBm），
+  shader 从“每像素 20 层 value noise”降到桌面 4 次纹理采样、移动端 1 次；
+  云层漂移改为每帧推进 `cloud_offset`（大厅/车库由 `RenderQuality` 推进），
+  配合天空 cubemap 的 INCREMENTAL 更新，解决云彩 2 Hz 跳格和周期性卡顿。
+  天气同步增加值死区（1% 湿度/雨量、0.05 m/s 风），不会因为物理层每帧的
+  微小浮点变化反复重写天空/雾/体积雾参数。`game_environment.tres` 改用该
+  天空，tonemap 切 ACES，glow/环境光/雾参数按 AC + CSP 天气 shader 的配方
+  重调。
+- 新增屏幕后处理 `game/render/post_fx.gdshader` + autoload `RenderFX`：
+  暗角、径向色散、胶片颗粒、轻锐化、可选桶形畸变；层号低于 UI，不影响
+  HUD。移动端默认关闭，`VETTURA_POST_FX=0` 可做 A/B。
+- 材质层增强（`gdext/src/kn5/convert.rs`、`material.rs`）：
+  `ksEmissive` / `*_emissive` 把 `txEmissive`（无则 `txDiffuse`）接进
+  EMISSION，车灯/屏幕/招牌保留贴图细节；树叶/草/旗帜双面渲染；车窗在
+  Forward+ 下开折射；车漆 clearcoat 重新调平，避免红色车漆被环境反射刷白。
+- 湿路面（`game/fx/rain/rain_system.gd`）：桌面 Forward+ 下降低粗糙度、
+  恢复部分介电高光并打开 SSR/体积雾，湿沥青能反射护栏/天空；金属度封顶，
+  避免低角度太阳反射成过曝白斑。天气同步增加值比较，不再每帧重写环境。
+- **GrassFX 参考 `acc-shaders`**：草卡片从硬 `discard` 改成
+  `alpha_to_coverage`（`smoothA2C.hlsl` 的近似），叶片边缘随 MSAA 软化；
+  加世界空间低频色斑（`txVariation` 的廉价版）；按 `WorldBody` 湿度同步
+  `wetness`，湿草变暗、粗糙度降低并接住天空反射（`RAINFX_WET` /
+  `RAINFX_REFLECTIVE` 的近似）。
+- **RainFX 参考 `accRainDrops`**：雨丝增加深度软相交（`calculateSoft`
+  的近似），靠近车/路面时淡出；加 Fresnel 环境反射色，边缘反射天空、
+  中心偏背景折射色，不再整条纯白；保留软剖面、拖尾、逐滴差异和
+  数量/粒径谱调整。
+- **雨丝真实度**（`game/fx/rain/`）：雨滴不再用“满 alpha 的白棒”近似。
+  横向改成二次方软剖面、纵向改成“亮头 + 渐隐拖尾”，每滴按实例 scale/位置
+  散列改变长宽和亮度；`shutter_time` 从 1/60 提到 1/30，细/小雨滴占比提高，
+  桌面总粒子 10000/16000（移动端约一半）；`exposure_gain` 从 8 降到 7，
+  颜色从高饱和蓝白改为灰蓝。涟漪上限 6、透明度略增，让地面有雨滴反馈。
+- **移动端专项**：桌面效果不硬塞给手机，但手机也有可见提升——
+  - 移动端后处理改为 `post_fx_vignette.gdshader`：不读屏幕纹理，只做一层
+    廉价径向暗角；
+  - 天空云层移动端只采 1 次噪声纹理、128 辐射 cubemap，桌面 4 次采样/256；
+  - 阴影降到 2 级 CSM / 64 m / 0.35° 软阴影，把预算让给雨/草/天空；
+  - 草 medium 3200 / high 7200、半径 58 m，并按距离 alpha 淡出，近景密度
+    基本不变、远景少 overdraw；
+  - 湿路面在无 SSR 的移动端用 0.22~0.24 粗糙度 + 0.20 介电高光，靠天空
+    cubemap 出湿亮高光，金属度仍封顶避免白斑。
+- `gdext/desktop_probe.gd` 的赛道阶段改用工程默认环境（天空/环境光/后处理），
+  探针截图与游戏观感一致。新增 [`docs/rendering.md`](docs/rendering.md)。
+
+### 游戏大厅 / UI
+
+- 新增游戏大厅 `game/lobby.tscn`：用 AC 车库（track）模组做 3D 背景，
+  把当前选择的车辆停在车库 `AC_PIT_0` / `AC_START_0` dummy 或室内地坪上，
+  慢速环绕展示；支持拖动旋转与滚轮缩放。默认车库为
+  `mods/ltk_csr_garage`，`project.godot` 主场景已切到大厅。
+- 新增 `game/garage_mod.gd`：识别单 KN5 或 `models*.ini` 多模型车库，
+  提供目录扫描、展示名、预览图与 AC 放置帧 → Godot 帧转换；大厅按计划用
+  `Kn5SceneBuilder` 分帧加载，55 MB 车库模型不会卡死首帧。
+- 新增车库模组选择器 `game/garage_mod_picker.tscn`：列出 `ModLibrary`
+  自动发现的赛道/车库，也可浏览任意目录；选择写入 `user://settings.cfg`，
+  大厅立即重建。
+- 新增游戏内设置弹窗 `game/settings_popup.tscn`：主音量、全屏、
+  垂直同步、实时阴影、3D 分辨率、车库环绕速度/镜头距离；大厅与
+  `main.tscn` 都可打开（`Esc` 亦可）。设置由 `GameSettings` autoload 统一
+  应用并持久化。
+- 新增 autoload `ModLibrary`（`game/mod_library.gd`）：把 `mods/` 作为统一
+  mod 根目录，递归扫描 `res://mods`、`user://mods`（自动创建）与桌面导出版
+  可执行文件旁的 `mods/`，自动分类为车辆 / 赛道 / 车库；车模库、车库模组
+  选择器与大厅共用这份索引，导入的 mod 写入 `user://mods/imported_cars/`。
+  默认车/默认车库缺失时会自动用库里发现的第一项。
+- 车模库会自动列出 mods 目录下带 `data.acd`/`data/car.ini` 且有 `.kn5`
+  的车，选择写回设置，大厅与 `main.tscn` 共用同一台车；`main.tscn` 增加
+  「设置」「返回游戏大厅」按钮。新增 `lobby_smoke.tscn` 回归冒烟。
+
+### 声效
+
+- **修复引擎声几乎听不到 / 只有断续风噪**（`audio/src/runtime/engine.rs`、
+  `audio/src/runtime.rs`、`gdext/src/fmod_system.rs`、`gdext/src/vehicle_body.rs`、
+  `gdext/ai_lap.gd`）。直接根因：Core API `Channel::set_frequency` 的单位是 Hz，
+  旧代码把 `rpm / 3000` 当倍率传进去，引擎采样被压到 0.35–3 Hz 次声波；
+  同时 `Studio::update()` 后额外调了一次 `System::update()`，同一混音缓冲被
+  推进两次，声音断续。改用 `Channel::set_pitch`（1.0=原速）并去掉重复 update，
+  实测 WAV 频谱从 <20 Hz 占 99.8% 变成 200–1000 Hz 占 80%，`ai_lap` 实跑 8 s
+  WAV rms 0.19、峰值仅 5 个采样触顶。
+- fallback 从"第一个 FSB5 + 4 条固定采样"扩展成扫描所有 FSB5 块、按角色识别
+  采样并随 rpm 交叉淡化：引擎 idle/on/off、风噪、胎噪、打滑、涡轮、换挡、
+  回火、TC 都有独立音量。修掉 Porsche bank 的两个识别错误：`transmission_*`
+  因含子串 `on_` 被误当成油门声、`acc*` 加速采样没被识别；现在 on 层是
+  `acc1/acc_front/acc_rear_*` 等统一识别出的加速采样。
+  `traction_control` 从逐帧一次性播放改成循环采样调音量，避免 60 Hz 下堆积
+  上千个重叠 channel。没有转速标注的 bank 会均分到怠速..9000 rpm，不再统一
+  估成一个参考转速导致低转整层静音。
+- **修复声音发尖 / 变速箱声一直响**（`audio/src/runtime/engine.rs`）。三个根因：
+  ① 引擎层把所有三角权重内的采样同时叠加，多份不同录音相加产生梳状滤波和
+  尖锐感（Porsche 5 条 on 采样会一起响）；现在每层只交叉淡化相邻两条，单采样
+  变调限制 0.75–1.20 倍，idle 在高转完全淡出。② 车外视角同时播放车头/车尾两套
+  麦克风录音；现在优先车尾（`back`/`rear`），有车尾时排除 `front`。③ `upsh*` /
+  `dwsh*` 是 30–90 秒的循环层，旧代码把它们当换挡一次性音效，每次换挡都启动
+  一条几十秒的长采样，听起来像变速箱持续尖叫；现在换挡只播 `gearup*` /
+  `geardn*` 短音效，`transmission_Nth` 仅在匹配挡位以 8% 音量循环播放。
+  rpm 再做一阶低通，避免起步 0→红线跳变把 pitch 拉出尖啸。
+- **声效算法统一化**（`audio/src/runtime/roles.rs` + `engine.rs`）。解析入口
+  收敛为 `roles.rs` 里的单个 `classify()`：只依赖 AC bank 的通用命名、采样
+  时长（`>=500 ms` 循环 / `<=1000 ms` 换挡一次性 / 回火可到 3 s）和
+  `ext/int` 视角，不写任何车型分支；解析器带单元测试，可在没有 FMOD SDK 的
+  机器上单独跑。交叉淡化、pitch 范围、音量映射对所有车一致，缺角色就静音。
+  **音色完全来自 mod 自己的采样**：不合成换挡声、不做 EQ、不替换采样；
+  一次性音效按视角选（车外 `EXT`、驾驶位优先 `INT`），不再在
+  `gearup`/`gearupEXT` 之间轮换。F1 2008 没有换挡采样，因此没有换挡声，
+  这是 mod 定义决定的。
+- `VehicleParams` 新增 `gear` / `slip`，`VehicleBody` 暴露
+  `max_wheel_slip_angle()` / `max_wheel_slip_ratio()`，`ai_lap.gd` 每帧喂入挡位
+  和侧偏角；换挡声在 fallback 内部由挡位变化触发。`fmod_probe.gd` 同步改成
+  8 参数调用。新增诊断例程 `audio/examples/fallback_probe.rs`（输出 WAV +
+  打印选中的采样），用法与验收指标写进 `docs/audio.md`。
+- 已知限制：F1 2008 bank 没有换挡采样，按“音色只取决于 mod”原则不做补音，
+  因此该车没有换挡声；`game/main.tscn` 是静态模型预览页，没有接
+  `FmodSystem`，只有 `ai_lap.tscn` / `fmod_probe.tscn` 有声。
+
+### 渲染 / 天气
+
+- **修复网格合并误删子节点（局部地面缺失/浮空的潜在根因）**（`gdext/src/kn5/merge.rs`）。
+  合并时对原节点调用 `free()` 会连同整个子树删除；KN5 的节点树里 mesh 可能带
+  子 mesh / dummy / 骨骼挂点，其中没被合并的（湿路面层、蒙皮、半透明）会跟着
+  消失，表现为局部地面缺块、看起来悬空。现在删除前把子节点提升到父级并保持
+  全局变换。验证：合并前后场景网格总数严格守恒（2943 - 2177 + 1472 = 2238）。
+- **模型文件名单复数回退**（`gdext/src/world/track_models.rs`）：`models*.ini`
+  写 `marshals.kn5`、目录里却是 `marshal.kn5` 时，自动尝试单复数互换再加载
+  （Nürburgring 实测多救回 81 个工作人员网格），不再整块跳过。
+- **`SurfaceMap::sample_height`**（`track/src/surface.rs`）：补上桥/贴地效果
+  需要的便捷方法（转发到 `MeshSurfaceIndex::sample_height`）。
+- **修复高速行驶时护栏渲染跟不上**（`gdext/src/kn5/merge.rs` 新增、`track_models.rs`）。
+  实测 Daytona 全速时 draw call 828~1876、CPU 主线程 16~21 ms，已经贴着 60 fps
+  的 16.7 ms 预算——高速时更多护栏进入视野就会掉帧/延迟。新增加载期**静态网格
+  合并**：按「材质 + 200 m 空间块」把 2008 个 `MeshInstance3D` 合成 **773 个
+  批次**，draw call 降到 858~915（高速时约为原来一半），同时保留空间剔除
+  （prims 回到 119~132 万，不因合并而翻倍）。不合并湿路面层（天气要按节点
+  切换）、蒙皮网格、半透明材质和隐藏节点；法线用
+  `basis.inverse().transposed()` 烘焙。画面验证无误。
+- **修复观众席看台浮空**（`gdext/src/kn5/mesh.rs`）。上一轮把 KN5 的
+  `lod_in`/`lod_out` 直接映射成 `visibility_range` 是错的：AC 的这两个字段是
+  “**当前这一级 LOD** 的可见距离”，超出时游戏会切换到下一级更简的 LOD 模型；
+  我们只加载了主网格一份几何，按 `lod_out` 裁掉就变成整块网格凭空消失。
+  Daytona 看台的分层网格 `gar_*_KSLAYER4` 的 `lod_out=400`，于是 400 m 外
+  只剩上层结构、下半截消失，观众席看起来悬空。现在保留字段解析（模型信息 /
+  未来真做 LOD 替换时用），但**不再参与渲染裁剪**。验证：追逐视角远处看台
+  人群、分层结构、底部墙面全部完整。
+- **赛道贴图细化：跨文件去重 + 法线全精度 + 可配置尺寸上限**
+  （`gdext/src/kn5/{cache,texture}.rs`）。
+  - **跨文件去重**：AC 赛道模组会把同一张贴图分别嵌进多个 KN5（Nürburgring
+    的 `curb2`/`global_logos`/`walls_new` 等同时出现在 `fn_nurburgring.kn5` 与
+    `gp.kn5`，`cmp` 确认字节完全相同）。按内容哈希共享同一份 `ImageTexture`：
+    实测 Nürburgring 310 张贴图里 **60 张跨文件命中**，加载时间 4.7 s → **2.6 s**。
+    去重表在切换赛道/引擎关闭时清空（`on_stage_deinit` 里清，否则退出时
+    `Gd` 析构访问已销毁的引擎会 SIGABRT）。
+  - **法线贴图全精度**：退化路径重压缩时，桌面上法线类贴图保留 RGBA8 不压
+    BC3（BC3 的 RGB 端点插值会量化法线方向，高光/凹凸细节发脏）；漫反射仍压
+    S3TC。移动端为显存仍压 ETC2。
+  - **尺寸上限可配置**：`VETTURA_MAX_TEXTURE`（0/未设 = 不限，移动端默认
+    1024）。Nürburgring 设 2048 时显存 **1596 MB → 1138 MB（-29%）**；
+    修复了“`Image.resize` 对压缩图像无效”的坑（先解压再缩放再重压）。
+  - 分析结论：Nürburgring 1125 MB 内嵌贴图**全部被材质引用**（0 张未使用），
+    优化点只在重复与尺寸。
+- **修复路面反光过度 / 像镜面不像沥青**（`gdext/src/kn5/convert.rs`）。路面材质名
+  实测的 roughness 只有 0.08~0.33（AC 的 `ksSpecularEXP` 动辄 200+，换算后极
+  光滑），在 Godot 里低角度看路面会把天空反射成一条刺眼白带。AC 沥青实际
+  粗糙度 0.6~0.9，所以给路面类材质（名字含 `road`/`asph`/`tarmac`/`oval`/
+  `line`/`kerb`/`apron`/`pitlane`/`safera` 或 `ksMultilayer_fresnel_nm` shader）
+  设 roughness 下限 0.6。只影响路面/路肩，车漆/内饰的镜面感不变。
+  验证：路面变为自然哑光沥青，Daytona / Nürburgring 两个赛道近景、低角度都正常。
+- **贴图精度 + 各平台渲染效率优化**（`gdext/src/kn5/{texture,mesh}.rs`、
+  `gdext/weather_visuals.gd`、`project.godot`）。
+  - **显存**：修复链解压出的 RGBA8 贴图按平台重新压回 GPU 格式——桌面 S3TC
+    (BC1/BC3)、移动 ETC2（Godot 运行时 `Image.compress`），失败则保留 RGBA8；
+    原样加载成功的 DDS 仍保留原压缩格式，不走这条路径；
+  - **移动端显存上限**：Android/iOS 上超过 1024 边的贴图等比降采样
+    （LANCZOS），桌面保持原尺寸（精度优先）；
+  - **LOD 距离**：KN5 的 `lod_in`/`lod_out` 以前解析后从未使用，现在映射到
+    `visibility_range`（5 m 淡出余量），超距离网格不再提交绘制；
+  - **按平台画质**：桌面 MSAA 4x + 8x 各向异性、移动端 MSAA 关 + 4x；
+    `project.godot` 各向异性默认提到 8x（`anisotropic_filtering_level=4` 是
+    16x 枚举，代码按平台覆盖）。终点线/标线在移动时的锯齿和摩尔纹明显减轻。
+  实测（M1，Daytona roadcourse 全视觉模型）：加载 4.3 s、**58 FPS**、纹理显存
+  445 MB、帧内 54 个渲染对象；Nürburgring Nordschleife：加载 4.7 s、**55.6 FPS**、
+  516 个渲染对象、0 张贴图失败。
+- **通用兜底：KN5 里的 PNG/JPEG 贴图 + Rust 侧 BC 块解码**（`kn5/src/dds.rs`、
+  `gdext/src/kn5/texture.rs`），以 Nürburgring Nordschleife（`fn_nurburgring`）为
+  试样、目标是覆盖更多赛道 mod。三处修复都是通用的：
+  - **magic 检测**：新 mod 的 KN5 直接嵌 PNG/JPEG（如 Nordschleife 路面的
+    `Road_base_work.png`），以前被当 DDS 白白跑一遍修复链再整体丢弃；现在按
+    文件头分派给 Godot 的 `load_png/jpg_from_buffer`；
+  - **BC 块解码兜底**（`decode_base_rgba`）：Godot 的 DDS 加载器对非 4 倍数
+    宽度（`newPanels.dds` 2127x591）等头无论怎么修都拒绝——补一个 Rust 侧的
+    BC1/BC2/BC3/BC4/BC5 → RGBA8 解码器（含 BC5 法线 z 重建、BC1 三色透明、
+    未压缩通道掩码），所有修复路径失败后走它，附 5 个像素级单元测试；
+  - **albedo 下限 0.35**：Nordschleife 路面 `asph_new` 的
+    `ksDiffuse=0.12 / ksAmbient=0.23`（AC 靠 detail 层+envmap 提亮），旧下限
+    0.05 让路面黑成一片；0.35 是“任何贴图都能读出来”的通用下限。
+  验证：Nordschleife 加载后 0 张 "unusable"（修复前 7 张），路面/树墙/围挡/
+  赛车正常；Nordschleife 橙色围挡为贴图本色（barrier1.dds 均值 0.43/0.33/0.33），
+  非 bug。Daytona 回归（smoke/garage_smoke/整圈 AI）全部 PASS。
+- **修复远处环境发黑 / 背光面像没被阳光照到**（`game_environment.tres`、
+  `gdext/weather_visuals.gd`）。原因是环境光太弱：`AMBIENT_SOURCE_COLOR` 只用
+  (0.55,0.6,0.68)×1.0，而看台、建筑、远处围栏朝赛道的面全部背光，只能靠环境光
+  照亮 → 发黑。对照测试确认 `AMBIENT_SOURCE_SKY` 在 Godot 4.7 的资源文件方式下
+  同样不产生环境光（人群直接全黑），因此改 `AMBIENT_SOURCE_COLOR` 为
+  (0.72,0.77,0.85)×2.0；太阳能量从 1.4 恢复到 2.2（之前为压高光而降，高光已
+  由 `metallic_specular` 修复，不必牺牲整体亮度）。整圈多点截图确认看台人群、
+  建筑、围栏、路面都正常受光，且无白斑回归。
+- **进一步抑制起跑区移动时的视觉抖动**（`project.godot`、`gdext/weather_visuals.gd`）。
+  固定机位逐帧对比证明没有持续性的时间闪烁；移动时的差异主要来自黑白格/
+  标线这类高频贴图的纹理 aliasing 和阴影边缘。启用 4x 各向异性过滤；太阳阴影
+  从默认 2 级 CSM 改为 4 级、近景分割更细、开软阴影（`shadow_blur=1`），
+  让起跑区大平面拿到更多阴影图分辨率、边缘不再沿像素网格跳。
+- **修复路面反光过曝 / 大片纯白**（`gdext/src/kn5/{convert,material}.rs`）。起跑区
+  右侧路面在低视角下反射日光变成一整片纯白（像素 1.0），盖过沥青纹理。根因：
+  AC 的路面材质（`SAFERA` 等 `ksSpecular=1.0`、反射类 `ksPerPixelReflection`、
+  多层 `ksMultilayer_fresnel_nm`）靠 envmap+fresnel 控制高光，我们没有 AC 的
+  envmap，Godot 用默认天空+日光近似过强。逐材质/属性二分定位后修复：对这类
+  材质关掉 Godot 4.7 的介电高光属性 `metallic_specular`（旧名 `specular` 的 setter
+  在这版不写它），金属类（metallic>0.5）额外设粗糙度下限 0.3。草地
+  (`ksSpecular=0`)、车漆 (0.3) 都不受影响。验证：白区像素 1.0→0.29，整块区域
+  纯白占比从 ~50% 降到 0.02%，路面纹理恢复可见。
+- **修复起点黑白终点线渲染错误**（`gdext/src/kn5/{convert,mesh}.rs`）。终点线
+  （`startfinishline` → `sfline.dds`）有两个独立问题：① 网格与路面**完全共面**
+  （AABB 一模一样），深度测试反复翻转 → 黑白格撕裂/缺角；② AC 的
+  `ksDiffuse = 0.3` 在多层 shader 里是混合权重，被通用材质映射当 albedo 系数
+  乘进贴图 → 白格变灰、黑格被偏蓝环境光染成深蓝。修复：终点线材质 albedo 固定
+  1.0 保留贴图原色，网格沿局部 Y 微抬 4 mm 拉开深度差（实测 2 cm 太大会把黑格
+  挡掉）。诊断确认贴图本身解码正确（256×2048 黑白格），对照实验证明抬升才是
+  消除撕裂的关键、颜色调整单独无效。加了单元测试
+  `start_finish_line_keeps_its_checker_colors`。
+- **修复起跑区路面自遮挡条纹**（`gdext/src/world/{track_models,track_mesh}.rs`）。
+  赛道视觉网格跨度数公里且近共面（Daytona `daytonamesh.kn5` 单文件 44 张路面），
+  定向光阴影图的深度精度不够，路面投到自己身上形成细密条纹/闪烁；单纯抬
+  bias/normal_bias 消不干净还会让车体阴影脱离地面。现在赛道网格只接收阴影、
+  不投射，车辆照常投射，1920×1080 起跑区画面干净。
+- **修复终点线前方路面移动时剧烈闪烁**（`gdext/src/kn5/mesh.rs`）。同一机位
+  连抓帧发现：干燥时干/湿两套共面路面的 z-fighting 是主因——隐藏湿层后相邻帧
+  差异从 126603 降到 38193（约 30%），不是此前误查的车身高光/阴影。最终方案：
+  湿层**整体下移 3 mm**，不与干层共面（闪烁消除，实测差异 44892），同时保留
+  几何——隐藏湿层虽然也能消除闪烁，但赛道边（路肩/缓冲区）往往只有湿层几何，
+  隐藏后整圈消失、看起来悬空（用户实测反馈）。AABB 配对（命中率仅 5%）与
+  "全部隐藏"两种方案均已废弃。
+- **进一步抑制起跑区移动时的视觉抖动**
+- `kn5-inspect --nodes` 输出补上 `visible` / `cast_shadows` 两个网格标志，便于
+  排查这类渲染标志问题。
+- **按 KN5 标记过滤不可渲染网格**（`gdext/src/kn5/builder.rs`）。`scene.rs` 文档一直
+  要求 `active && is_visible && is_renderable` 才渲染，但 builder 只看了 `active`，
+  把 `renderable=false` 的物理/辅助网格也画了出来：Nordschleife 的 `nords.kn5`
+  护墙变成两侧橙色巨墙；Daytona 的 `daytonamesh` 物理路面叠在视觉路面上，也是
+  之前起跑区条纹的来源之一。现在按标记过滤，两个赛道画面都正常。
+
+### 验证 / 录像
+
+- **整圈录制新增六种视角**（`gdext/ai_lap.gd`、`scripts/record_ai_lap.py`）：
+  在原有 `chase`（车后）/ `cockpit`（驾驶位）之外加入 `hood` 前机盖、
+  `bumper` 前保险杠低机位、`wheel` 轮胎特写、`drone` 无人机滞后跟随、
+  `tcam` 赛道边定点机位追踪（车到点后切下一个机位，左右交替）、`orbit`
+  环绕跟拍；别名 `bonnet` / `tyre` / `tv` / `fixed` 等自动折叠。机盖与保险杠
+  机位按车模网格包围盒自动适配不同车型，可用 `AI_LAP_HOOD_*` /
+  `AI_LAP_BUMPER_*` 覆盖；各镜头焦段/距离/高度均有 `AI_LAP_*_FOV` 等环境变量。
+- 以 `--resolution 1920x1080` + `cargo build -p vettura-godot --features fmod`
+  重跑 skill 110 单圈：Daytona roadcourse / Porsche 992 GT3 R 两段镜头（车后、
+  驾驶位）均 PASS，圈速 168.05 s / valid。视频见 `build/ai_lap_110_hd/videos/`。
+- **录制卡帧修复 + 环境兜底**（`gdext/ai_lap.gd`、`scripts/run_ai_lap_test.py`）：
+  录制时每 2 帧同步做 1080p GPU 回读 + JPEG 编码 + 写盘，会卡住渲染循环，实时窗口
+  看起来"停住"。现在 JPEG 编码/写盘放到后台线程（主线程只做回读），脚本两段默认
+  **串行**、`--parallel` 仅作不推荐选项；QA 改用逐帧 `framemd5` 统计最长连续相同帧
+  （成片实测 1–2 帧、无冻结；`freezedetect` 在赛道同色路面上会误报，已弃用）。
+  另在 macOS 上检测 CLT 的 `usr/include/c++/v1` 是否缺头（本机只剩 3 个旧头），
+  缺则用 SDK 的 libc++ 目录经 `CPLUS_INCLUDE_PATH` 兜底，避免 `cargo clean` 后
+  Jolt 编不过。
+- **整圈测试全流程脚本**（`scripts/run_ai_lap_test.py`）：一条命令完成
+  `cargo clean` + workspace/fmod 编译 + test/fmt + 两段（车后/驾驶位）1080p 录像
+  （JPEG 帧与 FMOD WAV 分开采集）+ atempo 对齐混流 + 两段合并 + 抽帧/音量 QA +
+  `REPORT.md`。赛道、车辆、视角、难度、分辨率、相机（车后距离/高度/前视/FOV、
+  驾驶位眼位/FOV）与天气均为参数，见 `--help` 与 `scripts/README.md`。
+- **音视频分开采集后混流**（`audio/src/runtime/engine.rs`、`gdext/src/fmod_system.rs`、
+  `gdext/ai_lap.gd`）：设 `VETTURA_AUDIO_WAV` 时 FMOD 用 WAVWRITER_NRT 把混音直接
+  写成 WAV，GDScript 在每个物理帧调 `step_audio()`，音轨长度跟随仿真时间。AC 老
+  bank 的事件引用 bank 外 bus，Studio 事件实际静音（`Bus not found`），因此录制
+  模式下改从 bank 内嵌 FSB5 取真实采样（idle / onthrottle / wind / tyre_rolling），
+  按 rpm/油门/车速经 Core API 驱动，常见于老 mod 的无 master bank 场景。正常游玩
+  路径完全不变。实测发现 FSB5 的采样名带 mod 前缀（`056_ext_idle`、
+  `056_ext_on_back_*`），旧代码用精确名匹配导致 fallback 初始化失败、WAV 全是
+  静音；改为大小写无关的子串匹配（`ext_idle` / `ext_on` / `wind` / `tyre_rolling`）
+  后录到真实引擎声（非静音样本占比 >99%）。
+
+### 渲染 / 天气（历史修复）
+
+- **修复赛道起点地面闪烁**（`gdext/src/kn5/{mesh,builder}.rs` + `game_environment.tres`）。
+  两个根因叠加：① AC 赛道 KN5 把干/湿两套路面放在完全相同的坐标上（Daytona
+  有 396 个 `_WET` 网格），以前两套全画 → 起跑线附近大面积 z-fighting；现在湿滑层
+  打 `vettura_wet_layer` 元数据、默认隐藏，由天气系统按湿度只显示一套。② 太阳
+  阴影自遮挡条纹（acne）——`shadow_normal_bias = 0.08` 修正。临时探针逐帧对比
+  确认：修复后起点俯视机位的共面条斑完全消失。
+- **补全天空 + 天气系统**（`gdext/weather_visuals.gd` / `.tscn`、`project.godot`、
+  `gdext/src/world/mod.rs`）。根因是 `project.godot` 丢了
+  `environment/defaults/default_environment`，且 `game_environment.tres` 把
+  `ProceduralSkyMaterial` 直接当 `Sky` 用（Godot 3 写法），天空一直是 null →
+  深灰。现在恢复默认环境并用 4.7 正确写法（`Sky` 包一层 `sky_material`），
+  有蓝天渐变 + 太阳盘；新增天气视觉节点把 `vettura-track` 的物理天气映射到
+  天色/日照/雾/雨粒子，`WorldBody` 新增 `get_weather()` / `set_weather()` 双向
+  同步，`ai_lap.gd` 挂上该节点并支持 `AI_LAP_WEATHER=clear|overcast|rain|fog|night`。
+  验证：晴/雨/雾/夜四组截图均正确切换，天空从深灰变蓝天。
+
+### 赛道兼容
+
+- **修复 `physics.kn5` 两位数字碰撞前缀被漏收**（`assets/src/track.rs`）。部分赛道
+  （如 fn_nurburgring Nordschleife）把物理路面命名成 `01ROAD` / `02ASPH` / `01GRASS`
+  这类两位数字材质组，旧逻辑只认 AC 的 `1` 前缀，导致 20.8 km 赛道只收到 610 个
+  墙三角形，车辆一出生就下坠。现在 `physics.kn5` / `collision.kn5` 里的全部网格
+  都参与碰撞，并用宽松表面键识别 `01ROAD` / `01GRASS` / `02CURB` 等。
+  实测 Nordschleife 碰撞三角形 610 → **945,213**，车辆四轮接地正常行驶。
+- **探针新增 `AI_LAP_SPAWN_GRID`**（`gdext/ai_lap.gd`，脚本对应 `--spawn-grid`，默认 1）：
+  出生点正好在起跑线上时，首次越线要等整圈之后，第一圈不计时（Nordschleife 实测
+  要 873 s 才开始计时）。默认改为在线后 8 m 的发车格出生，计时在起步后立即开始。
+
 ### AI / 物理性能
+
+- **AI 配速倍率**（`world/src/ai.rs`、`gdext/src/world/mod.rs`、`gdext/ai_lap.gd`、
+  `scripts/run_ai_lap_test.py`）：新增 `SkillProfile::pace` 与 `AiDriverTuning::pace`。
+  110 档自带约 **1.65** 配速，同时放大 AI 线授权速度与规划横向包络（直道 ×pace、
+  弯速约 ×√pace），100 档保持 1.0 不变；探针/脚本可用 `AI_LAP_PACE` / `--ai-pace`
+  再乘外部倍率。实测：Nordschleife Porsche 992 GT3 R 869.83 → **596.83 s**（valid，
+  最高 227 km/h）；Daytona roadcourse F1 144.4 → **137.74 s**（valid，311.6 km/h，
+  最长腾空 0.97 s）。Nordschleife 再加 `--ai-pace 1.2`（有效约 1.98）可到
+  **541.24 s**；但有效配速约 2.06 时 Daytona F1 会反复卡死（3 次救援）——所以
+  110 档内置配速保持 1.65，更高倍率按车/赛道用 `AI_LAP_PACE` / `--ai-pace` 单独试。
 
 - **辅助弹簧载荷并回轮胎摩擦**（`world/src/vehicle/{grip,mod}.rs`）。Jolt 给轮胎
   回调的 `suspension_impulse` 只含线性弹簧，而 AC 车有 53% 的角载荷由 heave/
@@ -53,6 +451,16 @@
 
 ### 修复
 
+- **单圈测试声效**（`gdext/ai_lap.gd` + `audio/src/runtime/engine.rs`）。整圈探针
+  以前完全不碰 `FmodSystem`，窗口模式 / 录视频跑一圈一路静音；现在起一个
+  `FmodSystem` 加载当前车的 `sfx/<car_id>.bank`，按视角循环播放 `engine_ext` /
+  `engine_int`，每帧把 rpm / 油门 / 近似负载 / 车速喂给引擎事件，能听到随转速
+  变化的引擎声。顺带修掉 `vettura-audio` 两处会让声效静默失效的坑：
+  `EventDescription::get_parameter_description_*` 探测会让 `EventInstance` 变成
+  invalid handle（改成固定候选名逐个尝试）；运行期不再设 3D 声源/听者，FMOD
+  默认听者与事件都在原点，声音以固定音量持续播放（与 `fmod_probe` 一致）。
+  `AI_LAP_AUDIO=0` 可关闭；没编 `--features fmod`、没 SDK 或 bank 兼容问题时
+  只打 warning，不影响圈速 PASS/FAIL。
 - **渲染：赛道贴图不全 / 局部发黑**（`gdext/src/kn5/texture.rs` +
   `kn5/src/dds.rs`）。根因不止一个，修法都拿 Daytona / F1 2008 的 274 + 50 张
   真实贴图逐张验过：
@@ -134,7 +542,7 @@
   键热重载（mtime 0.5s 轮询，sink 结构变化只 warn）；WARN/ERROR 按 callsite
   5s 窗口聚合（per-sink gate，单聚合者发聚合行）。运行期换 filter 用自研
   `DynamicFilter`（0.3 无 `reloading` 模块）。
-- `test_visual/log_smoke.tscn`：`VetturaLogger` API 冒烟；`LOG_SMOKE_PANIC=1`
+- `game/log_smoke.tscn`：`VetturaLogger` API 冒烟；`LOG_SMOKE_PANIC=1`
   触发真实 panic 验证 last-crash.log 链路。
 - `kn5` / `audio` 引入 `tracing` 依赖（workspace 共享版本）。
 
@@ -188,7 +596,7 @@
   分帧加载四段耗时。
 - `NodeKind::Mesh/SkinnedMesh` 改为 `Arc<Mesh>` / `Arc<SkinnedMesh>`：几何可在
   解析结果、任务列表、多个实例之间零拷贝共享。
-- **桌面探针 `test_visual/desktop_probe.tscn`**：两阶段检查「加载车辆模组」——
+- **桌面探针 `gdext/desktop_probe.tscn`**：两阶段检查「加载车辆模组」——
   阶段 1 在浮空预览页检查四个视角与油门/刹车；阶段 2 载入真实赛道，AI 沿
   `fast_lane.ai` 驾驶 16 s 再重刹 6 s，逐秒遥测 + 截图，以 `PASS`/`FAIL` 退出码验收。
 - **`WorldBody.ai_controls(index)`**：把 `AiDriver`（`fast_lane.ai` 追踪控制器）
@@ -207,7 +615,7 @@
 - 预览页在本地缺少 `test/` 真车资产、或 GDExtension 尚未注册时不再刷一片
   ERROR，而是降级为警告并跳过模型加载（`--install-android-build-template` 等
   工程级命令不再被噪音淹没）。
-- `test_visual/smoke.tscn` 无车可测时只验证相机循环，输出 `PASS（部分）`
+- `game/smoke.tscn` 无车可测时只验证相机循环，输出 `PASS（部分）`
   而不是 `FAIL`。
 - 合成 DDS 头改用 `DDSD_LINEARSIZE`：Godot 会拒绝“未声明线性长度却给了非零
   pitch”的压缩贴图，此前合成贴图全部加载失败（探针的 `albedo=0` 由此而来）。
@@ -231,7 +639,7 @@
   孤儿值清零使头自洽，`decode()` 入口先修头（实测 67 条 ERROR → 0，313 张
   赛道+车模贴图 0 丢失）。
 - ABS/TC 增加 < 2 m/s 低速护栏：静止抱死与爬行时滑移率虚高，辅助判定没有意义。
-- `test_visual/main.tscn` 的 `TouchOverlay` 没有铺满屏幕（塌缩到原点）：触摸
+- `game/main.tscn` 的 `TouchOverlay` 没有铺满屏幕（塌缩到原点）：触摸
   区域实际不可用，按钮文字从左上角画出叠在 HUD 信息上。
 - gdext 三个探针场景的资产路径 `res://test/…` 迁移到 `res://mods/…`；
   `desktop_probe` 截图前先把追逐相机摆到位，避免第一张拍到相机默认位置。
@@ -291,17 +699,17 @@ adb exec-out screencap -p > /tmp/s.png
 
 - **`test/` → `mods/`**：目录里放的本来就是本地 AC 车模/赛道资产（gitignore + `.gdignore`），
   原名"test"与测试代码严重混淆。同步更新所有引用：`.gitignore`、
-  `test_visual/main.gd` 的 `DEFAULT_CAR_DIR`、`world/assets/audio` 三个真实资产测试的路径、
+  `game/main.gd` 的 `DEFAULT_CAR_DIR`、`world/assets/audio` 三个真实资产测试的路径、
   gdext 文档注释、README、docs/godot.md、docs/kn5-format.md。
 - **新增根级 `AGENTS.md`**：AI 助手仓库导航——目录是什么/不是什么、场景分工约定
-  （`gdext/` 探针 vs `test_visual/` 游戏页）、命令速查、提交约定、已知坑清单
+  （`gdext/` 探针 vs `game/` 游戏页）、命令速查、提交约定、已知坑清单
   （MCP 导出摘除、`-lc++_shared`、FMOD 不进 APK、`--quit-after` 单位等）。
 - **方案文档归档**：`主项目方案.md`（拟真赛车模拟器 v1.0 设计定稿，未入库）移入
   `docs/plans/`；其"自研 sim-* 物理核心"与 roadmap「非目标：不自研完整轮胎模型」
   是当前最大待决策分歧，先整理现状、后议物理路线。
 - **docs 刷新**：`architecture.md` 总览图补上 `world/` / `audio/`（原图缺失）并增加
   场景分工表；`roadmap.md` 对齐 0.0.1 实际进度（加载缓存/分帧加载已勾、探针路径
-  `godot/`→`gdext/`、相机与 HUD 在 test_visual 已落地）。
+  `godot/`→`gdext/`、相机与 HUD 在 game 已落地）。
 
 ## 风格化渲染子项目 stylized/（未定版，2026-11-12）
 
