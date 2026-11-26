@@ -63,6 +63,11 @@ pub struct AiDriverTuning {
     /// 默认 [`DEFAULT_AI_SKILL`]（100）就是原本调好的职业水平，0 与 110
     /// 之间是连续的能力梯度。
     pub skill: f32,
+    /// 外部配速倍率：乘在难度档位自带的 `SkillProfile::pace` 上，默认 `1.0`。
+    ///
+    /// `1.0` 不改动任何东西；探针/调试可以用它把同一档位再加速（例如
+    /// `1.2` 让 110 档的有效配速从 1.65 提到 1.98），而不必改代码常数。
+    pub pace: f32,
 }
 
 impl Default for AiDriverTuning {
@@ -84,6 +89,7 @@ impl Default for AiDriverTuning {
             traffic_max_samples: 24,
             traffic_follow_gap_m: 6.0,
             skill: DEFAULT_AI_SKILL,
+            pace: 1.0,
         }
     }
 }
@@ -239,6 +245,12 @@ pub(crate) struct SkillProfile {
     pub throttle: f32,
     /// 前馈刹车倍率：低难度只会等速度掉下来才踩刹车。
     pub feedforward: f32,
+    /// 整体配速倍率：同时放大 AI 线标注的授权速度与规划横向包络。
+    ///
+    /// 弯速约按 `√pace` 提升、直道按 `pace` 提升。100 档保持 1.0（原有
+    /// 行为）；110 档提高它，让「超人类」难度真正用满车辆能力，而不是
+    /// 只提高贴线精度。
+    pub pace: f32,
 }
 
 /// 归一化难度：`0..=100` 平滑映射到 `0..=1`，`100..=110` 单独给一段
@@ -275,6 +287,9 @@ pub(crate) fn skill_profile(skill: f32) -> SkillProfile {
         recovery: between(1.5, 1.0, -0.15),
         throttle: between(0.65, 1.0, 0.08),
         feedforward: between(0.40, 1.0, 0.08),
+        // 100 档保持 1.0；110 档额外 +65% 配速，用来逼近人类圈速。低难度
+        // 反而压慢，保留明显的水平梯度。
+        pace: between(0.70, 1.0, 0.65),
     }
 }
 
@@ -411,6 +426,7 @@ impl AiDriverTuning {
         self.traffic_max_samples = self.traffic_max_samples.clamp(2, 64);
         self.traffic_follow_gap_m = sane(self.traffic_follow_gap_m, 6.0, 1.0, 30.0);
         self.skill = sane(self.skill, DEFAULT_AI_SKILL, 0.0, MAX_AI_SKILL);
+        self.pace = sane(self.pace, 1.0, 0.5, 3.0);
         self
     }
 }
@@ -557,6 +573,21 @@ impl AiDriver {
         self
     }
 
+    /// 外部配速倍率（乘在难度档位自带的配速上），`0.5..=3.0`。
+    pub fn set_pace(&mut self, pace: f32) {
+        self.tuning.pace = if pace.is_finite() {
+            pace.clamp(0.5, 3.0)
+        } else {
+            1.0
+        };
+    }
+
+    /// 方便链式调用：构造时直接指定配速倍率。
+    pub fn with_pace(mut self, pace: f32) -> Self {
+        self.set_pace(pace);
+        self
+    }
+
     /// Last projection computed by [`Self::update`], useful for telemetry.
     pub fn last_projection(&self) -> Option<AiProjection> {
         self.last_projection
@@ -620,6 +651,9 @@ impl AiDriver {
         // 前馈负责弯中稳态，反馈只修残余误差，车就不会先漂出去再救。
         // 难度剖面：AC 的 0..110 在这里变成一组能力缩放，而不是速度缩放。
         let skill = skill_profile(self.tuning.skill);
+        // 配速：难度档位自带 + 外部倍率。只放大授权速度与规划横向包络，
+        // 不改转向/刹车控制律。
+        let pace = (skill.pace * self.tuning.pace).clamp(0.5, 3.0);
         let preview = (speed * PREVIEW_S * skill.preview).clamp(PREVIEW_MIN_M, PREVIEW_MAX_M);
         let curvature = self.preview_curvature(projection.along_m + preview);
         // 侧偏补偿吃下压力衰减：`v²` 同时出现在“需要多少横向力”和“下压力
@@ -678,7 +712,11 @@ impl AiDriver {
         } else {
             self.tuning.fallback_speed_mps
         };
-        let mut target_speed = target.speed_mps.unwrap_or(fallback);
+        // 作者标注的速度乘以配速；没有 speed 列时仍走 fallback（不再放大）。
+        let mut target_speed = target
+            .speed_mps
+            .map(|value| value * pace)
+            .unwrap_or(fallback);
         if !target_speed.is_finite() || target_speed < 0.5 {
             target_speed = self.tuning.fallback_speed_mps;
         }
@@ -748,7 +786,9 @@ impl AiDriver {
                             .unwrap_or(Vec3::Y);
                         let bank = bank_assist_mps2(road_right(normal, sample.tangent), curvature);
                         let grip_at = |speed: f32| {
-                            (lateral_limit_mps2(spec, speed) * skill.grip + bank).max(2.0)
+                            // 配速同时放大规划横向包络：直道按 pace、弯速约按
+                            // √pace 提升；仍然低于车辆的物理抓地极限。
+                            (lateral_limit_mps2(spec, speed) * skill.grip * pace + bank).max(2.0)
                         };
                         let mut v_lat = (grip_at(reference) * radius).sqrt() * PLAN_SPEED_MARGIN;
                         for _ in 0..2 {
@@ -772,6 +812,7 @@ impl AiDriver {
                 if let Some(v_target) = sample
                     .speed_mps
                     .filter(|speed| speed.is_finite() && *speed > 0.5)
+                    .map(|speed| speed * pace)
                 {
                     let corner_decel = (planning_decel_mps2(spec, v_target) * skill.brake)
                         .clamp(2.0, PLAN_DECEL_MAX_MPS2 * 1.2);
@@ -1275,6 +1316,10 @@ mod tests {
         // 110 的抓地只比 100 高 3%：包络已按车辆物理标定，再放大就会
         // 冲出赛道。110 的优势主要来自预瞄/反应/前馈等控制精度。
         assert!(alien.grip > pro.grip * 1.02, "{:?}", alien);
+        // 110 档额外提高配速，逼近人类圈速；100 档保持 1.0。
+        assert!((pro.pace - 1.0).abs() < 1.0e-6, "{:?}", pro);
+        assert!(alien.pace > 1.2, "{:?}", alien);
+        assert!(rookie.pace < pro.pace);
         // 贴线抖动只在低难度出现，100 完全消失。上限 2 m：再大就会让
         // 新手压到路肩被弹飞、卡在底盘上（实测 3 m 时 skill 0 整圈跑不完）。
         assert!(

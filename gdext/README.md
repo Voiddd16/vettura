@@ -17,6 +17,7 @@
 | `vehicle_body.rs` | `VehicleBody`（Node3D）：独立模式接 `Simulation`；世界模式由 `WorldBody` 驱动；`WHEEL_*` dummy 自动绑定 |
 | `world/` | `WorldBody`（Node3D）：拥有 `TrackModule` + `World`——赛道安装、多车调度、固定步长推进、圈速计时、快照同步回场景树。**进入赛车模拟的主入口** |
 | `fmod_system.rs` | `FmodSystem`（Node3D）：每帧调 FMOD `update` + 播放/参数/3D 听者 |
+| `weather_visuals.gd` / `.tscn` | 天气视觉系统（GDScript 节点）：`game/render/sky.gdshader` 的天空（大气/太阳/月亮/云/星）、雾、雨粒子、太阳阴影 bias；按湿度切换 AC 干/湿共面路面层（`vettura_wet_layer` 标记由 `kn5/mesh.rs` 写入）。Forward+ 下按天气开 SSAO/SSIL/SSR/体积雾，Mobile 保持轻量。预设 `preset_clear/rain/fog/night()`；`WorldBody.get_weather()` / `set_weather()` 与物理天气双向同步 |
 | `paths.rs` | `res://` → 文件系统路径解析（`globalize_path` 的统一封装） |
 | `logging/` | 全系统日志：环形缓冲 + 控制台 + 滚动文件 subscriber（`user://log.cfg` 驱动，可热重载），panic hook 写 `last-crash.log`，`VetturaLogger` 暴露给 GDScript。业务 crate 只 `use tracing`，安装与落盘只在这里（见 [`docs/logging.md`](../docs/logging.md)） |
 
@@ -27,13 +28,15 @@
 | `baseline.tscn` | 真实赛道 + 真实车 20 s（需 `mods/`） |
 | `kn5_probe.tscn` | 三台真实 mod 车实例化：节点/网格/材质/挂点统计 |
 | `fmod_probe.tscn` | FMOD bank 播放（需 `--features fmod`） |
+| `ai_lap.tscn` | AI 遥控整圈：赛道 → AI → 物理 → 计时 → 遥测；窗口模式下支持 `chase`/`cockpit`/`hood`/`bumper`/`wheel`/`drone`/`tcam`/`orbit` 八种录制视角，并经 `FmodSystem` 播放车模引擎声（`AI_LAP_AUDIO=0` 可关，无声效依赖降级为 warning） |
 | `load_probe.tscn` | 解析 / 冷实例化 / 缓存命中 / 分帧加载分段计时 |
+| `desktop_probe.tscn` | 桌面窗口两阶段视觉验收：`game/main.tscn` 四视角截图 + 真实赛道追逐/AI 行驶截图 |
 
-> 游戏性预览页（车库/触摸/多视角）在 `test_visual/`，**不要**加到本 crate。
+> 主游戏场景（大厅/车库/触摸/多视角）在 `game/`，**不要**加到本 crate。
 
 ## 边界（不放入）
 
-- 游戏流程/UI/相机/HUD（GDScript，`test_visual/`）；
+- 游戏流程/UI/相机/HUD（GDScript，`game/`）；
 - 格式解析与物理（`kn5/`、`acdata/`、`physics/`、`world/`）。
 
 ## 验证

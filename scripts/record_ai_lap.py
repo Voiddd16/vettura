@@ -7,17 +7,19 @@
     uv run scripts/record_ai_lap.py --every 3            # 20 fps 视频
     uv run scripts/record_ai_lap.py --max-s 60           # 只录前 60 秒
     uv run scripts/record_ai_lap.py --view cockpit       # 驾驶位视角
+    uv run scripts/record_ai_lap.py --view drone         # 无人机追踪
+    uv run scripts/record_ai_lap.py --view tcam          # 赛道边定点机位追踪
     uv run scripts/record_ai_lap.py --car res://mods/trr_porsche_992_gt3r
     uv run scripts/record_ai_lap.py --keep-frames        # 保留 JPEG 帧目录
 
-链路：`res://gdext/ai_lap.tscn` 里的追逐/驾驶位相机每渲染帧存一张 JPEG（
+链路：`res://gdext/ai_lap.tscn` 里的相机每渲染帧存一张 JPEG（
 `AI_LAP_CAPTURE=1`），跑完一圈后本脚本用 ffmpeg 把帧序列编码成 H.264。
 Godot 的 `--fixed-fps` 让物理按固定 1/60 s 步进，所以视频时长就是圈速，
 不随机器快慢变化。
 
 环境变量由本脚本转给 Godot：`AI_LAP_TRACK` / `AI_LAP_LAYOUT` / `AI_LAP_CAR` /
 `AI_LAP_CAPTURE_DIR`（帧目录）、`AI_LAP_SKILL`（AI 难度 0..=110）与
-`AI_LAP_VIEW`（chase / cockpit）。
+`AI_LAP_VIEW`（chase / cockpit / hood / bumper / wheel / drone / tcam / orbit）。
 """
 
 from __future__ import annotations
@@ -66,8 +68,12 @@ def main() -> int:
     parser.add_argument("--track", default=os.environ.get("AI_LAP_TRACK", "daytona_2017"))
     parser.add_argument("--layout", default=os.environ.get("AI_LAP_LAYOUT", "roadcourse"))
     parser.add_argument("--car", default=os.environ.get("AI_LAP_CAR", ""))
-    parser.add_argument("--view", choices=("chase", "cockpit"), default="chase",
-                        help="相机视角：chase=车后常规（默认），cockpit=驾驶位")
+    parser.add_argument("--view", choices=("chase", "cockpit", "hood", "bumper",
+                                          "wheel", "drone", "tcam", "orbit"),
+                        default="chase",
+                        help="相机视角：chase=车后（默认）、cockpit=驾驶位、"
+                             "hood=前机盖、bumper=保险杠、wheel=轮胎、"
+                             "drone=无人机、tcam=定点追踪、orbit=环绕")
     parser.add_argument("--out", type=Path, default=None, help="输出 mp4 路径")
     parser.add_argument("--keep-frames", action="store_true", help="编码后保留 JPEG 帧")
     parser.add_argument("--no-run", action="store_true", help="只编码已有帧，不跑 Godot")
