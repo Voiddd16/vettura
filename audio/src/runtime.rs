@@ -108,6 +108,14 @@ impl Default for VehicleParams {
 }
 
 impl AudioEngine {
+    /// 编译时是否链接了 FMOD runtime。
+    ///
+    /// GDScript 在调用 `start()` 前可以先查这个值；没有 SDK 时直接跳过音效，
+    /// 不产生 "FMOD runtime not linked" 的 ERROR 噪音。
+    pub fn runtime_linked() -> bool {
+        cfg!(fmod_sdk_found)
+    }
+
     /// 启动 FMOD runtime，并把坐标系设为 Godot 的右手系。
     ///
     /// `max_channels <= 0` 时交给 FMOD 默认值。

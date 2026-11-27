@@ -3,14 +3,14 @@
 
 用法::
 
-    uv run scripts/record_ai_lap.py                      # 完整一圈，默认赛道/车
-    uv run scripts/record_ai_lap.py --every 3            # 20 fps 视频
-    uv run scripts/record_ai_lap.py --max-s 60           # 只录前 60 秒
-    uv run scripts/record_ai_lap.py --view cockpit       # 驾驶位视角
-    uv run scripts/record_ai_lap.py --view drone         # 无人机追踪
-    uv run scripts/record_ai_lap.py --view tcam          # 赛道边定点机位追踪
-    uv run scripts/record_ai_lap.py --car res://mods/trr_porsche_992_gt3r
-    uv run scripts/record_ai_lap.py --keep-frames        # 保留 JPEG 帧目录
+    python3 scripts/record_ai_lap.py                      # 完整一圈，默认赛道/车
+    python3 scripts/record_ai_lap.py --every 3            # 20 fps 视频
+    python3 scripts/record_ai_lap.py --max-s 60           # 只录前 60 秒
+    python3 scripts/record_ai_lap.py --view cockpit       # 驾驶位视角
+    python3 scripts/record_ai_lap.py --view drone         # 无人机追踪
+    python3 scripts/record_ai_lap.py --view tcam          # 赛道边定点机位追踪
+    python3 scripts/record_ai_lap.py --car res://mods/trr_porsche_992_gt3r
+    python3 scripts/record_ai_lap.py --keep-frames        # 保留 JPEG 帧目录
 
 链路：`res://gdext/ai_lap.tscn` 里的相机每渲染帧存一张 JPEG（
 `AI_LAP_CAPTURE=1`），跑完一圈后本脚本用 ffmpeg 把帧序列编码成 H.264。
@@ -33,9 +33,26 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-GODOT = "/Applications/Godot.app/Contents/MacOS/Godot"
 SCENE = "res://gdext/ai_lap.tscn"
 FRAME_GLOB = "f%05d.jpg"
+
+
+def default_godot() -> str:
+    """Godot 可执行文件：`$GODOT` > PATH > macOS 默认安装位置。"""
+    override = os.environ.get("GODOT")
+    if override:
+        return override
+    candidates = [
+        shutil.which("godot"),
+        shutil.which("godot4"),
+        "/Applications/Godot.app/Contents/MacOS/Godot",
+        "/Applications/Godot_mono.app/Contents/MacOS/Godot",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            return candidate
+    return "godot"
+
 
 # 默认难度档位：AC 的 AI level，100 = 职业。见 docs/architecture.md 的难度表。
 DEFAULT_SKILL = 100
@@ -60,6 +77,7 @@ def frame_dir_env() -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="record a full AI lap as mp4")
+    parser.add_argument("--godot", default=default_godot(), help="Godot 可执行文件（默认自动探测 / $GODOT）")
     parser.add_argument("--every", type=int, default=2, help="每几帧抓一次（默认 2 → 30fps）")
     parser.add_argument("--fps", type=int, default=30, help="输出视频帧率（默认 30）")
     parser.add_argument("--max-s", type=float, default=400.0, help="圈时/最长跑动秒数")
@@ -106,7 +124,7 @@ def main() -> int:
         print(f"[record] Godot 抓帧 -> {frames}  (每 {args.every} 帧一张)")
         print(f"[record] 难度 skill={args.skill}  目标 {args.laps} 圈  上限 {args.max_s:.0f}s")
         proc = subprocess.run(
-            [GODOT, "--path", str(ROOT), SCENE, "--fixed-fps", "60"],
+            [args.godot, "--path", str(ROOT), SCENE, "--fixed-fps", "60"],
             env=env,
             capture_output=True,
             text=True,

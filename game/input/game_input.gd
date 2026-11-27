@@ -15,6 +15,8 @@ signal device_changed(device: String)
 signal gyro_changed(available: bool, enabled: bool)
 
 const BINDINGS_PATH := "user://controls.cfg"
+## 新增动作（如 `game_reset_car`）不升级版本：旧配置缺失的 action 会保留
+## `_defaults()` 里的绑定，不会把用户已经改过的键位全部重置。
 const BINDINGS_VERSION := 2
 
 ## 可显示、可重绑的动作。`category` 只用于分组显示。
@@ -24,6 +26,7 @@ const ACTIONS := {
 	"game_steer_left": {"label": "左转", "category": "驾驶"},
 	"game_steer_right": {"label": "右转", "category": "驾驶"},
 	"game_camera_next": {"label": "切换视角", "category": "驾驶"},
+	"game_reset_car": {"label": "重置车辆", "category": "驾驶"},
 	"game_garage": {"label": "车辆库", "category": "驾驶"},
 	"game_menu": {"label": "打开设置 / 菜单", "category": "系统"},
 	"game_back": {"label": "返回 / 取消", "category": "系统"},
@@ -31,7 +34,8 @@ const ACTIONS := {
 }
 const ACTION_ORDER := [
 	"game_throttle", "game_brake", "game_steer_left", "game_steer_right",
-	"game_camera_next", "game_garage", "game_menu", "game_back", "game_fullscreen",
+	"game_camera_next", "game_reset_car", "game_garage",
+	"game_menu", "game_back", "game_fullscreen",
 ]
 
 const JOY_BUTTON_LABELS := {
@@ -81,6 +85,8 @@ var _gyro_calibrated := false
 
 
 func _ready() -> void:
+	# 驾驶页暂停（设置弹窗）时，Esc / 手柄 Start / B / Android 返回仍要能工作。
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_touch_device = OS.has_feature("mobile") or DisplayServer.is_touchscreen_available()
 	_device = "touch" if _touch_device else "keyboard"
 	_bindings = _defaults()
@@ -217,23 +223,24 @@ func device_label() -> String:
 	match _device:
 		"gamepad":
 			var name := gamepad_name()
-			return "手柄：%s" % (name if not name.is_empty() else "已连接")
+			return I18n.t("手柄：%s",
+					[name if not name.is_empty() else I18n.t("已连接")])
 		"touch":
-			return "触屏"
+			return I18n.t("触屏")
 		"mouse":
-			return "鼠标 / 键盘"
+			return I18n.t("鼠标 / 键盘")
 		_:
-			return "键盘 / 鼠标"
+			return I18n.t("键盘 / 鼠标")
 
 
 func hint_text() -> String:
 	match _device:
 		"gamepad":
-			return "手柄：RT/LT 油门/刹车 · 左摇杆 转向 · Y 视角 · LB 车辆库 · Start 设置 · B 返回 · F11 全屏"
+			return I18n.t("手柄：RT/LT 油门/刹车 · 左摇杆 转向 · Y 视角 · RB 重置车辆 · LB 车辆库 · Start 设置 · B 返回 · F11 全屏")
 		"touch":
-			return "触屏：左半屏刹车 · 右半屏油门 · 底部滑杆/倾斜转向 · 右上角设置"
+			return I18n.t("触屏：左半屏刹车 · 右半屏油门 · 底部滑杆/倾斜转向 · 右上角设置")
 		_:
-			return "键盘：W/S 油门/刹车 · A/D 转向 · C 视角 · G 车辆库 · Esc 设置 · F11 全屏"
+			return I18n.t("键盘：W/S 油门/刹车 · A/D 转向 · C 视角 · R 重置车辆 · G 车辆库 · Esc 设置 · F11 全屏")
 
 
 func vibrate(duration_s: float = 0.18, weak: float = 0.35, strong: float = 0.55) -> void:
@@ -264,7 +271,8 @@ func _update_device(event: InputEvent) -> void:
 # ---------------------------------------------------------------- 绑定
 
 func action_label(action: String) -> String:
-	return String(ACTIONS.get(action, {}).get("label", action))
+	var label := String(ACTIONS.get(action, {}).get("label", action))
+	return I18n.t(label)
 
 
 func binding_text(action: String) -> String:
@@ -288,11 +296,11 @@ func data_label(data: Dictionary) -> String:
 				text += "Cmd+"
 			return text + OS.get_keycode_string(int(data.get("key", KEY_NONE)))
 		"mouse":
-			return String(MOUSE_LABELS.get(int(data.get("button", 0)), "鼠标"))
+			return I18n.t(String(MOUSE_LABELS.get(int(data.get("button", 0)), "鼠标")))
 		"joy_button":
-			return String(JOY_BUTTON_LABELS.get(int(data.get("button", 0)), "手柄键"))
+			return I18n.t(String(JOY_BUTTON_LABELS.get(int(data.get("button", 0)), "手柄键")))
 		"joy_axis":
-			var label := String(JOY_AXIS_LABELS.get(int(data.get("axis", 0)), "手柄轴"))
+			var label := I18n.t(String(JOY_AXIS_LABELS.get(int(data.get("axis", 0)), "手柄轴")))
 			return label + (" +" if float(data.get("value", 1.0)) > 0.0 else " -")
 	return ""
 
@@ -369,6 +377,7 @@ func _defaults() -> Dictionary:
 			_joy_axis_data(JOY_AXIS_LEFT_X, 1.0), _joy_button_data(JOY_BUTTON_DPAD_RIGHT),
 		],
 		"game_camera_next": [_key_data(KEY_C), _joy_button_data(JOY_BUTTON_Y)],
+		"game_reset_car": [_key_data(KEY_R), _joy_button_data(JOY_BUTTON_RIGHT_SHOULDER)],
 		"game_garage": [_key_data(KEY_G), _joy_button_data(JOY_BUTTON_LEFT_SHOULDER)],
 		"game_menu": [_key_data(KEY_ESCAPE), _joy_button_data(JOY_BUTTON_START)],
 		"game_back": [_joy_button_data(JOY_BUTTON_B), _mouse_data(MOUSE_BUTTON_RIGHT)],

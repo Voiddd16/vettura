@@ -64,6 +64,8 @@ func _ready() -> void:
 	_open_button.pressed.connect(_on_open_pressed)
 	_close_button.pressed.connect(_close)
 	GameInput.push_nav_handler(_handle_nav)
+	I18n.language_changed.connect(_on_language_changed)
+	_search.placeholder_text = I18n.t("搜索车模名称…")
 	_apply_safe_area()
 	get_viewport().size_changed.connect(_apply_safe_area)
 	refresh()
@@ -99,6 +101,13 @@ func refresh() -> void:
 	_list.grab_focus()
 	library_changed.emit()
 
+func _on_language_changed(_locale: String) -> void:
+	_search.placeholder_text = I18n.t("搜索车模名称…")
+	var selected := _list.get_selected_items()
+	if not selected.is_empty():
+		_on_car_selected(selected[0])
+
+
 ## 搜索：只重排已有数据，绝不碰磁盘。
 func _on_search_changed(text: String) -> void:
 	_filter = text.strip_edges().to_lower()
@@ -120,7 +129,7 @@ func _select_first() -> void:
 		_list.select(0)
 		_on_car_selected(0)
 	else:
-		_info.text = "还没有车模。点「导入」选一个目录或 zip。"
+		_info.text = I18n.t("还没有车模。点「导入」选一个目录或 zip。")
 		_load_button.disabled = true
 		_rename_button.disabled = true
 		_delete_button.disabled = true
@@ -136,12 +145,13 @@ func _on_car_selected(index: int) -> void:
 	_ensure_stats(car)
 
 	var lines: PackedStringArray = PackedStringArray([
-			"名称：%s" % car.name,
-			"目录：%s" % car.folder_name,
-			"路径：%s" % car.path,
-			"大小：%s" % _human_bytes(car.size_bytes),
-			"网格：%d 个 .kn5" % car.kn5_count,
-			"物理数据：%s" % ("data.acd" if car.data_present else "缺失（只能看不能开）"),
+			I18n.t("名称：%s", [car.name]),
+			I18n.t("目录：%s", [car.folder_name]),
+			I18n.t("路径：%s", [car.path]),
+			I18n.t("大小：%s", [_human_bytes(car.size_bytes)]),
+			I18n.t("网格：%d 个 .kn5", [car.kn5_count]),
+			I18n.t("物理数据：%s", ["data.acd" if car.data_present
+					else I18n.t("缺失（只能看不能开）")]),
 	])
 	_info.text = "\n".join(lines)
 	for button in [_load_button, _rename_button, _delete_button, _open_button]:
@@ -213,7 +223,7 @@ func _import_via_embedded_dialog() -> void:
 	picker.file_mode = FileDialog.FILE_MODE_OPEN_ANY
 	picker.access = FileDialog.ACCESS_FILESYSTEM
 	picker.current_dir = OS.get_system_dir(OS.SYSTEM_DIR_DESKTOP)
-	picker.title = "选择车模目录或 zip"
+	picker.title = I18n.t("选择车模目录或 zip")
 	picker.dir_selected.connect(_import_from.bind(picker))
 	picker.file_selected.connect(_import_from.bind(picker))
 	add_child(picker)
@@ -225,7 +235,7 @@ func _import_via_embedded_dialog() -> void:
 ## filters: PackedStringArray, callback, parent_window_id = 0)`。
 func _import_via_system_dialog() -> void:
 	var error := DisplayServer.file_dialog_show(
-			"选择车模目录或 zip",
+			I18n.t("选择车模目录或 zip"),
 			ProjectSettings.globalize_path(IMPORT_ROOT),
 			"",                                  # 初始文件名：不预选
 			true,                                # show hidden
@@ -256,7 +266,7 @@ func _import_from(source: String, picker: FileDialog = null) -> void:
 
 	if source.to_lower().ends_with(".zip"):
 		if not _unpack(source, target):
-			_warn("解压失败：%s" % source)
+			_warn(I18n.t("解压失败：%s", [source]))
 			return
 	elif ModLibrary.classify_path(source) != null \
 			or FileAccess.file_exists(source.path_join("data.acd")) \
@@ -266,7 +276,7 @@ func _import_from(source: String, picker: FileDialog = null) -> void:
 		# 单个 .kn5：旁边只要再有一个 data 目录就能开；裸 .kn5 也允许导入看模型。
 		_copy_file(source, target.path_join(name + ".kn5"))
 	else:
-		_warn("不是车模：%s" % source)
+		_warn(I18n.t("不是车模：%s", [source]))
 		return
 
 	# mods 目录变了，refresh() 会重建索引再刷新列表。
@@ -305,7 +315,7 @@ func _copy_directory(source: String, target: String) -> void:
 	if source == target:
 		return
 	if DirAccess.dir_exists_absolute(target):
-		_warn("同名车模已存在：%s" % name_of(target))
+		_warn(I18n.t("同名车模已存在：%s", [name_of(target)]))
 		return
 	DirAccess.make_dir_recursive_absolute(target)
 	var dir := DirAccess.open(source)
@@ -354,26 +364,26 @@ func _on_rename_pressed() -> void:
 	if car == null:
 		return
 	var dialog := AcceptDialog.new()
-	dialog.title = "重命名车模"
+	dialog.title = I18n.t("重命名车模")
 	var input := LineEdit.new()
 	input.text = car.folder_name
 	input.custom_minimum_size = Vector2(360, 0)
 	dialog.add_child(input)
-	dialog.ok_button_text = "确定"
+	dialog.ok_button_text = I18n.t("确定")
 	add_child(dialog)
 	dialog.popup_centered()
 	dialog.confirmed.connect(func() -> void:
 			var fresh: String = input.text.strip_edges()
 			if fresh.is_empty() or fresh.contains("/") or fresh.contains("\\"):
-				_warn("名字不能为空或含路径分隔符")
+				_warn(I18n.t("名字不能为空或含路径分隔符"))
 				return
 			var destination: String = car.path.get_base_dir().path_join(fresh)
 			if DirAccess.dir_exists_absolute(destination):
-				_warn("已存在同名车模")
+				_warn(I18n.t("已存在同名车模"))
 				return
 			var err := DirAccess.open(car.path.get_base_dir()).rename(car.path, destination)
 			if err != OK:
-				_warn("重命名失败：%d" % err)
+				_warn(I18n.t("重命名失败：%d", [err]))
 				return
 			dialog.queue_free()
 			refresh())
@@ -384,9 +394,11 @@ func _on_delete_pressed() -> void:
 	if car == null:
 		return
 	var dialog := ConfirmationDialog.new()
-	dialog.title = "删除车模"
-	dialog.dialog_text = "确定删除「%s」？这会从磁盘上抹掉该目录。\n%s" % [car.name, car.path]
-	dialog.ok_button_text = "删除"
+	dialog.title = I18n.t("删除车模")
+	dialog.dialog_text = I18n.t("确定删除「%s」？这会从磁盘上抹掉该目录。\n%s",
+			[car.name, car.path])
+	dialog.ok_button_text = I18n.t("删除")
+	dialog.cancel_button_text = I18n.t("取消")
 	add_child(dialog)
 	dialog.popup_centered()
 	dialog.confirmed.connect(func() -> void:
@@ -438,7 +450,7 @@ func _warn(message: String) -> void:
 
 func _human_bytes(bytes: int) -> String:
 	if bytes < 0:
-		return "（未计算）"
+		return I18n.t("（未计算）")
 	var units := ["B", "KiB", "MiB", "GiB"]
 	var value := float(bytes)
 	var unit := 0

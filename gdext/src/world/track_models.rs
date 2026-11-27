@@ -32,6 +32,9 @@ pub(crate) fn visual_models_instance(
     let started = Instant::now();
     let mut container = Node3D::new_alloc();
     container.set_name("TrackModels");
+    // 先挂进场景树：`merge_static_children()` 要用 `get_global_transform()`，
+    // 节点不在树里时 Godot 会返回 identity 并刷 "!is_inside_tree()" 错误。
+    parent.add_child(&container.clone().upcast::<Node>());
 
     let mut loaded = 0usize;
     let mut skipped = 0usize;
@@ -123,6 +126,7 @@ pub(crate) fn visual_models_instance(
     }
 
     if loaded == 0 {
+        parent.remove_child(&container.clone().upcast::<Node>());
         container.free();
         return None;
     }
@@ -144,14 +148,16 @@ pub(crate) fn visual_models_instance(
         .map(|value| !value.is_empty() && value != "0")
         .unwrap_or(false);
     if !merge_disabled {
+        let merge_started = std::time::Instant::now();
         let merge_stats = crate::kn5::merge::merge_static_children(&mut container);
         godot_print!(
-            "WorldBody: merged {} static meshes into {} material batches",
+            "WorldBody: merged {} static meshes into {} material batches ({} verts) in {:.0} ms",
             merge_stats.merged_nodes,
-            merge_stats.groups
+            merge_stats.groups,
+            merge_stats.vertices,
+            merge_started.elapsed().as_secs_f64() * 1e3
         );
     }
-    parent.add_child(&container.clone().upcast::<Node>());
     Some(container)
 }
 

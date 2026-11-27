@@ -28,7 +28,8 @@ vettura/
 │   ├── vettura_native.gdextension
 │   └── baseline.tscn / fmod_probe.tscn / kn5_probe.tscn / load_probe.tscn  # Rust 验证探针
 ├── tools/                     # kn5-inspect / acd-inspect 命令行工具
-├── scripts/                   # Python（uv）工程脚本：构建 / Android 导出 / FMOD 下载与打包
+├── engine/                    # 魔改引擎落点：Godot 补丁序列、显示能力契约、扩展 manifest（不是 crate）
+├── scripts/                   # Python 标准库工程脚本：构建 / Android 导出 / FMOD 下载与打包
 ├── docs/                      # 架构、构建、Godot 集成、音频、物理文档 + plans/（方案文档）
 ├── game/                      # 主游戏场景：大厅 / 车库 / 车辆预览 / 设置
 │   ├── render/                # 渲染基线：天空 shader / 后端档位 / 屏幕后处理
@@ -136,8 +137,8 @@ godot --headless --path . res://gdext/kn5_probe.tscn
 车模加载慢的定位与回归（合成本地车模，不需要 `mods/` 真车资产）：
 
 ```bash
-uv run scripts/load_probe.py            # 生成 66 MiB 合成车模并跑无头探针
-uv run scripts/load_probe.py --meshes 64 --vertices 1024   # 小模型快速迭代
+python3 scripts/load_probe.py            # 生成 66 MiB 合成车模并跑无头探针
+python3 scripts/load_probe.py --meshes 64 --vertices 1024   # 小模型快速迭代
 ```
 
 输出解析 / 冷实例化 / 缓存命中 / 分帧加载四段耗时；重复实例化（同一
@@ -151,10 +152,12 @@ uv run scripts/load_probe.py --meshes 64 --vertices 1024   # 小模型快速迭�
 4. 也可以用无头模式验证交互链路：
 
 ```bash
+godot --headless --path . res://game/i18n_smoke.tscn
 godot --headless --path . res://game/mod_library_smoke.tscn
 godot --headless --path . res://game/lobby_smoke.tscn
+godot --headless --path . res://game/drive_smoke.tscn
 godot --headless --path . res://game/smoke.tscn
-# 期望最后一行 [mod-library-smoke] PASS / [lobby-smoke] PASS / [visual-smoke] PASS，退出码 0
+# 期望最后一行 [i18n-smoke] PASS / [mod-library-smoke] PASS / [lobby-smoke] PASS / [drive-smoke] PASS / [visual-smoke] PASS，退出码 0
 ```
 
 `game/lobby.tscn` 这一版做的是：
@@ -162,8 +165,11 @@ godot --headless --path . res://game/smoke.tscn
 - 用可替换的 AC 车库（track）模组做 3D 背景，默认 `mods/ltk_csr_garage`；
 - 把当前选择的车辆停在车库的 `AC_PIT_0` / `AC_START_0` 或室内地坪上；
 - 慢速环绕镜头，可拖动旋转、滚轮缩放；
-- 「车辆库」「车库模组」「设置」三个入口，选择与设置写入 `user://settings.cfg`；
-- 「开始驾驶」进入原来的车辆预览页 `game/main.tscn`。
+- 「车辆库」「赛道」「车库模组」「设置」入口，选择与设置写入 `user://settings.cfg`；
+- 界面支持 **简体中文 / English**，设置 →「界面」切换，默认跟随系统；
+- 「开始驾驶」进入 `game/drive.tscn`：真实赛道 + 选中车辆、圈速 HUD、天气/FX、
+  键盘/手柄/触屏/体感驾驶；
+- 「展厅预览」进入 `game/main.tscn` 只看车模。
 
 `game/main.tscn` 这一版做的是：
 
@@ -203,7 +209,7 @@ mods/
 
 ## 脚本
 
-工程脚本放在 `scripts/`，用 Python + uv 管理；目前提供：
+工程脚本放在 `scripts/`，只用 Python 标准库（`python3` 直接跑，无需 uv/venv）；目前提供：
 
 - `scripts/fetch_fmod.py`：拉取 FMOD Engine SDK 2.02.22 并编译 mod bank 所需 DSP 插件
 - `scripts/pack_fmod.py`：把 FMOD 运行期动态库拷进 Godot 导出目录（发行包必需）

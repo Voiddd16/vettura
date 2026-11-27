@@ -83,6 +83,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+mouse_filter = 2
 
 [node name="Margin" type="MarginContainer" parent="UI/Root"]
 unique_name_in_owner = true
@@ -92,6 +93,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+mouse_filter = 2
 theme_override_constants/margin_left = 16
 theme_override_constants/margin_top = 16
 theme_override_constants/margin_right = 16
@@ -99,10 +101,12 @@ theme_override_constants/margin_bottom = 16
 
 [node name="Layout" type="VBoxContainer" parent="UI/Root/Margin"]
 layout_mode = 2
+mouse_filter = 2
 theme_override_constants/separation = 12
 
 [node name="TopBar" type="HBoxContainer" parent="UI/Root/Margin/Layout"]
 layout_mode = 2
+mouse_filter = 2
 theme_override_constants/separation = 12
 
 [node name="Brand" type="VBoxContainer" parent="UI/Root/Margin/Layout/TopBar"]
@@ -193,6 +197,13 @@ theme_override_styles/hover = SubResource("StyleBoxFlat_accent_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_accent_pressed")
 text = "开始驾驶"
 
+[node name="TrackButton" type="Button" parent="UI/Root/Margin/Layout/InfoPanel/InfoMargin/InfoBox/Buttons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 54)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "赛道"
+
 [node name="CarButton" type="Button" parent="UI/Root/Margin/Layout/InfoPanel/InfoMargin/InfoBox/Buttons"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(140, 54)
@@ -206,6 +217,13 @@ custom_minimum_size = Vector2(140, 54)
 layout_mode = 2
 theme_override_font_sizes/font_size = 20
 text = "车库模组"
+
+[node name="ShowroomButton" type="Button" parent="UI/Root/Margin/Layout/InfoPanel/InfoMargin/InfoBox/Buttons"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(140, 54)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "展厅预览"
 
 [node name="QuitButton" type="Button" parent="UI/Root/Margin/Layout/InfoPanel/InfoMargin/InfoBox/Buttons"]
 unique_name_in_owner = true

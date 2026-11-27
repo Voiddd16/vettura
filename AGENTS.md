@@ -27,7 +27,8 @@ FMOD 音频直连；GDScript 只做 UI/流程。加载时直读 AC 原格式，�
 | `game/` | 主游戏场景与回归冒烟（GDScript）：大厅/车库/车辆预览/设置/布局 | 不是 Rust 冒烟 |
 | `stylized/` | 风格化渲染子项目：玻璃/HUD/颜色/形状/光照/滤镜 shader 框架（纯 shader+GDScript，见其 README） | 不放游戏逻辑/物理/Rust |
 | `tools/` | `kn5-inspect` / `acd-inspect` CLI（格式逆向排查用） | — |
-| `scripts/` | Python(uv) 构建脚本：`build.py`（host/android/apk/check/test）、`android.py`、`clean.py`、`fetch_fmod.py`、`load_probe.py` | 不是游戏代码 |
+| `engine/` | **魔改引擎落点**：Godot 补丁序列（`patches/`）、显示能力契约（`display_contract.json`）、扩展 manifest（`mods/`） | 不是 crate；不放引擎源码/二进制 |
+| `scripts/` | Python 标准库构建脚本：`build.py`（host/android/apk/check/test）、`android.py`、`clean.py`、`fetch_fmod.py`、`load_probe.py` | 不是游戏代码 |
 | `docs/` | 设计文档 + `plans/`（方案文档，如主项目方案评审稿） | — |
 | `mods/` | **游戏 mod 根目录**（车模/赛道/车库，递归扫描自动分类；数 GB，gitignore + `.gdignore`） | **不是测试代码！** |
 | `addons/` | `godot_mcp` 编辑器插件（AI 操作 Godot 的 MCP 服务） | 导出 APK 时会被临时摘除（见下） |
@@ -40,11 +41,13 @@ FMOD 音频直连；GDScript 只做 UI/流程。加载时直读 AC 原格式，�
 - **`gdext/*.tscn` = Rust / 桌面验证探针**：`baseline`（真实赛道+车 20s）、`kn5_probe`、
   `fmod_probe`、`load_probe`、`desktop_probe`。headless 或桌面窗口可跑，验证的是
   Rust/GDExtension 链路与真实渲染结果。
-- **`game/*.tscn` = 主游戏场景**：`lobby`（游戏大厅：车库模组 + 选车 +
-  环绕镜头，也是 `project.godot` 主场景）、`main`（默认浮空车+触摸+多视角+HUD）、
+- **`game/*.tscn` = 主游戏场景**：`lobby`（游戏大厅：车库模组 + 选车/选赛道 +
+  环绕镜头，也是 `project.godot` 主场景）、`drive`（WorldBody 真实赛道自由驾驶）、
+  `track_picker`（赛道/布局选择）、`main`（展厅：浮空车+触摸+多视角+HUD）、
   `garage`（车模库）、`garage_mod_picker`（车库模组选择）、`settings_popup`
-  （游戏内设置弹窗）、`smoke` / `garage_smoke` / `lobby_smoke` / `layout_smoke`
-  （回归冒烟）、`log_smoke`（日志/GDScript API 冒烟，含 `LOG_SMOKE_PANIC=1` panic 转储验证）。
+  （游戏内设置弹窗）、`smoke` / `garage_smoke` / `lobby_smoke` / `drive_smoke` /
+  `i18n_smoke` / `layout_smoke`（回归冒烟）、`log_smoke`（日志/GDScript API
+  冒烟，含 `LOG_SMOKE_PANIC=1` panic 转储验证）。
 - **`stylized/showcase.tscn` = 风格化效果展示页**：六大类 shader 各一个展台（纯合成几何，
   不依赖 `mods/`），桌面窗口运行看效果。
 - 新增游戏页面/控件放 `game/`；shader 效果放 `stylized/`；不要往 `gdext/` 里加游戏 UI。
@@ -61,13 +64,18 @@ python3 scripts/build.py apk                        # 导出 build/android/Vettu
 
 # 冒烟（--quit-after N 是帧数不是秒！）
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --quit-after 1500 res://game/garage_smoke.tscn
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://game/i18n_smoke.tscn      # 中英切换/翻译完整性
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://game/drive_smoke.tscn    # 真实赛道+车驾驶冒烟
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://gdext/baseline.tscn   # 需 mods/ 真车
 
 # 日志冒烟：上面任一场景跑完后，user 目录应有 vettura.<日期>.log
 ls ~/Library/Application\ Support/Godot/app_userdata/Vettura/logs/   # macOS
 VETTURA_LOG="info,vettura_assets::track=debug" /Applications/Godot.app/Contents/MacOS/Godot --headless --path . res://gdext/baseline.tscn
 
-uv run scripts/load_probe.py                        # 合成车模加载性能探针（不依赖 mods/）
+python3 scripts/load_probe.py                        # 合成车模加载性能探针（不依赖 mods/）
+
+python3 scripts/engine_patch.py --list               # 魔改引擎补丁序列（engine/patches/*/series）
+python3 scripts/engine_patch.py --source <godot> --check   # 校验补丁能否应用
 ```
 
 真机资产测试（需本地 `mods/` 在位）：
@@ -80,6 +88,9 @@ cargo test -p vettura-assets --test real_car     -- --ignored   # 真车数据�
 ## 代码约定
 
 - **语言**：注释与文档用中文（现状一致）；代码标识符英文。
+- **UI 文案 / i18n**：当前支持 zh_CN / en。中文原文就是翻译 key：静态 `.tscn`
+  文本靠 `auto_translate`，动态文本用 `I18n.t("中文模板", [参数])`；新增任何
+  可见文案必须同时在 `game/i18n/i18n.gd` 的 `EN` 字典补英文。
 - **位置**：GDScript 场景→`game/`；Python 脚本→`scripts/`；新 crate→顶层新目录
   （workspace 根就是 Godot 工程根，`Cargo.toml` 在 `project.godot` 旁边）。
 - **crate 边界**：格式解析/物理不依赖 godot-rust；只有 `gdext/` 认识 Godot。
@@ -112,6 +123,10 @@ cargo test -p vettura-assets --test real_car     -- --ignored   # 真车数据�
    的自研 sim-* 方向是当前最大待决策分歧，评审记录见该目录）。
 7. **MCP**：godot_mcp 配置在编辑器 `user://mcp_settings.cfg`（auto_start, port 9080）；
    会话里的 `godot` MCP 工具可用于场景/节点操作。
+8. **显示管线**：`scaling_3d_mode` / `scaling_3d_scale` / `vrs_*` 不要写在场景里，
+   统一走 autoload `DisplayPipeline`（`game/render/display_pipeline.gd`）；
+   `RenderQuality` 会在全屏/设置变化时覆盖。FSR3.1 需要 `engine/` 补丁，stock
+   4.7 只有 FSR1/FSR2/MetalFX/VRS/XR。
 
 ## 文档索引
 
@@ -120,7 +135,8 @@ cargo test -p vettura-assets --test real_car     -- --ignored   # 真车数据�
 | [`docs/architecture.md`](docs/architecture.md) | **先读这个**：crate 图、职责与"不放入"、数据流 |
 | [`docs/physics.md`](docs/physics.md) | 物理子系统全覆盖清单、设计取舍、Chrono 映射边界 |
 | [`docs/godot.md`](docs/godot.md) | Godot 集成：扩展类、场景探针、冒烟层次 |
-| [`docs/rendering.md`](docs/rendering.md) | 渲染层：Forward+/Mobile 后端、天空、后处理、材质映射、湿路面 |
+| [`docs/rendering.md`](docs/rendering.md) | 渲染层：Forward+/Mobile 后端、天空、后处理、材质映射、湿路面、上采样/动态分辨率/VRS |
+| [`engine/README.md`](engine/README.md) | 魔改引擎落点：补丁序列、显示能力契约、FSR3.1 扩展 manifest/桥接 |
 | [`docs/build.md`](docs/build.md) | 构建、环境、导出细节 |
 | [`docs/audio.md`](docs/audio.md) | FMOD 版本/兼容规则、GUID 事件表 |
 | [`docs/telemetry.md`](docs/telemetry.md) | 实时遥测：`telemetry.cfg` 配置全表、JSON 帧格式、UDP/TCP 输出 |

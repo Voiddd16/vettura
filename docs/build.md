@@ -12,6 +12,7 @@
 | rustfmt / clippy | 由 `rust-toolchain.toml` 声明 | `cargo fmt --version` / `cargo clippy --version` |
 | Xcode Command Line Tools（macOS） | 编译 dylib 与链接需要 | `xcode-select -p` |
 | Godot | 4.7（当前工程 4.7.2），仅运行扩展时需要 | `godot --version` |
+| Python（可选） | ≥ 3.10，仅 `scripts/` 下的工程脚本需要；只用标准库，无需 pip/uv | `python3 --version` |
 
 首次拉取仓库后，建议先确认工具链：
 
@@ -318,6 +319,30 @@ cargo bench -p vettura-kn5 -- "/path/to/car.kn5"
 
 > `cargo bench` 使用 `bench` profile，默认带优化，不需要手动加 `--release`。
 
+`vettura-world` 与 `vettura-track` 也各带一个不依赖 criterion 的 bench：
+
+```bash
+# 物理步进吞吐（默认合成平地；可用真实赛道/真车）
+cargo bench -p vettura-world --bench step
+VETTURA_TRACK_ROOT=mods/daytona_2017 \
+  VETTURA_CAR_ROOT="mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_forceindia" \
+  VETTURA_CARS=4 cargo bench -p vettura-world --bench step
+
+# AI 线最近点投影：全量扫描 vs 上一帧索引提示窗口
+cargo bench -p vettura-track --bench spline
+VETTURA_AI_LINE="$PWD/mods/fn_nurburgring/nordschleife/ai/fast_lane.ai" \
+  cargo bench -p vettura-track --bench spline
+```
+
+`step` 的环境变量：`VETTURA_STEP_DT`（默认 1/600）、`VETTURA_STEP_ITERS`
+（6000）、`VETTURA_STEP_WARMUP`（600）、`VETTURA_STEP_RUNS`（5）、
+`VETTURA_CARS`（车辆数）、`VETTURA_TRACK_ROOT` / `VETTURA_CAR_ROOT`。
+`spline` 的环境变量：`VETTURA_AI_LINE`、`VETTURA_SPLINE_SAMPLES`（2000）、
+`VETTURA_SPLINE_WINDOW`（64，每侧段数）、`VETTURA_SPLINE_ITERS`（20）。
+
+> 物理步进在 M1 上默认车/平地约 **9 µs/step**（600 Hz 下约 0.5% 单核）；
+> 加载与缩放问题优先看赛道网格合并、贴图解码和 AI 查询，而不是物理内核。
+
 ## 7. 文档
 
 ```bash
@@ -451,7 +476,7 @@ FMOD 默认**不链接**；要真正播放 AC 车模声浪时，先用主工程 
 
 ```bash
 cd scripts
-uv run fetch_fmod.py                 # 下载 FMOD Engine 2.02.22 并解压/编译插件
+python3 fetch_fmod.py                 # 下载 FMOD Engine 2.02.22 并解压/编译插件
 
 cd ..
 cargo build -p vettura-godot --features fmod
@@ -498,7 +523,7 @@ cargo clippy --workspace --exclude vettura-godot --all-targets -- -D warnings
 cargo test --workspace --exclude vettura-godot
 cargo build -p vettura-godot
 # 可选：FMOD 真机声音联调
-cd scripts && uv run fetch_fmod.py
+cd scripts && python3 fetch_fmod.py
 cd .. && cargo build -p vettura-godot --features fmod
 godot --headless --path . res://gdext/fmod_probe.tscn
 ```
@@ -511,7 +536,7 @@ godot --headless --path . res://gdext/fmod_probe.tscn
 cargo build -p vettura-godot --features fmod --release
 godot --headless --path . --export-release "macOS" ../dist
 cd scripts
-uv run pack_fmod.py --platform macos --dest ../dist/Vettura.app   # .app 自动落到 Contents/MacOS
+python3 pack_fmod.py --platform macos --dest ../dist/Vettura.app   # .app 自动落到 Contents/MacOS
 ```
 
 `vettura_native.gdextension` 已区分 debug / release 条目：编辑器用 `target/debug`，

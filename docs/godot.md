@@ -147,6 +147,14 @@ if kn5.load("res://cars/my_car.kn5"):
 - 网格节点 → `MeshInstance3D` + `ArrayMesh` + `StandardMaterial3D`；
 - KN5 里标记为不可见的节点及其子树默认跳过；`instantiate_with_options()` 可以
   保留它们（`visible = false`），Physics 层仍可用 `find_child()` 找挂点；
+- 部分车模同时带 `WINDOWS`（车外玻璃）和 `WIND_IN`（车内挡风玻璃覆盖层），
+  后者常与前者几何完全重复。两层半透明 + 折射叠加会在座舱视角产生双影，
+  构建期检测到同名/同几何的 `WIND_IN` 会直接跳过（992 GT3 R 实测）；
+- KN5 的多级 LOD 是独立节点（`*_lodHI*`/`*_lodLOW*`、`*_LOW`）。我们没有
+  运行时 LOD 替换，会保留主 LOD（`lod_in == 0`）并跳过 AABB 重合的低 LOD；
+  否则同一位置两份几何 z-fighting，赛道边旗帜/帐篷会闪烁或看起来“悬空”；
+- 树叶/草（`ksTree`/`ksGrass`/`ksFlags`）不投 CSM 阴影，并把 alpha scissor
+  阈值抬到至少 0.4：alpha 薄片在 MetalFX Temporal 下投 120 m 阴影会持续抖动；
 - 兄弟重名时追加 `_2`、`_3` 后缀，避免 `get_node()` 歧义。
 
 ### `AcCar`（Resource）
@@ -385,8 +393,13 @@ var car: VehicleBody = world.spawn_vehicle_from_path(
 | 类型 | 判定 |
 | --- | --- |
 | `car` | `data.acd` 或 `data/car.ini`，且目录里有 `.kn5` |
-| `track` | `models*.ini`、`data/surfaces.ini`、`ai/fast_lane.ai` 或 `ui_track.json` |
+| `track` | `models.ini` / `models_<layout>.ini`（WorldBody 加载前提；布局名从文件名读取） |
 | `garage` | 有 `.kn5`，但不是车辆/赛道（大厅展示场景） |
+
+赛道条目的 `layouts` 会列出每个 `models_<layout>.ini`；`default_layout` 优先
+`roadcourse` / `nordschleife` 等常见比赛布局。布局自己的预览与元信息从
+`ui/<layout>/preview.png`、`ui/<layout>/ui_track.json` 读取，AI 线 / 维修区
+则查 `<layout>/ai/*.ai`（Daytona、Nürburgring 都是这种结构）。
 
 GDScript 侧用法：
 
@@ -403,6 +416,22 @@ print(ModLibrary.counts())                 # {car, track, garage}
 `user://mods/imported_cars/`，随后 `ModLibrary.rescan()` 即可立即出现。
 `ModLibrary` 只读元信息（名称/预览图路径），不解析 KN5；实际加载仍由
 `Kn5SceneBuilder` / `AcCar` 按选择执行。
+
+## 国际化（i18n）
+
+目前支持 **简体中文（`zh_CN`）/ English（`en`）**。autoload `I18n`
+（`game/i18n/i18n.gd`）用代码内字典向 `TranslationServer` 注册翻译：
+
+- **中文原文就是 key**：静态 `.tscn` 的 `text` 不需要改成 `UI_KEY`，Godot
+  Control 的 `auto_translate` 默认开启，英文 locale 下自动显示英文；
+- 动态文本（名字/数字、对话框、`ItemList` / `OptionButton` 条目）必须写
+  `I18n.t("中文模板", [参数])`；
+- 语言设置存 `user://settings.cfg` 的 `[ui] language`：空 = 跟随系统，
+  也可显式 `zh_CN` / `en`；设置 →「界面」→「语言」可切换；
+- 新增可见文案时必须同步补 `I18n.EN` 的英文映射；纯日志/调试文本不用翻。
+
+`game/i18n_smoke.tscn` 会在中英之间来回切换，断言动态/自动翻译和所有映射的
+注册完整性，不依赖 `mods/`。
 
 ## 冒烟测试
 
@@ -433,26 +462,36 @@ print(ModLibrary.counts())                 # {car, track, garage}
 4. **ModLibrary**：`game/mod_library_smoke.tscn` 在 `user://mods` 下造合成目录，
    验证递归发现与车辆/赛道/车库分类、清理后索引同步，不需要真实资产。
 
-5. **日志链路**：`game/log_smoke.tscn` 验证 `VetturaLogger` GDScript API
+5. **i18n**：`game/i18n_smoke.tscn` 验证中文 key、英文翻译、运行时切换与映射
+   完整性（不依赖资产）。
+
+6. **自由驾驶**：`game/drive_smoke.tscn` 用真实赛道 + 真实车验证
+   `WorldBody` 加载、车辆生成、HUD、重置、暂停设置，并实际踩 1.5 秒油门确认
+   车会移动；本地没有 `mods/` 时 SKIP。
+
+7. **日志链路**：`game/log_smoke.tscn` 验证 `VetturaLogger` GDScript API
    （ring/recent/dump/reload/set_level/dump_to_file），打印 `[log-smoke] PASS`；
    `LOG_SMOKE_PANIC=1` 前缀触发一次真实 Rust panic，之后 `last-crash.log`
    应包含 panic 消息 + backtrace + 环形缓冲转储（命令见
    [`logging.md`](logging.md) §10）。
 
-6. **AI 整圈**：`gdext/ai_lap.tscn` 让 `AiDriver` 遥控真车沿 `fast_lane.ai`
+8. **AI 整圈**：`gdext/ai_lap.tscn` 让 `AiDriver` 遥控真车沿 `fast_lane.ai`
    跑完整一圈，逐秒打印遥测，结束打印 `[ai-lap] PASS`。见
    [`architecture.md`](architecture.md) 的「AI 司机与 AC 难度档」。
+8. **显示管线**：`game/display_smoke.tscn` 验证 `DisplayPipeline` 的能力探测、
+   上采样回退、动态分辨率滞回、VRS 状态与 `engine/mods` manifest 扫描，打印
+   `[display-smoke] PASS`。FSR3.1 的引擎扩展契约见 [`engine/README.md`](../engine/README.md)。
 
 ## 录一整圈 AI 驾驶视频
 
 `scripts/record_ai_lap.py`：Godot 抓帧 + ffmpeg 编码，不需要录屏权限。
 
 ```bash
-uv run scripts/record_ai_lap.py                # 完整一圈，720p30 / H.264 CRF 24
-uv run scripts/record_ai_lap.py --every 3      # 抓帧抽稀（20fps 视频）
-uv run scripts/record_ai_lap.py --skill 60     # 换 AI 难度档（0..=110）
-uv run scripts/record_ai_lap.py --view drone   # 换视角（见下）
-uv run scripts/record_ai_lap.py --keep-frames  # 保留 JPEG 帧目录
+python3 scripts/record_ai_lap.py                # 完整一圈，720p30 / H.264 CRF 24
+python3 scripts/record_ai_lap.py --every 3      # 抓帧抽稀（20fps 视频）
+python3 scripts/record_ai_lap.py --skill 60     # 换 AI 难度档（0..=110）
+python3 scripts/record_ai_lap.py --view drone   # 换视角（见下）
+python3 scripts/record_ai_lap.py --keep-frames  # 保留 JPEG 帧目录
 ```
 
 - 视角（`--view` / `AI_LAP_VIEW`）：`chase` 车后、`cockpit` 驾驶位、

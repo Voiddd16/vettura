@@ -17,6 +17,7 @@ var _garage: Control
 var _ok := true
 
 func _ready() -> void:
+	TranslationServer.set_locale("zh_CN")
 	_reset_library()
 	await get_tree().process_frame  # 让 Control 完成布局
 	await _make_cars()

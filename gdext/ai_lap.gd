@@ -43,6 +43,10 @@ extends Node3D
 ## AI_LAP_SPAWN_GRID（发车格序号，0=起跑线，默认 1）、
 ## AI_LAP_EYE_X/Y/Z（驾驶位相机偏移）、
 ## AI_LAP_AUDIO=0（关闭 FMOD 声效；默认开启，SDK/声效缺失时自动降级为警告）。
+## AI_LAP_UPSCALER（auto/native/fsr1/fsr2/fsr3_1/metalfx_spatial/metalfx_temporal，
+## 留空不改显示设置）、AI_LAP_UPSCALER_SCALE（3D 比例，默认 0.8）、
+## AI_LAP_FULLSCREEN=1（全屏）、AI_LAP_WINDOW=1920x1080（窗口尺寸）、
+## AI_LAP_1TO1=1（内容缩放基准对齐窗口，避免 1280×720 stretch 基准的超采样）。
 ##
 ## 视角（AI_LAP_VIEW）：
 ##   chase   车后追随（默认）
@@ -95,6 +99,9 @@ const VIEW_ALIASES := {
 }
 ## 这些视角的相机是车身子对象：位姿随车身刚性移动，不需要每帧重算世界位姿。
 const RIGID_VIEWS := ["cockpit", "hood", "bumper", "wheel"]
+
+## 时域上采样与 MSAA 不兼容；配置显示管线时显式关掉 3D MSAA。
+const TEMPORAL_UPSCALERS := ["fsr2", "fsr3_1", "metalfx_temporal"]
 
 ## 圈时上限（秒）。Daytona roadcourse ≈ 5.7 km，AI 目标速度受 fast_lane.ai
 ## 调速；正常 F1 圈时 100–150 s。超过这个值判定 AI 没能完成圈。
@@ -203,6 +210,13 @@ var _car_dir := CAR_DIR
 var _track_dir := TRACK_DIR
 var _track_layout := TRACK_LAYOUT
 
+## 可选上采样配置（AI_LAP_UPSCALER 为空时完全不动全局显示状态）。
+var _upscaler := ""
+var _upscaler_scale := 0.8
+var _upscaler_fullscreen := false
+var _upscaler_1to1 := false
+var _upscaler_window := Vector2i.ZERO
+
 ## 录视频抓帧：AI_LAP_CAPTURE=1 时每个渲染帧存一张 JPEG，由外部 ffmpeg 编码。
 var _capture_dir := ""
 var _capture_every := 2
@@ -227,6 +241,11 @@ func _ready() -> void:
 	_car_dir = _res_path(_env_text("AI_LAP_CAR", CAR_DIR))
 	_track_dir = _res_path(_env_text("AI_LAP_TRACK", TRACK_DIR))
 	_track_layout = _env_text("AI_LAP_LAYOUT", TRACK_LAYOUT)
+	_upscaler = _env_text("AI_LAP_UPSCALER", "")
+	_upscaler_scale = clampf(_env_float("AI_LAP_UPSCALER_SCALE", 0.8), 0.1, 1.0)
+	_upscaler_fullscreen = _env_float("AI_LAP_FULLSCREEN", 0.0) > 0.5
+	_upscaler_1to1 = _env_float("AI_LAP_1TO1", 0.0) > 0.5
+	_upscaler_window = _parse_size(_env_text("AI_LAP_WINDOW", ""))
 	_view = _normalize_view(_env_text("AI_LAP_VIEW", "chase"))
 	_eye_offset = Vector3(
 		_env_float("AI_LAP_EYE_X", EYE_X_DEFAULT),
@@ -311,6 +330,12 @@ func _ready() -> void:
 	if _env_float("AI_LAP_CAM", 0.0) > 0.5 and DisplayServer.get_name() != "headless":
 		_setup_visual()
 
+	if not _upscaler.is_empty():
+		if DisplayServer.get_name() == "headless":
+			push_warning("[ai-lap] headless 下无法使用上采样器 %s，保持默认" % _upscaler)
+		else:
+			_apply_upscaler_settings()
+
 	if _env_float("AI_LAP_CAPTURE", 0.0) > 0.5:
 		_capture_dir = OS.get_environment("AI_LAP_CAPTURE_DIR")
 		if _capture_dir.is_empty():
@@ -333,6 +358,47 @@ func _ready() -> void:
 			_capture_thread.start(_capture_worker)
 			print("[ai-lap] capture frames -> %s every %d frame (async writer)"
 					% [absolute, _capture_every])
+
+## 可选：给整圈运行显式指定上采样器。必须晚于 `RenderQuality` 的 deferred
+## `apply_profile()`，否则会被用户设置里的 auto/native 覆盖回去。
+func _apply_upscaler_settings() -> void:
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if _upscaler_fullscreen:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		await get_tree().process_frame
+		await get_tree().process_frame
+	if _upscaler_window.x > 0 and _upscaler_window.y > 0:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		DisplayServer.window_set_size(_upscaler_window)
+		await get_tree().process_frame
+		await get_tree().process_frame
+	if _upscaler_1to1:
+		get_window().content_scale_size = DisplayServer.window_get_size()
+		await get_tree().process_frame
+		await get_tree().process_frame
+	DisplayPipeline.refresh()
+	DisplayPipeline.configure({
+		"fullscreen": _upscaler_fullscreen,
+		"requested_upscaler": _upscaler,
+		"vrs": "off",
+		"render_scale": _upscaler_scale,
+		"dynamic": false,
+		"target_fps": 60,
+	})
+	var active := DisplayPipeline.active_upscaler()
+	if active in TEMPORAL_UPSCALERS:
+		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+	elif _upscaler_fullscreen:
+		get_viewport().msaa_3d = Viewport.MSAA_2X
+	var state := DisplayPipeline.state()
+	var texture_size := get_viewport().get_texture().get_size()
+	print("[ai-lap] display requested=%s active=%s mode=%d scale=%.2f bias=%.2f msaa=%d window=%s viewport=%s"
+			% [_upscaler, active, int(state.get("upscaler_mode", -1)),
+				float(state.get("scale", 0.0)), float(state.get("mipmap_bias", 0.0)),
+				get_viewport().msaa_3d,
+				str(DisplayServer.window_get_size()), str(texture_size)])
+
 
 ## 赛道与车模都不自带灯光：窗口模式下补一盏日光即可。
 ## 天空与环境光走工程默认环境（`game_environment.tres` +
@@ -832,6 +898,19 @@ func _env_float(name: String, fallback: float) -> float:
 func _env_text(name: String, fallback: String) -> String:
 	var text := OS.get_environment(name)
 	return text if not text.is_empty() else fallback
+
+
+## 解析 `1920x1080` / `1920X1080`；非法值返回 (0,0)。
+func _parse_size(text: String) -> Vector2i:
+	var lower := text.to_lower()
+	var parts := lower.split("x", false)
+	if parts.size() != 2:
+		return Vector2i.ZERO
+	var width := int(parts[0].strip_edges())
+	var height := int(parts[1].strip_edges())
+	if width <= 0 or height <= 0:
+		return Vector2i.ZERO
+	return Vector2i(width, height)
 
 ## 允许 --car/--track 传 `res://mods/...`、`mods/...` 或裸模组名 `daytona_2017`。
 func _res_path(path: String) -> String:

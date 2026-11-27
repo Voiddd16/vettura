@@ -16,6 +16,8 @@ var _main: Node3D
 var _ok := true
 
 func _ready() -> void:
+	# 冒烟断言中文 UI 文案；固定到 zh_CN，避免开发者系统语言是英文时误报。
+	TranslationServer.set_locale("zh_CN")
 	_main = MAIN_SCENE.instantiate()
 	add_child(_main)
 

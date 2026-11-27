@@ -28,6 +28,8 @@ use super::mesh;
 pub(crate) struct MergeStats {
     pub groups: usize,
     pub merged_nodes: usize,
+    /// 合并进批次的顶点总数（日志里用来解释耗时规模）。
+    pub vertices: usize,
 }
 
 /// 把 `root` 子树里可合并的静态网格按材质合并，返回统计。
@@ -90,13 +92,13 @@ pub(crate) fn merge_static_children(root: &mut Gd<Node3D>) -> MergeStats {
         let entry = groups.entry(key).or_insert_with(|| MergeGroup {
             material: material.clone(),
             cast_shadows,
-            vertices: PackedVector3Array::new(),
-            normals: PackedVector3Array::new(),
-            tangents: PackedFloat32Array::new(),
-            uvs: PackedVector2Array::new(),
-            uv2s: PackedVector2Array::new(),
+            vertices: Vec::new(),
+            normals: Vec::new(),
+            tangents: Vec::new(),
+            uvs: Vec::new(),
+            uv2s: Vec::new(),
             has_uv2: false,
-            indices: PackedInt32Array::new(),
+            indices: Vec::new(),
         });
         if entry.push(&mesh_resource, transform) {
             removable.push(instance.clone());
@@ -104,7 +106,9 @@ pub(crate) fn merge_static_children(root: &mut Gd<Node3D>) -> MergeStats {
     }
 
     let mut stats = MergeStats::default();
+    let mut total_vertices = 0usize;
     for (_, group) in groups {
+        total_vertices += group.vertices.len();
         let cast_shadows = group.cast_shadows;
         let Some(array_mesh) = group.build() else {
             continue;
@@ -116,6 +120,7 @@ pub(crate) fn merge_static_children(root: &mut Gd<Node3D>) -> MergeStats {
         root.add_child(&merged.clone().upcast::<Node>());
         stats.groups += 1;
     }
+    stats.vertices = total_vertices;
     for instance in removable.iter().rev() {
         // `free()` 会删除整个子树。KN5 的节点树里 mesh 可能带子节点（子 mesh、
         // dummy、骨骼挂点），其中没被合并的（湿路面层、蒙皮、半透明…）必须
@@ -151,16 +156,20 @@ fn collect_meshes(node: &Gd<Node>, out: &mut Vec<Gd<MeshInstance3D>>) {
 }
 
 /// 一组同材质网格的累积几何。
+///
+/// 累积阶段用 Rust `Vec` 而不是 `Packed*Array`：后者每个元素都要经 FFI
+/// 调用（`push`/`get`），一条赛道几百万个顶点时成为加载瓶颈。`Vec` 在
+/// Rust 侧连续增长，最后用 `PackedArray::from(Vec)` 一次性移交给 Godot。
 struct MergeGroup {
     material: Gd<Material>,
     cast_shadows: ShadowCastingSetting,
-    vertices: PackedVector3Array,
-    normals: PackedVector3Array,
-    tangents: PackedFloat32Array,
-    uvs: PackedVector2Array,
-    uv2s: PackedVector2Array,
+    vertices: Vec<Vector3>,
+    normals: Vec<Vector3>,
+    tangents: Vec<f32>,
+    uvs: Vec<Vector2>,
+    uv2s: Vec<Vector2>,
     has_uv2: bool,
-    indices: PackedInt32Array,
+    indices: Vec<i32>,
 }
 
 impl MergeGroup {
@@ -184,58 +193,59 @@ impl MergeGroup {
             Basis::IDENTITY
         };
         let base_index = self.vertices.len() as i32;
-        for index in 0..count {
-            let vertex = vertices.get(index).unwrap_or(Vector3::ZERO);
-            self.vertices.push(transform * vertex);
+        self.vertices.reserve(count);
+        self.normals.reserve(count);
+        self.tangents.reserve(count * 4);
+        self.uvs.reserve(count);
+        self.uv2s.reserve(count);
+
+        // `as_slice()` 直接借用 Godot 的连续缓冲，避免逐元素 `get()` 过 FFI。
+        for vertex in vertices.as_slice() {
+            self.vertices.push(transform * *vertex);
         }
 
         let normals = arrays
             .get(ArrayType::NORMAL.ord() as usize)
             .map(|value| value.to::<PackedVector3Array>());
-        for index in 0..count {
-            let normal = normals
-                .as_ref()
-                .and_then(|list| list.get(index))
-                .unwrap_or(Vector3::UP);
-            let transformed = (normal_basis * normal).normalized();
-            self.normals.push(transformed);
+        let normal_slice = normals.as_ref().map(|list| list.as_slice()).unwrap_or(&[]);
+        for normal in normal_slice.iter().take(count) {
+            self.normals.push((normal_basis * *normal).normalized());
         }
+        // 法线缺失（或列表偏短）时保持老行为：缺失的顶点朝上。
+        self.normals
+            .resize(base_index as usize + count, Vector3::UP);
 
         let tangents = arrays
             .get(ArrayType::TANGENT.ord() as usize)
             .map(|value| value.to::<PackedFloat32Array>());
+        let tangent_slice = tangents.as_ref().map(|list| list.as_slice()).unwrap_or(&[]);
+        // 没有切线列表时逐顶点退化为 RIGHT（仍要乘上放置矩阵的基）。
+        let fallback_tangent = (basis * Vector3::RIGHT).normalized();
         for index in 0..count {
-            let (direction, sign) = match tangents.as_ref() {
-                Some(list) => {
-                    let offset = index * 4;
-                    (
-                        Vector3::new(
-                            list.get(offset).unwrap_or(1.0),
-                            list.get(offset + 1).unwrap_or(0.0),
-                            list.get(offset + 2).unwrap_or(0.0),
-                        ),
-                        list.get(offset + 3).unwrap_or(1.0),
-                    )
+            let offset = index * 4;
+            let (direction, sign) = match (
+                tangent_slice.get(offset),
+                tangent_slice.get(offset + 1),
+                tangent_slice.get(offset + 2),
+            ) {
+                (Some(&x), Some(&y), Some(&z)) => {
+                    let sign = tangent_slice.get(offset + 3).copied().unwrap_or(1.0);
+                    (Vector3::new(x, y, z), sign)
                 }
-                None => (Vector3::RIGHT, 1.0),
+                _ => (fallback_tangent, 1.0),
             };
             let world = (basis * direction).normalized();
-            self.tangents.push(world.x);
-            self.tangents.push(world.y);
-            self.tangents.push(world.z);
-            self.tangents.push(sign);
+            self.tangents
+                .extend_from_slice(&[world.x, world.y, world.z, sign]);
         }
 
         let uvs = arrays
             .get(ArrayType::TEX_UV.ord() as usize)
             .map(|value| value.to::<PackedVector2Array>());
-        for index in 0..count {
-            self.uvs.push(
-                uvs.as_ref()
-                    .and_then(|list| list.get(index))
-                    .unwrap_or(Vector2::ZERO),
-            );
-        }
+        let uv_slice = uvs.as_ref().map(|list| list.as_slice()).unwrap_or(&[]);
+        let uv_count = uv_slice.len().min(count);
+        self.uvs.extend_from_slice(&uv_slice[..uv_count]);
+        self.uvs.resize(base_index as usize + count, Vector2::ZERO);
 
         let uv2s = arrays
             .get(ArrayType::TEX_UV2.ord() as usize)
@@ -243,28 +253,23 @@ impl MergeGroup {
         if uv2s.is_some() {
             self.has_uv2 = true;
         }
-        for index in 0..count {
-            self.uv2s.push(
-                uv2s.as_ref()
-                    .and_then(|list| list.get(index))
-                    .unwrap_or(Vector2::ZERO),
-            );
-        }
+        let uv2_slice = uv2s.as_ref().map(|list| list.as_slice()).unwrap_or(&[]);
+        let uv2_count = uv2_slice.len().min(count);
+        self.uv2s.extend_from_slice(&uv2_slice[..uv2_count]);
+        // 个别网格只有部分 UV2：其余顶点补零，保证每个顶点都有值。
+        self.uv2s.resize(base_index as usize + count, Vector2::ZERO);
 
         let indices = arrays
             .get(ArrayType::INDEX.ord() as usize)
             .map(|value| value.to::<PackedInt32Array>());
         match indices {
             Some(list) => {
-                for index in 0..list.len() {
-                    self.indices.push(list.get(index).unwrap_or(0) + base_index);
-                }
+                let values = list.as_slice();
+                self.indices.reserve(values.len());
+                self.indices
+                    .extend(values.iter().map(|index| *index + base_index));
             }
-            None => {
-                for index in 0..count as i32 {
-                    self.indices.push(base_index + index);
-                }
-            }
+            None => self.indices.extend(base_index..base_index + count as i32),
         }
         true
     }
@@ -274,14 +279,38 @@ impl MergeGroup {
             return None;
         }
         let mut arrays = mesh::empty_surface_arrays();
-        mesh::set(&mut arrays, ArrayType::VERTEX, self.vertices);
-        mesh::set(&mut arrays, ArrayType::NORMAL, self.normals);
-        mesh::set(&mut arrays, ArrayType::TANGENT, self.tangents);
-        mesh::set(&mut arrays, ArrayType::TEX_UV, self.uvs);
+        mesh::set(
+            &mut arrays,
+            ArrayType::VERTEX,
+            PackedVector3Array::from(self.vertices),
+        );
+        mesh::set(
+            &mut arrays,
+            ArrayType::NORMAL,
+            PackedVector3Array::from(self.normals),
+        );
+        mesh::set(
+            &mut arrays,
+            ArrayType::TANGENT,
+            PackedFloat32Array::from(self.tangents),
+        );
+        mesh::set(
+            &mut arrays,
+            ArrayType::TEX_UV,
+            PackedVector2Array::from(self.uvs),
+        );
         if self.has_uv2 {
-            mesh::set(&mut arrays, ArrayType::TEX_UV2, self.uv2s);
+            mesh::set(
+                &mut arrays,
+                ArrayType::TEX_UV2,
+                PackedVector2Array::from(self.uv2s),
+            );
         }
-        mesh::set(&mut arrays, ArrayType::INDEX, self.indices);
+        mesh::set(
+            &mut arrays,
+            ArrayType::INDEX,
+            PackedInt32Array::from(self.indices),
+        );
 
         let mut array_mesh = ArrayMesh::new_gd();
         array_mesh.add_surface_from_arrays(PrimitiveType::TRIANGLES, &arrays);

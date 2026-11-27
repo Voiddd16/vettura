@@ -12,8 +12,7 @@ extends Node
 ##
 ## 分类：
 ## - `car`：有 `data.acd` / `data/car.ini`，且目录里有 `.kn5`；
-## - `track`：有 `models*.ini`、`data/surfaces.ini`、`ai/fast_lane.ai` 或
-##   `ui_track.json`；
+## - `track`：有 `models.ini` / `models_<layout>.ini`（WorldBody 的加载前提）；
 ## - `garage`：不是车/赛道，但目录里有 `.kn5`（适合大厅展示的车库 mod）。
 ##
 ## 本节点只做发现和元信息，不解析/实例化 KN5；真正加载由使用方按需调用
@@ -29,16 +28,19 @@ class ModEntry:
 	var subtitle: String
 	var preview_path: String
 	var tags: PackedStringArray
+	## 赛道布局（`models_<layout>.ini` 的 `<layout>`）；空字符串代表 `models.ini`。
+	var layouts: PackedStringArray
+	var default_layout: String
 
 	func kind_label() -> String:
 		match kind:
 			"car":
-				return "车辆"
+				return I18n.t("车辆")
 			"track":
-				return "赛道"
+				return I18n.t("赛道")
 			"garage":
-				return "车库"
-		return "未知"
+				return I18n.t("车库")
+		return I18n.t("未知")
 
 	func is_car() -> bool:
 		return kind == "car"
@@ -52,12 +54,17 @@ const USER_MODS := "user://mods"
 ## 旧版车模导入目录：保留兼容，新的导入会写进 `user://mods/imported_cars/`。
 const LEGACY_IMPORT_ROOT := "user://imported_cars"
 const SCAN_MAX_DEPTH := 12
+## 默认布局偏好：同一赛道有多个 models_*.ini 时优先选常见的比赛布局。
+const LAYOUT_PRIORITY := [
+	"roadcourse", "grand_prix", "gp", "nordschleife", "nords",
+	"circuit", "full", "endurance", "24h", "oval",
+]
 
 ## 这些子目录永远不是 mod 根，递归时直接跳过，省掉大量文件系统往返。
 const SKIP_DIRS := [
 	".git", "__pycache__", "actools",
 	"skins", "textures", "texture", "sfx", "sound", "sounds",
-	"ui", "data", "extension", "animations", "driver", "maps",
+	"ui", "data", "extension", "config", "animations", "driver", "maps",
 ]
 
 var _entries: Array[ModEntry] = []
@@ -223,22 +230,16 @@ func _classify(path: String) -> String:
 	if _has_car_data(path) and not kn5_files.is_empty():
 		return "car"
 
-	var has_models := not _find_models_ini(path).is_empty()
-	if kn5_files.is_empty() and not has_models:
+	# WorldBody 的 TrackModule 只认 models*.ini；没有它的单模型目录即使带
+	# ai/surfaces 也只能当展厅车库，不能当可驾驶赛道。
+	if not _find_models_ini(path).is_empty():
+		return "track"
+	if kn5_files.is_empty():
 		return ""
 
-	var track_signature := has_models \
-			or FileAccess.file_exists(path.path_join("data/surfaces.ini")) \
-			or FileAccess.file_exists(path.path_join("ai/fast_lane.ai")) \
-			or FileAccess.file_exists(path.path_join("ui/ui_track.json")) \
-			or FileAccess.file_exists(path.path_join("ui_track.json")) \
-			or FileAccess.file_exists(path.path_join("extension/ext_config.ini"))
-	if track_signature:
-		return "track"
-
 	# 单模型车库 mod：同名 `<目录名>.kn5`，或目录里只有一个 KN5。
-	# 多 KN5 且没有任何赛道/车库元信息的目录（例如 `alternate_kn5/` 这种
-	# 备用车模合集）不硬分类，避免把一堆车模当展厅。
+	# 多 KN5 且没有 models.ini 的目录（例如 `alternate_kn5/` 这种备用车模
+	# 合集）不硬分类，避免把一堆车模当展厅。
 	var named := path.get_file() + ".kn5"
 	if kn5_files.size() == 1 or kn5_files.has(named):
 		return "garage"
@@ -252,9 +253,12 @@ func _make_entry(path: String, kind: String) -> ModEntry:
 	entry.folder_name = path.get_file()
 	entry.display_name = entry.folder_name
 	entry.subtitle = ""
-	entry.preview_path = _preview_for(path, kind)
+	if kind == "track":
+		entry.layouts = _layout_options(path)
+		entry.default_layout = preferred_layout(entry.layouts)
+	entry.preview_path = _preview_for(path, kind, entry.default_layout)
 
-	var json := _read_json(path)
+	var json := _read_json(path, kind, entry.default_layout)
 	if kind == "car":
 		var name := String(json.get("name", "")).strip_edges()
 		if not name.is_empty():
@@ -280,6 +284,52 @@ func _make_entry(path: String, kind: String) -> ModEntry:
 	return entry
 
 
+## 赛道布局列表：`models.ini` 记作 `""`，`models_<layout>.ini` 取 `<layout>`。
+static func _layout_options(path: String) -> PackedStringArray:
+	var layouts: PackedStringArray = PackedStringArray()
+	var dir := DirAccess.open(path)
+	if dir == null:
+		return layouts
+	if FileAccess.file_exists(path.path_join("models.ini")):
+		layouts.append("")
+	for file: String in dir.get_files():
+		var lower := file.to_lower()
+		if not lower.begins_with("models_") or not lower.ends_with(".ini"):
+			continue
+		var layout := file.substr(7, file.length() - 7 - 4)
+		if not layout.is_empty() and not layouts.has(layout):
+			layouts.append(layout)
+	return layouts
+
+
+## 从布局列表里挑一个适合直接开始的：优先常见主布局，否则第一个。
+static func preferred_layout(layouts: PackedStringArray) -> String:
+	if layouts.is_empty():
+		return ""
+	if layouts.has(""):
+		return ""
+	for layout: String in LAYOUT_PRIORITY:
+		if layouts.has(layout):
+			return layout
+	return layouts[0]
+
+
+static func layout_label(layout: String) -> String:
+	return I18n.t("默认布局") if layout.is_empty() else layout
+
+
+## 某个布局的展示名（读取 `ui/<layout>/ui_track.json`），没有时退回目录名。
+static func layout_display_name(path: String, layout: String) -> String:
+	var json := _read_json(path, "track", layout)
+	var name := String(json.get("name", "")).strip_edges()
+	return name if not name.is_empty() else path.get_file()
+
+
+## 某个布局的预览图；赛道常把预览放在 `ui/<layout>/preview.png`。
+static func layout_preview(path: String, layout: String) -> String:
+	return _preview_for(path, "track", layout)
+
+
 func _join_parts(parts: Array) -> String:
 	var kept: PackedStringArray = PackedStringArray()
 	for part: Variant in parts:
@@ -289,8 +339,13 @@ func _join_parts(parts: Array) -> String:
 	return " · ".join(kept)
 
 
-func _read_json(path: String) -> Dictionary:
-	for candidate in ["ui/ui_car.json", "ui/ui_track.json", "ui_track.json"]:
+static func _read_json(path: String, kind: String, layout: String) -> Dictionary:
+	var candidates: Array[String] = []
+	if kind == "track" and not layout.is_empty():
+		candidates.append("ui/%s/ui_track.json" % layout)
+		candidates.append("%s/ui_track.json" % layout)
+	candidates.append_array(["ui/ui_car.json", "ui/ui_track.json", "ui_track.json"])
+	for candidate in candidates:
 		var file := path.path_join(candidate)
 		if not FileAccess.file_exists(file):
 			continue
@@ -300,8 +355,16 @@ func _read_json(path: String) -> Dictionary:
 	return {}
 
 
-func _preview_for(path: String, kind: String) -> String:
-	var candidates := ["ui/preview.png", "preview.png", "ui/badge.png", "ui/outline.png"]
+static func _preview_for(path: String, kind: String, layout: String) -> String:
+	var candidates: Array[String] = []
+	if kind == "track" and not layout.is_empty():
+		candidates.append_array([
+			"ui/%s/preview.png" % layout,
+			"%s/preview.png" % layout,
+			"%s/map.png" % layout,
+			"ui/%s/map.png" % layout,
+		])
+	candidates.append_array(["ui/preview.png", "preview.png", "ui/badge.png", "ui/outline.png"])
 	if kind == "car":
 		candidates = ["ui/badge.png", "ui/preview.png", "preview.png"]
 	for candidate: String in candidates:

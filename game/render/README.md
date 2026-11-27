@@ -9,7 +9,8 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `render_quality.gd` | autoload `RenderQuality`：按 Forward+/Mobile 打开或关闭 SSAO/SSIL/SSR/体积雾参数；推进默认环境的云层漂移 |
+| `render_quality.gd` | autoload `RenderQuality`：按 Forward+/Mobile 打开或关闭 SSAO/SSIL/SSR/体积雾参数；推进默认环境的云层漂移；把上采样/动态分辨率/VRS 委托给 `DisplayPipeline` |
+| `display_pipeline.gd` | autoload `DisplayPipeline`：FSR1/FSR2/MetalFX/FSR3.1 能力探测与选择、动态分辨率、VRS 纹理/VRS_XR、引擎扩展 manifest |
 | `post_fx.gd` | autoload `RenderFX`：桌面完整后处理；移动端只挂廉价暗角 |
 | `post_fx.gdshader` | 桌面：暗角、径向色散、胶片颗粒、轻锐化、可选桶形畸变 |
 | `post_fx_vignette.gdshader` | 移动端：不读屏幕纹理的径向暗角 |
@@ -31,6 +32,18 @@ VETTURA_POST_FX=0 godot --path . res://gdext/fx_probe.tscn
 
 # 强制移动端后端，确认没有桌面专属警告
 godot --headless --rendering-method mobile --path . --quit-after 30 res://game/main.tscn
+
+# 显示管线冒烟（上采样回退 / 动态分辨率 / VRS 状态）
+godot --headless --path . res://game/display_smoke.tscn
+```
+
+运行期查看/切换：
+
+```gdscript
+print(DisplayPipeline.report())
+DisplayPipeline.set_upscaler("fsr2")   # 写 settings.cfg，RenderQuality 立即应用
+DisplayPipeline.set_vrs("texture")
+DisplayPipeline.set_dynamic(true, 60)
 ```
 
 运行期切换后处理预设：

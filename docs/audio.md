@@ -21,8 +21,8 @@ FMOD 版本号必须由主工程 `scripts/fetch_fmod.py` 拉到本地缓存，�
 
 ```bash
 cd scripts
-uv run fetch_fmod.py                 # 当前平台
-uv run fetch_fmod.py --all           # macOS / Windows / Linux
+python3 fetch_fmod.py                 # 当前平台
+python3 fetch_fmod.py --all           # macOS / Windows / Linux
 
 cd ..                                # 回到工程根（workspace 根）
 cargo build -p vettura-godot --features fmod
@@ -192,15 +192,15 @@ native 侧只**动态链接** FMOD，SDK 二进制不入库，所以发行包必
 cd /path/to/vettura/scripts
 
 # 单平台：把 runtime 拷到导出的可执行文件同目录
-uv run pack_fmod.py --platform macos --dest "../dist/Vettura.app"     # .app 自动落到 Contents/MacOS
-uv run pack_fmod.py --platform windows --dest "../dist/windows"
-uv run pack_fmod.py --platform linux --dest "../dist/linux"
+python3 pack_fmod.py --platform macos --dest "../dist/Vettura.app"     # .app 自动落到 Contents/MacOS
+python3 pack_fmod.py --platform windows --dest "../dist/windows"
+python3 pack_fmod.py --platform linux --dest "../dist/linux"
 
 # 一次打三个平台（每个平台一个子目录），并指定架构
-uv run pack_fmod.py --all --dest-root ../dist --arch x86_64
+python3 pack_fmod.py --all --dest-root ../dist --arch x86_64
 
 # CI：只用缓存，不联网
-uv run pack_fmod.py --platform macos --dest ../dist/Vettura.app --offline
+python3 pack_fmod.py --platform macos --dest ../dist/Vettura.app --offline
 ```
 
 行为说明：
@@ -234,7 +234,7 @@ build.rs 烘焙的开发缓存。也就是说**发行包不依赖 `.cache/`**。
 ```bash
 cargo build -p vettura-godot --features fmod --release
 godot --headless --path /path/to/vettura --export-release "macOS" ../dist
-cd /path/to/vettura/scripts && uv run pack_fmod.py --platform macos --dest ../dist/Vettura.app
+cd /path/to/vettura/scripts && python3 pack_fmod.py --platform macos --dest ../dist/Vettura.app
 ```
 
 > 发行提示：FMOD EULA 要求随产品提供 FMOD 的版权/署名信息，pack 时请一起带上。

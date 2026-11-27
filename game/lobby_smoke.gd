@@ -18,6 +18,8 @@ var _ok := true
 
 
 func _ready() -> void:
+	# 断言中文 UI 文案；固定 locale，避免系统语言为英文时误报。
+	TranslationServer.set_locale("zh_CN")
 	if GarageMod.visual_plan(GarageMod.DEFAULT_PATH).is_empty() \
 			or not DirAccess.dir_exists_absolute(DEFAULT_CAR_DIR):
 		print("[lobby-smoke] SKIP: 本地 mods/ 资产不完整")
@@ -46,6 +48,10 @@ func _ready() -> void:
 		_fail("车辆没有加载")
 	if String(lobby._car_name).is_empty() or lobby._info.text.find("车辆：") == -1:
 		_fail("大厅信息没有显示车辆名：%s" % lobby._info.text)
+	if String(lobby._track_path).is_empty():
+		_fail("大厅没有自动选择可用赛道")
+	if lobby._drive_button.disabled:
+		_fail("有车有赛道时「开始驾驶」仍被禁用")
 
 	var camera := lobby.get_node("OrbitPivot/Camera3D") as Camera3D
 	var position := camera.global_position
@@ -84,6 +90,18 @@ func _ready() -> void:
 		var list := panel.get_node("%ModList") as ItemList
 		if list.item_count == 0:
 			_fail("车库模组选择器列表为空")
+		lobby._close_overlay()
+	await get_tree().process_frame
+
+	lobby._on_track_pressed()
+	await get_tree().process_frame
+	if lobby._overlay_layer == null:
+		_fail("赛道选择器没有打开")
+	else:
+		var panel: Control = lobby._overlay_layer.get_child(0)
+		var list := panel.get_node("%TrackList") as ItemList
+		if list.item_count == 0:
+			_fail("赛道选择器列表为空")
 		lobby._close_overlay()
 	await get_tree().process_frame
 

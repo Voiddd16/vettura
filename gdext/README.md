@@ -31,6 +31,7 @@
 | `ai_lap.tscn` | AI 遥控整圈：赛道 → AI → 物理 → 计时 → 遥测；窗口模式下支持 `chase`/`cockpit`/`hood`/`bumper`/`wheel`/`drone`/`tcam`/`orbit` 八种录制视角，并经 `FmodSystem` 播放车模引擎声（`AI_LAP_AUDIO=0` 可关，无声效依赖降级为 warning） |
 | `load_probe.tscn` | 解析 / 冷实例化 / 缓存命中 / 分帧加载分段计时 |
 | `desktop_probe.tscn` | 桌面窗口两阶段视觉验收：`game/main.tscn` 四视角截图 + 真实赛道追逐/AI 行驶截图 |
+| `upscaler_shots.tscn` | 上采样视觉验收：真车 + 真赛道跑 AI，按 `SHOT_VIEWS`（默认车后/驾驶位）截 PNG，并打印 `DisplayPipeline` 的 requested/active/scale/MSAA；`SHOT_FULLSCREEN=1` 全屏、`SHOT_1TO1=1` 让全屏 3D 按窗口 1:1 渲染（避开 1280×720 stretch 基准的 2.25× 超采样）、`SHOT_UPSCALER` 选 MetalFX/FSR |
 
 > 主游戏场景（大厅/车库/触摸/多视角）在 `game/`，**不要**加到本 crate。
 

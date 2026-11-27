@@ -5,6 +5,29 @@
 
 ## 未发布
 
+### 显示管线与魔改引擎落点
+
+- **统一显示管线**：新增 autoload `DisplayPipeline`
+  （`game/render/display_pipeline.gd`），集中探测平台/后端/硬件能力并应用
+  上采样、动态分辨率、VRS 与 XR。`RenderQuality` 不再直接写
+  `scaling_3d_mode` / `scaling_3d_scale` / `vrs_*`。
+- **上采样**：stock 4.7 支持 FSR1、FSR2、MetalFX Spatial、MetalFX Temporal；
+  `auto` 在 macOS 用 MetalFX Spatial、其他 Forward+ 用 FSR1、移动端原生。
+  显式选择不可用项会回退并记录一次 warning，不阻断画面。
+- **VRS / XR**：`vrs_mode` 支持 `VRS_TEXTURE`（32×18 中心清晰密度图，
+  `VRS_UPDATE_ONCE`）与 `VRS_XR`（XR 会话自动切换）；硬件/后端不支持时
+  设置页标灰，Godot 侧忽略。
+- **动态分辨率**：2 Hz 采样、5% 步进、降档 1s/升档 3s 滞回与冷却；目标
+  帧率 `0=自动≤60`、`-1=跟随刷新率`；时域上采样最低比例固定 0.5。
+- **魔改引擎落点**：新增 `engine/`（不是 crate）：Godot 4.7 补丁序列、
+  `display_contract.json` 能力契约、`mods/*/manifest.json` 扩展模板。
+  FSR3.1 通过补丁新增 `SCALING_3D_MODE_FSR3_1` 或 `VetturaEngineMod`
+  桥接接入；没有补丁时自动回退。
+- **设置页**：画面页新增「上采样」「可变着色率」「动态目标」三项与能力提示；
+  设置键 `video/upscaler`、`video/vrs`、`video/dynamic_target_fps`。
+- **冒烟**：新增 `game/display_smoke.tscn`，验证能力探测、回退、动态分辨率
+  范围与 VRS 状态。
+
 ### 功能
 
 - **输入系统重构**：新增 autoload `GameInput`（`game/input/game_input.gd`），
@@ -44,6 +67,33 @@
   自动重置为 1280×720，防止后续窗口/全屏继续以超高内部尺寸渲染。
 - **全屏雨系统不再覆盖自适应比例**：`RainSystem` 在桌面全屏自动分辨率开启
   时不再把 `scaling_3d_scale` 拉回 1.0，也不再叠 FXAA。
+
+### 加载与 AI 性能
+
+- **赛道静态网格合并改用批量缓冲**（`gdext/src/kn5/merge.rs`）。旧实现逐顶点
+  调用 `PackedVector3Array::push`/`get`，每个元素都要穿过一次 FFI；现在在
+  Rust `Vec` 里累积，最后由 `PackedArray::from(Vec)` 整体移交给 Godot
+  （纯内存移动），源网格也直接用 `as_slice()` 借用。实测 Nürburgring
+  （2177 个网格 / 733 万顶点）合并 2315 ms → **约 750 ms**，Daytona
+  （2008 个网格 / 299 万顶点）1165 ms → **约 250–330 ms**（同机、同资产），
+  整体降到原来的 1/3 左右。逐顶点算力本来不是瓶颈
+  （700 万次变换 + 法线归一化只占约 0.3 s），真正贵的是每元素 FFI 调用与
+  `Packed*Array` 打包，所以收益来自批量内存搬运而不是手写 SIMD；日志新增
+  合并耗时和顶点数，下次能直接看出回归。
+- **AI 每帧投影从全量扫描改为提示窗口**（`track/src/spline.rs`、
+  `world/src/ai.rs`）。`AiSpline::project_near` 用上一帧的段索引开一个
+  ±64 段窗口，Nürburgring 的 `fast_lane.ai` 有 13 323 个点，单次投影
+  **42 µs → 0.44 µs（96×）**；20 台 AI 车每帧从约 0.84 ms 降到约 9 µs。
+  首次调用、传送/重置后提示失效、最优点落在窗口边界、或离提示路段超过
+  30 m 时自动退回全量扫描；提示段本身离车超过 12 m（例如传送、或以后多车
+  共用一个 driver）也直接全量扫描。结果与 `project` 一致（平局取更小索引）。
+  验证：Nordschleife 20 s AI 探针最大速度 83.9 km/h、位移 253.2 m，与旧
+  实现逐字节相同；`track_module` 真赛道测试全过；另加
+  `track/tests/real_spline.rs`，在真实 13 323 点线上做 20 000 次逐帧查询，
+  断言提示结果与全量扫描完全一致。
+- **新增可复现基准**：`cargo bench -p vettura-world --bench step`
+  （`World::step_exact` 吞吐，支持真实赛道/真车）与
+  `cargo bench -p vettura-track --bench spline`（AI 线投影全量/窗口对比）。
 
 ### 性能（既有）
 
@@ -125,20 +175,41 @@
 
 ### 游戏大厅 / UI
 
+- 新增 i18n：支持 **简体中文 / English**，默认跟随系统。autoload `I18n`
+  （`game/i18n/i18n.gd`）以中文原文作为 key，向 `TranslationServer` 注册英文
+  映射；静态 `.tscn` 靠 `auto_translate` 自动切换，动态文本走 `I18n.t()`。
+  设置新增「界面 → 语言」，写入 `user://settings.cfg` 的 `[ui] language`；
+  大厅/驾驶/展厅/车库/选择器/设置/输入绑定全部中英双语。新增
+  `game/i18n_smoke.tscn` 验证运行时切换与映射完整性。
 - 新增游戏大厅 `game/lobby.tscn`：用 AC 车库（track）模组做 3D 背景，
   把当前选择的车辆停在车库 `AC_PIT_0` / `AC_START_0` dummy 或室内地坪上，
   慢速环绕展示；支持拖动旋转与滚轮缩放。默认车库为
   `mods/ltk_csr_garage`，`project.godot` 主场景已切到大厅。
 - 新增 `game/garage_mod.gd`：识别单 KN5 或 `models*.ini` 多模型车库，
-  提供目录扫描、展示名、预览图与 AC 放置帧 → Godot 帧转换；大厅按计划用
+  提供校验、展示名、预览图与 AC 放置帧 → Godot 帧转换；大厅按计划用
   `Kn5SceneBuilder` 分帧加载，55 MB 车库模型不会卡死首帧。
 - 新增车库模组选择器 `game/garage_mod_picker.tscn`：列出 `ModLibrary`
   自动发现的赛道/车库，也可浏览任意目录；选择写入 `user://settings.cfg`，
   大厅立即重建。
 - 新增游戏内设置弹窗 `game/settings_popup.tscn`：主音量、全屏、
-  垂直同步、实时阴影、3D 分辨率、车库环绕速度/镜头距离；大厅与
-  `main.tscn` 都可打开（`Esc` 亦可）。设置由 `GameSettings` autoload 统一
-  应用并持久化。
+  垂直同步、实时阴影、3D 分辨率、车库环绕速度/镜头距离、驾驶辅助与默认视角；
+  大厅、驾驶页与 `main.tscn` 都可打开（`Esc` 亦可）。设置由 `GameSettings`
+  autoload 统一应用并持久化。
+- 新增赛道选择器 `game/track_picker.tscn`：按 `models_<layout>.ini` 展开布局，
+  读取 `ui/<layout>/` 的预览/名称与 `<layout>/ai/` 的 AI 线/维修区；选择写入
+  `GameSettings["race"]`。
+- 新增真实驾驶页 `game/drive.tscn`：`WorldBody` 加载选中赛道与车辆，三种视角、
+  圈速 HUD、ABS/TC、车辆重置、暂停设置、天气/FX、可选 FMOD 引擎声；
+  键盘/手柄/触屏/体感输入全部复用 `GameInput`。大厅「开始驾驶」进入该页，
+  「展厅预览」保留原 `main.tscn`。
+- `ModLibrary` 赛道分类改为以 `models*.ini` 为准（WorldBody 的加载前提），
+  并为每个赛道条目补充 `layouts` / `default_layout`；无 `models.ini` 的
+  单模型目录归为展厅车库，不再出现在可驾驶赛道列表。
+- 修复赛道视觉模型在未挂入场景树时做 AABB 合并导致的
+  `!is_inside_tree()` 报错（`gdext/src/world/track_models.rs`）；
+  `FmodSystem` 新增 `is_linked()`，无声构建可静默跳过 FMOD。
+- 新增 `game/drive_smoke.tscn`：真实赛道 + 车、HUD、重置、暂停设置与
+  1.5 秒油门移动验证。
 - 新增 autoload `ModLibrary`（`game/mod_library.gd`）：把 `mods/` 作为统一
   mod 根目录，递归扫描 `res://mods`、`user://mods`（自动创建）与桌面导出版
   可执行文件旁的 `mods/`，自动分类为车辆 / 赛道 / 车库；车模库、车库模组

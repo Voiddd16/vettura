@@ -1,6 +1,7 @@
 # Vettura 脚本目录
 
-本项目所有工程脚本都用 Python 编写，并用 [uv](https://docs.astral.sh/uv/) 统一管理。
+本项目所有工程脚本都用 Python 标准库编写，**零第三方包依赖**，
+直接用 `python3`（≥ 3.10）运行，不需要 uv / venv / pip。
 
 ## 当前脚本
 
@@ -11,8 +12,11 @@
 | `android.py` | 移动端初始化与导出全流程：配置诊断、下载模板、写入 SDK 设置、装 NDK、编译 Android .so、导出 APK，每步幂等可单独执行 |
 | `fetch_fmod.py` | 从 fmod.com 下载 FMOD Engine SDK 2.02.22，解压到本地 `.cache/`，并编译 AC/mod bank 可能依赖的 `FMOD Distance Filter` DSP 插件 |
 | `pack_fmod.py` | 把 FMOD 运行期动态库拷进 Godot 导出目录（发行包必需）；缓存缺失时自动下载，支持跨平台与 `--arch` |
-| `load_probe.py` | 生成合成车模（`.kn5` + 合法 DXT1 DDS）并跑 Godot 无头加载探针，输出解析 / 冷实例化 / 缓存命中 / 分帧加载四段耗时。纯标准库，无需 uv 依赖 |
-| `run_ai_lap_test.py` | AI 整圈测试全流程：全量重编译 → test/fmt → 车后/驾驶位两段录像（JPEG 帧 + FMOD WAV 分开采集）→ atempo 对齐混流 → 两段合并 → 抽帧/音量 QA → `REPORT.md`。纯标准库 |
+| `load_probe.py` | 生成合成车模（`.kn5` + 合法 DXT1 DDS）并跑 Godot 无头加载探针，输出解析 / 冷实例化 / 缓存命中 / 分帧加载四段耗时 |
+| `run_ai_lap_test.py` | AI 整圈测试全流程：全量重编译 → test/fmt → 车后/驾驶位两段录像（JPEG 帧 + FMOD WAV 分开采集）→ atempo 对齐混流 → 两段合并 → 抽帧/音量 QA → `REPORT.md` |
+| `record_ai_lap.py` | 单视角快速录制：跑 `ai_lap` 场景抓帧后用 ffmpeg 编码；`run_ai_lap_test.py` 的轻量版 |
+| `capture_telemetry.py` | 抓取 UDP 遥测 JSON 帧并按行写文件（调试 `telemetry.cfg` 用） |
+| `engine_patch.py` | 按 `engine/patches/<version>/series` 检查/应用 Godot 补丁；只包 `git apply`，不构建 |
 
 ## 使用方式
 
@@ -20,13 +24,13 @@
 cd /path/to/vettura/scripts
 
 # 首次/更新 SDK（需要 fmod.com 账号）
-uv run fetch_fmod.py
+python3 fetch_fmod.py
 
 # CI/多平台
-uv run fetch_fmod.py --all
+python3 fetch_fmod.py --all
 
 # 已下载过，只重新解压 + 重建 runtime 与插件
-uv run fetch_fmod.py --extract-only
+python3 fetch_fmod.py --extract-only
 ```
 
 ## AI 整圈测试与录像
@@ -109,11 +113,11 @@ FMOD_PASS=<密码>
 ```bash
 cd /path/to/vettura/scripts
 
-uv run pack_fmod.py --platform macos --dest "../dist/Vettura.app"   # .app 自动落到 Contents/MacOS
-uv run pack_fmod.py --platform windows --dest "../dist/windows"
-uv run pack_fmod.py --platform linux   --dest "../dist/linux"
-uv run pack_fmod.py --all --dest-root ../dist --arch x86_64          # 三个平台一次打完
-uv run pack_fmod.py --platform macos --dest ../dist/Vettura.app --offline   # CI：只用缓存
+python3 pack_fmod.py --platform macos --dest "../dist/Vettura.app"   # .app 自动落到 Contents/MacOS
+python3 pack_fmod.py --platform windows --dest "../dist/windows"
+python3 pack_fmod.py --platform linux   --dest "../dist/linux"
+python3 pack_fmod.py --all --dest-root ../dist --arch x86_64          # 三个平台一次打完
+python3 pack_fmod.py --platform macos --dest ../dist/Vettura.app --offline   # CI：只用缓存
 ```
 
 要点：
@@ -126,5 +130,18 @@ uv run pack_fmod.py --platform macos --dest ../dist/Vettura.app --offline   # CI
 
 ## 依赖策略
 
-`fetch_fmod.py` / `pack_fmod.py` 只用 Python 内置库；确有额外依赖时统一加到本目录
-`pyproject.toml`，执行时统一 `uv run`。
+脚本本体只用 Python 标准库，不引入 pip 包；缺少的外部程序按需安装即可，
+不跑对应功能就不会被要求：
+
+| 外部程序 | 用到的脚本 | 说明 |
+| --- | --- | --- |
+| Python ≥ 3.10 | 全部 | 唯一必需项，无需 venv / uv / pip |
+| Godot 4.7 | `android.py` / `load_probe.py` / `run_ai_lap_test.py` / `record_ai_lap.py` | 可用 `--godot` 或 `$GODOT` 指定路径 |
+| cargo / rustup | `build.py` / `android.py` / `run_ai_lap_test.py` | 编译扩展与跑测试 |
+| ffmpeg + ffprobe | `run_ai_lap_test.py` / `record_ai_lap.py` | 仅录像流程；自动探测 PATH，`run_ai_lap_test.py` 可用 `--ffmpeg` / `--ffprobe` 指定 |
+| 7z（p7zip） | `fetch_fmod.py` | 仅在解 Windows 安装包时需要 |
+| fmod.com 账号 | `fetch_fmod.py` / `pack_fmod.py` | 写在仓库根 `.fmod.env` 或环境变量 |
+
+不需要录音/APK 时，只要 Python 标准库 + Godot 即可跑大部分脚本。
+未来若确实需要第三方包，**先评估能否用标准库替代**；无法替代时再在
+`scripts/` 下新建 `pyproject.toml` 并注明原因，避免无谓的依赖膨胀。

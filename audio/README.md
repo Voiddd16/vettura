@@ -31,7 +31,7 @@ FMOD 封装由 FMOD Engine 解码。老 AC bank 缺 master bus、Studio 事件�
 编译/测试/跑视觉与物理链路，接真声音才需要 feature：
 
 ```bash
-cd scripts && uv run fetch_fmod.py                    # 拉 SDK（一次性）
+cd scripts && python3 fetch_fmod.py                    # 拉 SDK（一次性）
 cargo build -p vettura-godot --features fmod          # 真机音频
 ```
 

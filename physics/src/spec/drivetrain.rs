@@ -74,6 +74,11 @@ pub struct GearboxSpec {
     pub clutch_on_shifts: bool,
     /// Rev-match window, rpm.
     pub rev_match_rpm: f32,
+    /// AC `[AUTO_SHIFTER] UP`：自动升挡的绝对转速。
+    ///
+    /// 0 表示未写，由后端按红线推导。Jolt 原来固定用 94% 红线；对 992 GT3
+    /// R 这类 1 挡极速刚好卡在 94% 红线附近的车，会一直升不上 2 挡。
+    pub auto_shift_up_rpm: f32,
     /// Torque the clutch can carry, N·m.
     pub clutch_max_torque_nm: f32,
     /// Rotational inertia of the gearbox internals, kg·m².
@@ -96,6 +101,7 @@ impl Default for GearboxSpec {
             clutch_release_time: 0.2,
             clutch_on_shifts: true,
             rev_match_rpm: 1_200.0,
+            auto_shift_up_rpm: 0.0,
             clutch_max_torque_nm: 1_150.0,
             inertia: 0.012,
             reverse_ratio: 0.0,

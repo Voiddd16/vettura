@@ -608,7 +608,15 @@ impl AiDriver {
         if !snapshot.reference_position.is_finite() {
             return DriveInput::default();
         }
-        let Some(projection) = self.line.project(snapshot.reference_position) else {
+        // 用上一帧的段索引作为提示：AI 每帧只前进几米，窗口扫描比全量
+        // 扫描快两个数量级（Nürburgring 有 13k 个点）。首次调用、重置或
+        // 离开提示路段时 `project_near` 会自动退回全量扫描。
+        let hint = self.last_projection.map(|projection| projection.index);
+        let Some(projection) = self.line.project_near(
+            snapshot.reference_position,
+            hint,
+            AiSpline::DEFAULT_PROJECT_WINDOW,
+        ) else {
             return DriveInput::default();
         };
         self.last_projection = Some(projection);

@@ -224,6 +224,99 @@ theme_override_font_sizes/font_size = 16
 text = "低端设备可以把 3D 分辨率降到 70% 左右，UI 仍保持清晰。"
 autowrap_mode = 3
 
+[node name="UpscalerRow" type="HBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="UpscalerLabel" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox/UpscalerRow"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "上采样"
+
+[node name="UpscalerOption" type="OptionButton" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox/UpscalerRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 18
+
+[node name="VrsRow" type="HBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="VrsLabel" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox/VrsRow"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "可变着色率"
+
+[node name="VrsOption" type="OptionButton" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox/VrsRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 18
+
+[node name="TargetFpsRow" type="HBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="TargetFpsLabel" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox/TargetFpsRow"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "动态目标"
+
+[node name="TargetFpsOption" type="OptionButton" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox/TargetFpsRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 18
+
+[node name="DisplayHint" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/画面/VideoBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.68, 0.78, 1)
+theme_override_font_sizes/font_size = 16
+text = "上采样 / 动态分辨率 / VRS 由 DisplayPipeline 统一应用。"
+autowrap_mode = 3
+
+[node name="界面" type="ScrollContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs"]
+visible = false
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="InterfaceBox" type="VBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/界面"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 12
+
+[node name="InterfaceHint" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/界面/InterfaceBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.68, 0.78, 1)
+theme_override_font_sizes/font_size = 16
+text = "语言切换立即生效；设置会保存到 user://settings.cfg。"
+autowrap_mode = 3
+
+[node name="LanguageRow" type="HBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/界面/InterfaceBox"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="LanguageLabel" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/界面/InterfaceBox/LanguageRow"]
+custom_minimum_size = Vector2(110, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "语言"
+
+[node name="LanguageOption" type="OptionButton" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/界面/InterfaceBox/LanguageRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 18
+
 [node name="车库" type="ScrollContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs"]
 visible = false
 layout_mode = 2
@@ -298,6 +391,53 @@ theme_override_colors/font_color = Color(0.62, 0.68, 0.78, 1)
 theme_override_font_sizes/font_size = 16
 text = "当前车库模组："
 autowrap_mode = 3
+
+[node name="驾驶" type="ScrollContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs"]
+visible = false
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="RaceBox" type="VBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/驾驶"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 12
+
+[node name="RaceHint" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/驾驶/RaceBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.68, 0.78, 1)
+theme_override_font_sizes/font_size = 16
+text = "驾驶辅助与默认视角；进入赛道后仍可随时按 C / 视角按钮切换。"
+autowrap_mode = 3
+
+[node name="AbsCheck" type="CheckBox" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/驾驶/RaceBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 19
+text = "ABS 防抱死"
+
+[node name="TcCheck" type="CheckBox" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/驾驶/RaceBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 19
+text = "TC 牵引力控制"
+
+[node name="CameraRow" type="HBoxContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/驾驶/RaceBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="CameraLabel" type="Label" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/驾驶/RaceBox/CameraRow"]
+custom_minimum_size = Vector2(110, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 19
+text = "默认视角"
+
+[node name="CameraOption" type="OptionButton" parent="Margin/Center/Panel/PanelMargin/Body/Tabs/驾驶/RaceBox/CameraRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 18
 
 [node name="输入" type="ScrollContainer" parent="Margin/Center/Panel/PanelMargin/Body/Tabs"]
 visible = false

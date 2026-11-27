@@ -26,6 +26,8 @@ const SIZES := [
 var _ok := true
 
 func _ready() -> void:
+	# 布局断言按中文文案的最坏宽度做；固定 locale，避免英文环境改变换行结果。
+	TranslationServer.set_locale("zh_CN")
 	var main: Node3D = load("res://game/main.tscn").instantiate()
 	add_child(main)
 	var garage: Control = load("res://game/garage.tscn").instantiate()

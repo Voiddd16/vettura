@@ -1,0 +1,2 @@
+# 每行一个 patch 文件名，按顺序应用；空行和 # 注释忽略。
+# 当前没有 FSR3.1 补丁；DisplayPipeline 会自动回退到 stock 上采样器。

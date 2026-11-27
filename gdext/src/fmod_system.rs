@@ -68,6 +68,15 @@ impl FmodSystem {
         }
     }
 
+    /// 当前构建是否链接了 FMOD runtime。
+    ///
+    /// 未编译 `--features fmod` 时为 `false`；调用方应先查它再决定是否
+    /// `start()`，避免在无声构建里刷出 "not linked" 错误。
+    #[func]
+    pub fn is_linked(&self) -> bool {
+        vettura_audio::AudioEngine::runtime_linked()
+    }
+
     /// 启动 FMOD runtime。`max_channels <= 0` 表示用 FMOD 默认值。
     ///
     /// 未用 `--features fmod` 编译时返回 `false`，可在 `last_error()` 看到原因。

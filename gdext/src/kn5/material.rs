@@ -190,8 +190,16 @@ pub fn apply(
     // 混合与裁剪。
     if params.uses_alpha() {
         if params.alpha_tested {
+            // 树叶的 `ksAlphaRef` 常写 0.1（尼龙/松针保留更多细节），但 0.1 的
+            // scissor 在 MetalFX Temporal 的抖动下会让细叶边缘持续“闪”。给
+            // foliage 一个 0.4 的下限，牺牲少量针叶密度换稳定的画面。
+            let threshold = if params.foliage {
+                params.alpha_scissor.max(0.4)
+            } else {
+                params.alpha_scissor
+            };
             godot_material.set_transparency(base_material_3d::Transparency::ALPHA_SCISSOR);
-            godot_material.set_alpha_scissor_threshold(params.alpha_scissor);
+            godot_material.set_alpha_scissor_threshold(threshold);
         } else if params.alpha_blended {
             // AC 的半透明材质多数不写深度（人群、树冠），跟着关掉深度写入，
             // 否则同一网格的多个面会互相排序闪烁。

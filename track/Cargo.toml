@@ -12,3 +12,7 @@ description = "Assets-free track data for Vettura: surfaces, rubber evolution, w
 glam.workspace = true
 thiserror.workspace = true
 vettura-physics.workspace = true
+
+[[bench]]
+name = "spline"
+harness = false

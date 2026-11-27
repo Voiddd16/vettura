@@ -56,6 +56,10 @@ var _enabled := true
 var _preset := "subtle"
 var _is_mobile := false
 var _performance := false
+## MetalFX Temporal / FSR2 这类时域上采样会让输出略软；Apple MetalFX 示例用
+## 负 mipmap bias 解决，这里再补一档轻锐化。状态变化时才重设 uniform。
+var _temporal_upscaler := false
+var _upscaler_checked := false
 
 
 func _ready() -> void:
@@ -74,6 +78,7 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if _is_mobile or _material == null:
 		return
+	_refresh_upscaler_sharpen()
 	var viewport := get_viewport()
 	if viewport == null:
 		return
@@ -82,6 +87,21 @@ func _process(_delta: float) -> void:
 		return
 	_screen_size = size
 	_push_viewport()
+
+
+## 从 DisplayPipeline 读取当前上采样器；只在 temporal ↔ 其他切换时重设后处理。
+func _refresh_upscaler_sharpen() -> void:
+	var pipeline := get_node_or_null("/root/DisplayPipeline")
+	var temporal := false
+	if pipeline != null and pipeline.has_method("active_upscaler"):
+		temporal = String(pipeline.call("active_upscaler")) in [
+			"fsr2", "fsr3_1", "metalfx_temporal",
+		]
+	if _upscaler_checked and temporal == _temporal_upscaler:
+		return
+	_upscaler_checked = true
+	_temporal_upscaler = temporal
+	_apply_preset(_preset)
 
 
 func _wanted() -> bool:
@@ -197,6 +217,14 @@ func _apply_preset(preset: String) -> void:
 				minf(float(values.get("film_grain", 0.012)), 0.006))
 			_material.set_shader_parameter("sharpen",
 				maxf(float(values.get("sharpen", 0.14)), 0.18))
+		if _temporal_upscaler and preset != "off":
+			# Temporal 上采样（MetalFX/FSR2）比 Spatial 更软；mipmap bias 拉回
+			# 细节后，再补一点 unsharp，避免路面标线/远景发糊。上限 0.22，避免
+			# 高对比护栏出现白边。
+			var sharpen := float(values.get("sharpen", 0.14))
+			if _performance:
+				sharpen = maxf(sharpen, 0.18)
+			_material.set_shader_parameter("sharpen", maxf(sharpen, 0.22))
 	set_enabled(_enabled and preset != "off")
 
 

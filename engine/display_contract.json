@@ -1,0 +1,70 @@
+{
+  "api": 1,
+  "target_engine": "4.7",
+  "detection": {
+    "viewport_constant": "SCALING_3D_MODE_FSR3_1",
+    "os_feature": "vettura_fsr3_1",
+    "manifest_roots": ["res://engine/mods", "user://engine/mods"],
+    "manifest_file": "manifest.json"
+  },
+  "upscalers": {
+    "native": {
+      "stock": true,
+      "viewport_constant": "SCALING_3D_MODE_BILINEAR"
+    },
+    "fsr1": {
+      "stock": true,
+      "viewport_constant": "SCALING_3D_MODE_FSR"
+    },
+    "fsr2": {
+      "stock": true,
+      "viewport_constant": "SCALING_3D_MODE_FSR2",
+      "temporal": true,
+      "min_scale": 0.5
+    },
+    "metalfx_spatial": {
+      "stock": true,
+      "viewport_constant": "SCALING_3D_MODE_METALFX_SPATIAL",
+      "requires": ["metal", "RenderingDevice.SUPPORTS_METALFX_SPATIAL"]
+    },
+    "metalfx_temporal": {
+      "stock": true,
+      "viewport_constant": "SCALING_3D_MODE_METALFX_TEMPORAL",
+      "temporal": true,
+      "min_scale": 0.5,
+      "requires": ["metal", "RenderingDevice.SUPPORTS_METALFX_TEMPORAL"]
+    },
+    "fsr3_1": {
+      "stock": false,
+      "viewport_constant": "SCALING_3D_MODE_FSR3_1",
+      "bridge_feature": "upscaler.fsr3_1",
+      "temporal": true,
+      "min_scale": 0.5,
+      "fallback": ["fsr2", "metalfx_temporal", "fsr1", "native"]
+    }
+  },
+  "vrs": {
+    "stock": true,
+    "modes": ["VRS_TEXTURE", "VRS_XR"],
+    "texture_format": "FORMAT_RGB8",
+    "density_colors": {
+      "1x1": "#000000",
+      "1x2": "#005500",
+      "2x1": "#550000",
+      "2x2": "#555500",
+      "2x4": "#55aa00",
+      "4x2": "#aa5500",
+      "4x4": "#aaaa00"
+    }
+  },
+  "dynamic_resolution": {
+    "sample_seconds": 0.5,
+    "scale_step": 0.05,
+    "down_after_seconds": 1.0,
+    "up_after_seconds": 3.0,
+    "down_cooldown_seconds": 1.5,
+    "up_cooldown_seconds": 3.0,
+    "default_min_scale": 0.35,
+    "temporal_min_scale": 0.5
+  }
+}

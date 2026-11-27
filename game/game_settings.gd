@@ -36,6 +36,15 @@ const DEFAULTS := {
 		"shadows": true,
 		"render_scale": 1.0,
 		"post_fx": true,
+		## 上采样器：auto/native/fsr1/fsr2/fsr3_1/metalfx_spatial/metalfx_temporal。
+		## 具体可用性由 autoload `DisplayPipeline` 探测；不可用时自动回退。
+		"upscaler": "auto",
+		## 可变着色率：auto/off/texture/xr。auto 在 XR 下用 VRS_XR，
+		## 桌面 Forward+/Mobile 用中心清晰的纹理。
+		"vrs": "auto",
+		## 动态分辨率目标帧率：0=自动（最高 60），-1=跟随显示器刷新率，
+		## 其他正数按 FPS 解释。
+		"dynamic_target_fps": 0,
 	},
 	"input": {
 		# 桌面没有陀螺仪时这个开关自动失效；移动端/带体感的手柄会生效。
@@ -50,6 +59,19 @@ const DEFAULTS := {
 		"car_path": "",
 		"orbit_speed": 0.18,
 		"orbit_radius": 7.0,
+	},
+	"ui": {
+		## 空字符串 = 跟随系统；也可显式 "zh_CN" / "en"。
+		"language": "",
+	},
+	"race": {
+		## 大厅里选择的赛道与布局；空 = 使用 ModLibrary 自动挑选。
+		"track_path": "",
+		"track_layout": "",
+		## 0=车后追随 1=驾驶位 2=前机盖。
+		"camera": 0,
+		"abs": true,
+		"tc": true,
 	},
 }
 
@@ -104,9 +126,11 @@ func set_value(section: String, key: String, value: Variant) -> void:
 func restore_defaults(include_content: bool = false) -> void:
 	for section: String in DEFAULTS:
 		for key: String in DEFAULTS[section]:
-			if not include_content and section == "garage" \
-					and (key == "mod_path" or key == "car_path"):
-				continue
+			if not include_content:
+				if section == "garage" and key in ["mod_path", "car_path"]:
+					continue
+				if section == "race" and key in ["track_path", "track_layout"]:
+					continue
 			set_value(section, key, DEFAULTS[section][key])
 
 

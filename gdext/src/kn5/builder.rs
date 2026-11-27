@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use glam::Vec3;
 use godot::classes::Node;
 use godot::prelude::*;
 use vettura_kn5::{Kn5, Mesh, Node as Kn5Node, NodeKind, SkinnedMesh, Transform};
@@ -199,8 +200,28 @@ impl Build {
 
 /// 深度优先前序展开整棵树。
 fn flatten(kn5: &Kn5, options: SceneOptions) -> Vec<Task> {
+    // 部分 AC 车模同时带 `WINDOWS`（车外玻璃）和 `WIND_IN`（车内挡风玻璃
+    // 覆盖层）。后者常与前者几何完全重复，两层都按半透明 + 折射渲染时，
+    // 从座舱里看出去会出现明显的双影/重影（992 GT3 R 实测 3708 顶点 /
+    // 6992 三角面完全一致）。我们没有 AC/CSP 那套车内雨滴/脏污 shader，
+    // 重复层没有额外信息，直接在构建期跳过；只有几何确实不同才保留。
+    let exterior_windows = kn5
+        .root
+        .find_node("WINDOWS")
+        .and_then(|node| node.as_mesh())
+        .filter(|mesh| mesh.flags.is_visible && mesh.is_renderable)
+        .map(|mesh| (mesh.vertices.len(), mesh.indices.len()));
+
     let mut tasks = Vec::with_capacity(kn5.node_count());
     let mut stack: Vec<(&Kn5Node, Option<usize>)> = vec![(&kn5.root, None)];
+
+    // KN5 里每一级 LOD 常常是独立节点（`*_lodHI*` / `*_lodLOW*`、`*_LOW`），
+    // 且都标着 visible/renderable。我们不做运行时 LOD 替换，过去会把所有级
+    // 一起画——同一位置的两份几何互相 z-fighting，赛道边旗帜/帐篷营地会闪烁。
+    // 这里按“量化 AABB → 最高三角面数”记下主 LOD，低 LOD 若与主 LOD 的
+    // AABB 重合就跳过。只处理 `lod_in > 0` 的节点，不碰车模/普通网格。
+    let high_lod = collect_high_lod_aabbs(kn5);
+    let mut skipped_low_lod = 0usize;
 
     while let Some((node, parent)) = stack.pop() {
         // 与 `scene.rs` 的文档一致：只有 active && is_visible && is_renderable
@@ -208,10 +229,28 @@ fn flatten(kn5: &Kn5, options: SceneOptions) -> Vec<Task> {
         // （例如 Nordschleife 的 `nords.kn5` 护墙），画出来会是大块未贴图墙面。
         let (kind, visible) = match &node.kind {
             NodeKind::Dummy { transform } => (TaskKind::Dummy(*transform), true),
-            NodeKind::Mesh(mesh) => (
-                TaskKind::Static(Arc::clone(mesh)),
-                mesh.flags.is_visible && mesh.is_renderable,
-            ),
+            NodeKind::Mesh(mesh) => {
+                let duplicate_windscreen = node.name.eq_ignore_ascii_case("WIND_IN")
+                    && exterior_windows.is_some_and(|(vertices, indices)| {
+                        mesh.vertices.len() == vertices && mesh.indices.len() == indices
+                    });
+                let duplicate_lod = mesh.lod_in > 0.0
+                    && mesh_aabb_key(mesh).is_some_and(|key| {
+                        high_lod
+                            .get(&key)
+                            .is_some_and(|&triangles| triangles >= mesh.triangle_count())
+                    });
+                if duplicate_lod {
+                    skipped_low_lod += 1;
+                }
+                (
+                    TaskKind::Static(Arc::clone(mesh)),
+                    mesh.flags.is_visible
+                        && mesh.is_renderable
+                        && !duplicate_windscreen
+                        && !duplicate_lod,
+                )
+            }
             // SkinnedMesh 没有 is_renderable 字段，只尊重 is_visible。
             NodeKind::SkinnedMesh(mesh) => {
                 (TaskKind::Skinned(Arc::clone(mesh)), mesh.flags.is_visible)
@@ -237,12 +276,66 @@ fn flatten(kn5: &Kn5, options: SceneOptions) -> Vec<Task> {
         }
     }
 
+    if skipped_low_lod > 0 {
+        godot_print!(
+            "[kn5] skipped {} duplicate low-LOD mesh(es) in '{}'",
+            skipped_low_lod,
+            kn5.root.name
+        );
+    }
     tasks
+}
+
+/// 网格 AABB 的 1 m 量化键；同一 LOD 的不同导出通常只差几厘米到几十厘米。
+type AabbKey = (i32, i32, i32, i32, i32, i32);
+
+fn mesh_aabb_key(mesh: &Mesh) -> Option<AabbKey> {
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for point in mesh.positions() {
+        min = min.min(point);
+        max = max.max(point);
+    }
+    if !min.is_finite() || !max.is_finite() {
+        return None;
+    }
+    let quantize = |value: f32| value.round() as i32;
+    Some((
+        quantize(min.x),
+        quantize(min.y),
+        quantize(min.z),
+        quantize(max.x),
+        quantize(max.y),
+        quantize(max.z),
+    ))
+}
+
+/// 主 LOD（`lod_in == 0`）的 AABB → 三角面数上限。
+fn collect_high_lod_aabbs(kn5: &Kn5) -> HashMap<AabbKey, usize> {
+    let mut out: HashMap<AabbKey, usize> = HashMap::new();
+    kn5.root.walk(
+        &mut |node, _depth| {
+            let NodeKind::Mesh(mesh) = &node.kind else {
+                return;
+            };
+            if mesh.lod_in > 0.0 {
+                return;
+            }
+            let Some(key) = mesh_aabb_key(mesh) else {
+                return;
+            };
+            let triangles = mesh.triangle_count();
+            out.entry(key)
+                .and_modify(|value| *value = (*value).max(triangles))
+                .or_insert(triangles);
+        },
+        0,
+    );
+    out
 }
 
 /// 每帧默认预算：约 64 个节点 ≈ 一帧几毫秒，进度条又能平滑推进。
 pub const DEFAULT_STEP_BUDGET: usize = 64;
-
 /// 分帧加载器：把一次 `instantiate()` 切成多帧小块。
 ///
 /// 用法（GDScript）：

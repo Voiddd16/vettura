@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://cvetturaupscalershots"]
+
+[ext_resource type="Script" path="res://gdext/upscaler_shots.gd" id="1_upcaler"]
+
+[node name="VetturaUpscalerShots" type="Node3D"]
+script = ExtResource("1_upcaler")

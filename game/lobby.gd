@@ -40,8 +40,10 @@ const SPAWN_MARKERS := [
 @onready var _subtitle: Label = %Subtitle
 @onready var _info: Label = %InfoLabel
 @onready var _drive_button: Button = %DriveButton
+@onready var _track_button: Button = %TrackButton
 @onready var _car_button: Button = %CarButton
 @onready var _garage_button: Button = %GarageButton
+@onready var _showroom_button: Button = %ShowroomButton
 @onready var _settings_button: Button = %SettingsButton
 @onready var _fullscreen_button: Button = %FullscreenButton
 @onready var _quit_button: Button = %QuitButton
@@ -54,6 +56,10 @@ var _garage_node: Node3D
 var _car_node: Node3D
 var _garage_name := ""
 var _car_name := "（未选择车辆）"
+## 当前选择的比赛赛道（与车库展示模组独立）。
+var _track_path := ""
+var _track_layout := ""
+var _track_name := ""
 
 var _focus := Vector3(0.0, 0.5, 0.0)
 var _orbit_angle := 0.0
@@ -74,12 +80,15 @@ func _ready() -> void:
 	_apply_safe_area()
 	get_viewport().size_changed.connect(_apply_safe_area)
 	_drive_button.pressed.connect(_on_drive_pressed)
+	_track_button.pressed.connect(_on_track_pressed)
 	_car_button.pressed.connect(_on_car_pressed)
 	_garage_button.pressed.connect(_on_garage_pressed)
+	_showroom_button.pressed.connect(_on_showroom_pressed)
 	_settings_button.pressed.connect(_on_settings_pressed)
 	_fullscreen_button.pressed.connect(_on_fullscreen_pressed)
 	_quit_button.pressed.connect(_on_quit_pressed)
 	GameSettings.changed.connect(_on_setting_changed)
+	I18n.language_changed.connect(_on_language_changed)
 	GameInput.push_nav_handler(_handle_nav)
 	GameInput.device_changed.connect(_on_device_changed)
 	_orbit_speed = float(GameSettings.get_value("garage", "orbit_speed", 0.18))
@@ -88,7 +97,8 @@ func _ready() -> void:
 	_apply_shadows()
 	_update_device_hint()
 	_build_quit_dialog()
-	_update_info("正在准备车库…")
+	_ensure_track_selection()
+	_update_info(I18n.t("正在准备车库…"))
 	await _boot()
 
 
@@ -112,10 +122,10 @@ func _handle_nav(kind: String) -> bool:
 
 func _build_quit_dialog() -> void:
 	_quit_dialog = ConfirmationDialog.new()
-	_quit_dialog.title = "退出 Vettura"
-	_quit_dialog.dialog_text = "确定要退出游戏吗？"
-	_quit_dialog.ok_button_text = "退出"
-	_quit_dialog.cancel_button_text = "继续玩"
+	_quit_dialog.title = I18n.t("退出 Vettura")
+	_quit_dialog.dialog_text = I18n.t("确定要退出游戏吗？")
+	_quit_dialog.ok_button_text = I18n.t("退出")
+	_quit_dialog.cancel_button_text = I18n.t("继续玩")
 	_quit_dialog.confirmed.connect(func() -> void: get_tree().quit())
 	add_child(_quit_dialog)
 
@@ -138,8 +148,8 @@ func _boot() -> void:
 	if garage_ok:
 		await _load_car(_preferred_car())
 	else:
-		_loading_label.text = "没有可用车库。仍可打开设置或选择其它车库模组。"
-		_update_info("没有可用车库，请点「车库模组」选择。")
+		_loading_label.text = I18n.t("没有可用车库。仍可打开设置或选择其它车库模组。")
+		_update_info(I18n.t("没有可用车库，请点「车库模组」选择。"))
 		await get_tree().process_frame
 	_finish_loading()
 
@@ -226,19 +236,19 @@ func _load_garage(path: String) -> bool:
 	_clear_car()
 	_clear_garage()
 	_garage_name = GarageMod.display_name(path)
-	_update_info("正在加载车库：%s" % _garage_name)
-	_show_loading("正在加载车库…", 0.0)
+	_update_info(I18n.t("正在加载车库：%s", [_garage_name]))
+	_show_loading(I18n.t("正在加载车库…"), 0.0)
 
 	var plan := GarageMod.visual_plan(path)
 	if plan.is_empty():
 		push_warning("[lobby] 无效车库模组：%s" % path)
-		_loading_label.text = "车库模组无效：%s" % path
-		_update_info("车库模组无效，请重新选择。")
+		_loading_label.text = I18n.t("车库模组无效：%s", [path])
+		_update_info(I18n.t("车库模组无效，请重新选择。"))
 		return false
 	if not ClassDB.class_exists("Kn5SceneBuilder"):
 		push_warning("[lobby] GDExtension 未注册（Kn5SceneBuilder 不存在）")
-		_loading_label.text = "GDExtension 未注册，无法加载车库模型。"
-		_update_info("GDExtension 未注册，无法加载车库。")
+		_loading_label.text = I18n.t("GDExtension 未注册，无法加载车库模型。")
+		_update_info(I18n.t("GDExtension 未注册，无法加载车库。"))
 		return false
 
 	var loaded := 0
@@ -270,8 +280,8 @@ func _load_garage(path: String) -> bool:
 		_set_progress(float(index + 1) / float(plan.size()))
 
 	if loaded == 0:
-		_loading_label.text = "车库模型没有加载成功：%s" % path
-		_update_info("车库模型没有加载成功，请换一个车库模组。")
+		_loading_label.text = I18n.t("车库模型没有加载成功：%s", [path])
+		_update_info(I18n.t("车库模型没有加载成功，请换一个车库模组。"))
 		return false
 	_garage_node = _garage_root
 	_place_car_anchor()
@@ -285,37 +295,37 @@ func _load_garage(path: String) -> bool:
 func _load_car(path: String) -> bool:
 	var token := ++_load_token
 	_clear_car()
-	_show_loading("正在加载车辆…", 0.0)
-	_update_info("正在加载车辆…")
+	_show_loading(I18n.t("正在加载车辆…"), 0.0)
+	_update_info(I18n.t("正在加载车辆…"))
 
 	if not DirAccess.dir_exists_absolute(path):
 		push_warning("[lobby] 车目录不存在：%s" % path)
-		_loading_label.text = "车目录不存在：%s" % path
-		_update_info("车辆加载失败：目录不存在。")
+		_loading_label.text = I18n.t("车目录不存在：%s", [path])
+		_update_info(I18n.t("车辆加载失败：目录不存在。"))
 		return false
 	if not ClassDB.class_exists("AcCar"):
 		push_warning("[lobby] GDExtension 未注册（AcCar 不存在）")
-		_loading_label.text = "GDExtension 未注册，无法加载车辆。"
-		_update_info("GDExtension 未注册，无法加载车辆。")
+		_loading_label.text = I18n.t("GDExtension 未注册，无法加载车辆。")
+		_update_info(I18n.t("GDExtension 未注册，无法加载车辆。"))
 		return false
 
 	var car := AcCar.new()
 	if not car.open(path):
 		push_warning("[lobby] AcCar.open 失败：%s" % path)
-		_loading_label.text = "AcCar.open 失败：%s" % path
-		_update_info("车辆数据打不开，请重新选择车辆。")
+		_loading_label.text = I18n.t("AcCar.open 失败：%s", [path])
+		_update_info(I18n.t("车辆数据打不开，请重新选择车辆。"))
 		return false
 	var model_path := car.model_path()
 	if model_path.is_empty():
 		push_warning("[lobby] 车模主 KN5 缺失：%s" % path)
-		_loading_label.text = "车模主 KN5 缺失。"
-		_update_info("车模缺少主 KN5，请重新选择车辆。")
+		_loading_label.text = I18n.t("车模主 KN5 缺失。")
+		_update_info(I18n.t("车模缺少主 KN5，请重新选择车辆。"))
 		return false
 
 	var builder := Kn5SceneBuilder.new()
 	if not builder.start(model_path):
-		_loading_label.text = "车模 KN5 打不开：%s" % model_path
-		_update_info("车模 KN5 打不开，请重新选择车辆。")
+		_loading_label.text = I18n.t("车模 KN5 打不开：%s", [model_path])
+		_update_info(I18n.t("车模 KN5 打不开，请重新选择车辆。"))
 		return false
 	while not builder.step(Kn5SceneBuilder.STEP_BUDGET, _car_pivot):
 		if token != _load_token:
@@ -325,8 +335,8 @@ func _load_car(path: String) -> bool:
 		await get_tree().process_frame
 	_car_node = builder.root()
 	if _car_node == null:
-		_loading_label.text = "车模没有创建节点。"
-		_update_info("车模没有创建节点，请重新选择车辆。")
+		_loading_label.text = I18n.t("车模没有创建节点。")
+		_update_info(I18n.t("车模没有创建节点，请重新选择车辆。"))
 		return false
 
 	_car_name = car.display_name()
@@ -354,7 +364,7 @@ func _clear_car() -> void:
 		_car_pivot.remove_child(child)
 		child.queue_free()
 	_car_node = null
-	_car_name = "（未选择车辆）"
+	_car_name = I18n.t("（未选择车辆）")
 
 
 ## 把 CarPivot 放到车库的起跑/维修区 dummy 上；没有 dummy 用包围盒中心。
@@ -502,25 +512,77 @@ func _set_progress(value: float) -> void:
 func _finish_loading() -> void:
 	_loading.visible = false
 	_update_info()
+	_refresh_drive_button()
 	_drive_button.grab_focus()
+
+
+## 赛道选择独立于车库展示模组：车库只负责大厅背景，赛道负责 WorldBody。
+func _ensure_track_selection() -> void:
+	var path := String(GameSettings.get_value("race", "track_path", ""))
+	var layout := String(GameSettings.get_value("race", "track_layout", ""))
+	var entry = ModLibrary.find(path)
+	if entry == null or entry.kind != "track":
+		entry = _default_track_entry()
+		path = entry.path if entry != null else ""
+		layout = String(entry.default_layout) if entry != null else ""
+	elif entry.layouts.is_empty():
+		layout = ""
+	elif not entry.layouts.has(layout):
+		layout = String(entry.default_layout)
+	_track_path = path
+	_track_layout = layout
+	_track_name = String(entry.display_name) if entry != null else ""
+	if String(GameSettings.get_value("race", "track_path", "")) != _track_path \
+			or String(GameSettings.get_value("race", "track_layout", "")) != _track_layout:
+		GameSettings.set_value("race", "track_path", _track_path)
+		GameSettings.set_value("race", "track_layout", _track_layout)
+		GameSettings.save()
+
+
+func _default_track_entry():
+	var tracks := ModLibrary.tracks()
+	if tracks.is_empty():
+		return null
+	for entry in tracks:
+		if FileAccess.file_exists(entry.path.path_join("ai/fast_lane.ai")):
+			return entry
+	return tracks[0]
+
+
+func _refresh_drive_button() -> void:
+	var car_path := _preferred_car()
+	var has_car := not car_path.is_empty() and DirAccess.dir_exists_absolute(car_path)
+	var has_track := not _track_path.is_empty() and DirAccess.dir_exists_absolute(_track_path)
+	# 没车就没法开始；没赛道时按钮变成「选择赛道」，点它会直接打开赛道选择器。
+	_drive_button.disabled = not has_car
+	_drive_button.text = I18n.t("开始驾驶") if has_track else I18n.t("选择赛道")
+	_drive_button.tooltip_text = "" if has_car and has_track \
+			else I18n.t("先选择车辆" if not has_car else "先选择赛道")
 
 
 func _update_info(message: String = "") -> void:
 	if _info == null:
 		return
 	var counts := ModLibrary.counts()
+	var track_text := I18n.t("未选择")
+	if not _track_path.is_empty():
+		track_text = _track_name
+		if not _track_layout.is_empty():
+			track_text += " · " + ModLibrary.layout_label(_track_layout)
 	var lines := PackedStringArray([
-			"车辆：%s" % _car_name,
-			"车库：%s" % (_garage_name if not _garage_name.is_empty() else "未加载"),
-			"模组：%d 辆车 · %d 条赛道 · %d 个展示车库"
-					% [int(counts.get("car", 0)), int(counts.get("track", 0)),
-					int(counts.get("garage", 0))],
+			I18n.t("车辆：%s", [_car_name]),
+			I18n.t("赛道：%s", [track_text]),
+			I18n.t("车库：%s", [_garage_name if not _garage_name.is_empty()
+					else I18n.t("未加载")]),
+			I18n.t("模组：%d 辆车 · %d 条赛道 · %d 个展示车库",
+					[int(counts.get("car", 0)), int(counts.get("track", 0)),
+					int(counts.get("garage", 0))]),
 	])
 	if not message.is_empty():
 		lines.append(message)
 	_info.text = "\n".join(lines)
 	_title.text = "VETTURA"
-	_subtitle.text = "GARAGE  /  游戏大厅"
+	_subtitle.text = I18n.t("GARAGE  /  游戏大厅")
 
 
 func _apply_shadows() -> void:
@@ -536,10 +598,51 @@ func _on_setting_changed(section: String, key: String, value: Variant) -> void:
 		_orbit_speed = float(value)
 	elif section == "garage" and key == "orbit_radius":
 		_orbit_radius_target = float(value)
+	elif section == "race" and (key == "track_path" or key == "track_layout"):
+		_ensure_track_selection()
+		_update_info()
+		_refresh_drive_button()
 
 
 func _on_drive_pressed() -> void:
+	if _track_path.is_empty():
+		_update_info(I18n.t("请先选择一条赛道。"))
+		_on_track_pressed()
+		return
+	var car_path := _preferred_car()
+	if car_path.is_empty() or not DirAccess.dir_exists_absolute(car_path):
+		_update_info(I18n.t("请先选择一辆车。"))
+		_on_car_pressed()
+		return
+	GameSettings.set_value("race", "track_path", _track_path)
+	GameSettings.set_value("race", "track_layout", _track_layout)
+	GameSettings.save()
+	get_tree().change_scene_to_file("res://game/drive.tscn")
+
+
+func _on_showroom_pressed() -> void:
 	get_tree().change_scene_to_file("res://game/main.tscn")
+
+
+func _on_track_pressed() -> void:
+	var picker_scene: PackedScene = load("res://game/track_picker.tscn")
+	var panel := picker_scene.instantiate() as Control
+	panel.track_selected.connect(_on_track_selected)
+	panel.closed.connect(_close_overlay)
+	_open_overlay(panel, GARAGE_LAYER)
+
+
+func _on_track_selected(track_path: String, layout: String) -> void:
+	_track_path = track_path
+	_track_layout = layout
+	var entry = ModLibrary.find(track_path)
+	_track_name = String(entry.display_name) if entry != null else track_path.get_file()
+	GameSettings.set_value("race", "track_path", track_path)
+	GameSettings.set_value("race", "track_layout", layout)
+	GameSettings.save()
+	_close_overlay()
+	_update_info()
+	_refresh_drive_button()
 
 
 func _on_car_pressed() -> void:
@@ -592,16 +695,27 @@ func _on_device_changed(_device: String) -> void:
 	_update_device_hint()
 
 
+func _on_language_changed(_locale: String) -> void:
+	if _quit_dialog != null:
+		_quit_dialog.title = I18n.t("退出 Vettura")
+		_quit_dialog.dialog_text = I18n.t("确定要退出游戏吗？")
+		_quit_dialog.ok_button_text = I18n.t("退出")
+		_quit_dialog.cancel_button_text = I18n.t("继续玩")
+	_update_device_hint()
+	_update_info()
+	_refresh_drive_button()
+
+
 func _update_device_hint() -> void:
 	if _hint == null:
 		return
 	match GameInput.active_device():
 		"gamepad":
-			_hint.text = "手柄：左摇杆旋转 · 右摇杆/体感微调 · A 确认 · Start 设置 · B 返回"
+			_hint.text = I18n.t("手柄：左摇杆旋转 · 右摇杆/体感微调 · A 确认 · Start 设置 · B 返回")
 		"touch":
-			_hint.text = "拖动画面旋转镜头 · 滚轮/双指缩放 · 车库与车辆都可以随时替换"
+			_hint.text = I18n.t("拖动画面旋转镜头 · 滚轮/双指缩放 · 车库与车辆都可以随时替换")
 		_:
-			_hint.text = "拖动画面旋转镜头 · 滚轮缩放 · Enter 确认 · Esc 设置 · F11 全屏"
+			_hint.text = I18n.t("拖动画面旋转镜头 · 滚轮缩放 · Enter 确认 · Esc 设置 · F11 全屏")
 
 
 func _on_car_selected(car_path: String) -> void:

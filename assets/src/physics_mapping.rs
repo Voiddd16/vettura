@@ -271,6 +271,12 @@ pub(crate) fn spec_from_car(root: &Path, data: &CarData) -> Result<VehicleSpec> 
             .get_f32("GEARBOX", "VALID_SHIFT_RPM_WINDOW")
             .filter(|value| value.is_finite() && *value > 0.0)
             .unwrap_or(spec.gearbox.rev_match_rpm),
+        // AC 的 `[AUTO_SHIFTER] UP` 是绝对转速；Jolt 原来固定用 94% 红线。
+        // 992 GT3 R 的 1 挡极速刚好在 94% 红线附近，导致整圈卡在 1 挡。
+        auto_shift_up_rpm: drivetrain
+            .get_f32("AUTO_SHIFTER", "UP")
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .unwrap_or(spec.gearbox.auto_shift_up_rpm),
         clutch_max_torque_nm: drivetrain
             .get_f32("CLUTCH", "MAX_TORQUE")
             .filter(|value| value.is_finite() && *value > 0.0)
@@ -1162,7 +1168,8 @@ mod tests {
     fn gearbox_settings_read_ac_millisecond_timings() {
         let ini = Ini::parse(
             "[GEARBOX]\nCHANGE_UP_TIME=10\nCHANGE_DN_TIME=20\nVALID_SHIFT_RPM_WINDOW=1200\nINERTIA=0.012\n\
-             [CLUTCH]\nMAX_TORQUE=1150\n[AUTOCLUTCH]\nUSE_ON_CHANGES=1\n",
+             [CLUTCH]\nMAX_TORQUE=1150\n[AUTOCLUTCH]\nUSE_ON_CHANGES=1\n\
+             [AUTO_SHIFTER]\nUP=7400\nDOWN=5500\n",
         );
         let spec = VehicleSpec::default();
         let gearbox = GearboxSpec {
@@ -1179,6 +1186,9 @@ mod tests {
             rev_match_rpm: ini
                 .get_f32("GEARBOX", "VALID_SHIFT_RPM_WINDOW")
                 .unwrap_or(spec.gearbox.rev_match_rpm),
+            auto_shift_up_rpm: ini
+                .get_f32("AUTO_SHIFTER", "UP")
+                .unwrap_or(spec.gearbox.auto_shift_up_rpm),
             clutch_max_torque_nm: ini
                 .get_f32("CLUTCH", "MAX_TORQUE")
                 .unwrap_or(spec.gearbox.clutch_max_torque_nm),
@@ -1192,6 +1202,7 @@ mod tests {
         assert_eq!(gearbox.switch_time, 10.0);
         assert_eq!(gearbox.clutch_release_time, 20.0);
         assert_eq!(gearbox.rev_match_rpm, 1200.0);
+        assert_eq!(gearbox.auto_shift_up_rpm, 7400.0);
         assert_eq!(gearbox.clutch_max_torque_nm, 1150.0);
         assert!(gearbox.clutch_on_shifts);
 

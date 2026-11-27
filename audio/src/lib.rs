@@ -19,7 +19,7 @@
 //! 启用真机音频：
 //!
 //! ```bash
-//! cd /path/to/vettura/scripts && uv run fetch_fmod.py
+//! cd /path/to/vettura/scripts && python3 fetch_fmod.py
 //! cargo build -p vettura-audio --features fmod   # 或 -p vettura-godot --features fmod
 //! ```
 

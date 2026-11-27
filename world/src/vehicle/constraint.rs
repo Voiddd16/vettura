@@ -373,7 +373,18 @@ pub(crate) fn vehicle_settings(
 
     let max_rpm = spec.engine.redline_rpm.clamp(2_000.0, 30_000.0);
     let min_rpm = spec.engine.idle_rpm.clamp(300.0, max_rpm * 0.5);
-    let shift_up_rpm = (max_rpm * 0.94).max(min_rpm + 500.0).min(max_rpm - 1.0);
+    // AC 的 `[AUTO_SHIFTER] UP` 优先。Jolt 默认 94% 红线对某些车太高：
+    // 992 GT3 R 用 1 挡刚好加速到 ~114 km/h（≈94% 红线）就到阻力平衡，
+    // 永远够不到换挡阈值，整圈卡在 1 挡。AC 自己写的是 7400 rpm。
+    let ac_shift_up = spec.gearbox.auto_shift_up_rpm;
+    let shift_up_rpm =
+        if ac_shift_up.is_finite() && ac_shift_up > min_rpm + 500.0 && ac_shift_up < max_rpm {
+            ac_shift_up
+        } else {
+            (max_rpm * 0.94).max(min_rpm + 500.0).min(max_rpm - 1.0)
+        };
+    // 降挡仍用保守的 42% 红线：AC 的 DOWN（如 5500）在 Jolt 的简化逻辑里
+    // 会让刚升上去的 2 挡立刻掉回 1 挡（2 挡 100 km/h 恰好低于 5500）。
     let shift_down_rpm = (max_rpm * 0.42)
         .max(min_rpm * 0.8)
         .min(shift_up_rpm - 1.0)

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """从 fmod.com 拉取 FMOD Engine SDK 2.02.22，并解压到工作区本地缓存。
 
-只用 Python 标准库；不需要 requests/pip 依赖。由 uv 统一管理：
+只用 Python 标准库；不需要 requests/pip/uv：
 
     cd scripts
-    uv run fetch_fmod.py                 # 拉取当前平台
-    uv run fetch_fmod.py --all           # 拉取 macOS / Windows / Linux
-    uv run fetch_fmod.py --extract-only  # 已下载过，只重新解压
+    python3 fetch_fmod.py                 # 拉取当前平台
+    python3 fetch_fmod.py --all           # 拉取 macOS / Windows / Linux
+    python3 fetch_fmod.py --extract-only  # 已下载过，只重新解压
 
 凭证来源（二选一）：
   1) 仓库根目录的本地文件 `.fmod.env`（已 gitignore，禁止提交）

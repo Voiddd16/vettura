@@ -33,6 +33,7 @@ func _ready() -> void:
 	_rescan_button.pressed.connect(_rescan)
 	_browse_button.pressed.connect(_on_browse_pressed)
 	GameInput.push_nav_handler(_handle_nav)
+	I18n.language_changed.connect(_on_language_changed)
 
 	_rescan()
 	var current := String(GameSettings.get_value("garage", "mod_path", GarageMod.DEFAULT_PATH))
@@ -71,7 +72,7 @@ func _rescan() -> void:
 		_list.set_item_metadata(index, entry.path)
 		_list.set_item_tooltip(index, entry.path)
 	if _mods.is_empty():
-		_info.text = "没有找到可用于大厅的 mod。\n把档案放进 mods/ 或 user://mods/ 后点「重新扫描」。"
+		_info.text = I18n.t("没有找到可用于大厅的 mod。\n把档案放进 mods/ 或 user://mods/ 后点「重新扫描」。")
 		_select_button.disabled = true
 		return
 	var current := String(GameSettings.get_value("garage", "mod_path", GarageMod.DEFAULT_PATH))
@@ -101,16 +102,17 @@ func _on_item_selected(index: int) -> void:
 	_select_button.disabled = plan.is_empty()
 	var lines := PackedStringArray()
 	if entry != null:
-		lines.append("类型：%s" % entry.kind_label())
-		lines.append("名称：%s" % entry.display_name)
+		lines.append(I18n.t("类型：%s", [entry.kind_label()]))
+		lines.append(I18n.t("名称：%s", [entry.display_name]))
 		if not entry.subtitle.is_empty():
 			lines.append(entry.subtitle)
 	else:
-		lines.append("名称：%s" % GarageMod.display_name(path))
-	lines.append("路径：%s" % path)
-	lines.append("视觉模型：%d 个 KN5" % plan.size())
-	lines.append("包含 models.ini，按放置表拼装。" if FileAccess.file_exists(path.path_join("models.ini")) \
-			else "单模型车库。")
+		lines.append(I18n.t("名称：%s", [GarageMod.display_name(path)]))
+	lines.append(I18n.t("路径：%s", [path]))
+	lines.append(I18n.t("视觉模型：%d 个 KN5", [plan.size()]))
+	lines.append(I18n.t("包含 models.ini，按放置表拼装。")
+			if FileAccess.file_exists(path.path_join("models.ini"))
+			else I18n.t("单模型车库。"))
 	_info.text = "\n".join(lines)
 	_show_preview(path, entry)
 
@@ -146,6 +148,10 @@ func _on_select_pressed() -> void:
 	_close()
 
 
+func _on_language_changed(_locale: String) -> void:
+	_rescan()
+
+
 func _on_browse_pressed() -> void:
 	if OS.has_feature("android"):
 		_browse_android()
@@ -158,7 +164,7 @@ func _browse_embedded() -> void:
 	picker.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 	picker.access = FileDialog.ACCESS_FILESYSTEM
 	picker.current_dir = _browse_start()
-	picker.title = "选择车库模组目录"
+	picker.title = I18n.t("选择车库模组目录")
 	picker.dir_selected.connect(_on_browsed.bind(picker))
 	add_child(picker)
 	picker.popup_centered_ratio(0.72)
@@ -167,7 +173,7 @@ func _browse_embedded() -> void:
 func _browse_android() -> void:
 	var start := _browse_start()
 	var error := DisplayServer.file_dialog_show(
-			"选择车库模组目录",
+			I18n.t("选择车库模组目录"),
 			start,
 			"", true, DisplayServer.FILE_DIALOG_MODE_OPEN_DIR,
 			PackedStringArray(), _on_system_dir_selected)
@@ -194,13 +200,14 @@ func _on_browsed(path: String, picker: FileDialog = null) -> void:
 	if picker != null:
 		picker.queue_free()
 	if GarageMod.visual_plan(path).is_empty():
-		_info.text = "不是有效的车库模组：%s\n需要直接包含 .kn5 或 models.ini。" % path
+		_info.text = I18n.t("不是有效的车库模组：%s\n需要直接包含 .kn5 或 models.ini。",
+				[path])
 		return
 	var entry := ModLibrary.classify_path(path)
 	if not _mods.has(path):
 		_mods.append(path)
 		var label := entry.display_name if entry != null else GarageMod.display_name(path)
-		var kind := entry.kind_label() if entry != null else "车库"
+		var kind := entry.kind_label() if entry != null else I18n.t("车库")
 		var index := _list.add_item("%s · %s" % [kind, label])
 		_list.set_item_metadata(index, path)
 		_list.set_item_tooltip(index, path)

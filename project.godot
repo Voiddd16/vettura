@@ -20,9 +20,11 @@ config/icon="res://icon.svg"
 
 MCPRuntimeProbe="*uid://bsg12huaf1u5i"
 GameSettings="*res://game/game_settings.gd"
+I18n="*res://game/i18n/i18n.gd"
 GameInput="*res://game/input/game_input.gd"
 ModLibrary="*res://game/mod_library.gd"
 RenderFX="*res://game/render/post_fx.gd"
+DisplayPipeline="*res://game/render/display_pipeline.gd"
 RenderQuality="*res://game/render/render_quality.gd"
 
 [display]
@@ -54,7 +56,7 @@ renderer/rendering_method.mobile="mobile"
 textures/vram_compression/import_etc2_astc=true
 ; 各向异性过滤：黑白格终点线/路面标线这类高频贴图在移动时会出现
 ; 摩尔纹闪烁，mipmap 各向异性采样能显著改善（见 docs/godot.md）。
-textures/default_filters/anisotropic_filtering_level=4
+textures/default_filters/anisotropic_filtering_level=8
 
 ; 完整天空 + 环境光：不挂这条时 Godot 回落到深灰默认背景，太阳盘/天空渐变
 ; 都没有，太阳照不到的地方（看台内壁、车身底面）也会全黑。

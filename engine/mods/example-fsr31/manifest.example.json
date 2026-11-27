@@ -1,0 +1,21 @@
+{
+  "api": 1,
+  "id": "fsr31",
+  "name": "AMD FSR 3.1 (engine mod example)",
+  "version": "0.0.0",
+  "enabled": false,
+  "provides": ["upscaler.fsr3_1"],
+  "engine": {
+    "min": "4.7",
+    "patches": ["0001-fsr31.patch"]
+  },
+  "bridge": {
+    "singleton": "VetturaEngineMod",
+    "methods": {
+      "available": "display_available",
+      "apply": "display_apply",
+      "clear": "display_clear",
+      "status": "display_status"
+    }
+  }
+}

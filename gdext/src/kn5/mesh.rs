@@ -13,13 +13,14 @@
 
 use std::sync::Arc;
 
+use godot::classes::geometry_instance_3d::ShadowCastingSetting;
 use godot::classes::mesh::{ArrayType, PrimitiveType};
 use godot::classes::{ArrayMesh, MeshInstance3D, Node, Node3D, Skeleton3D, Skin};
 use godot::prelude::*;
 use vettura_kn5::{Kn5, Mesh, MeshFlags, Node as Kn5Node, NodeKind, SkinnedMesh, Transform};
 
 use super::cache::FileResources;
-use super::convert::kn5_transform_to_godot;
+use super::convert::{MaterialParams, kn5_transform_to_godot};
 
 /// surface 数组的槽位数量（`Mesh::ArrayType::MAX`）。
 const ARRAY_TYPE_COUNT: usize = 13;
@@ -245,7 +246,17 @@ fn finish_instance(
 
     instance.set_mesh(&array_mesh);
     instance.set_visible(flags.is_visible);
-    instance.set_cast_shadows_setting(shadow_setting(flags.cast_shadows));
+    // 树叶/草是 alpha scissor 薄片，投到 120 m 的 CSM 里会随相机移动产生
+    // 阴影 acne / 边缘抖动；树本身也没有可靠的阴影深度。直接关掉它们的
+    // 投影，只保留其他静态物体的阴影。`AI_LAP_*` 录视频时尤其明显。
+    let foliage = material_index
+        .and_then(|index| resources.kn5().materials.get(index))
+        .is_some_and(|material| MaterialParams::from_material(material).foliage);
+    instance.set_cast_shadows_setting(if foliage {
+        ShadowCastingSetting::OFF
+    } else {
+        shadow_setting(flags.cast_shadows)
+    });
 
     // 不要用 KN5 的 `lod_in`/`lod_out` 设置 `visibility_range`。
     //

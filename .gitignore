@@ -27,6 +27,10 @@ CMakeFiles/
 third_party/*
 !third_party/README.md
 
+# 魔改引擎的第三方 SDK（FidelityFX 等）与本地构建产物，不提交
+/engine/third_party/
+/engine/build/
+
 # 本地 AI 技能安装器产物
 .agents/
 .claude/

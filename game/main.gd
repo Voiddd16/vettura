@@ -12,10 +12,6 @@ extends Node3D
 
 const DEFAULT_CAR_DIR := "res://mods/F1 2008 by Cimmerian_Iter/assettocorsa/content/cars/cim_2008_ferrari"
 
-## 车模库存放目录（`user://` 可写；res:// 在运行时是只读的）。由
-## `game/garage.gd` 的车模库面板管理：导入 / 选择 / 重命名 / 删除 / 搜索。
-const IMPORT_ROOT := "user://imported_cars/"
-
 ## 模型基准点不在地面上时，用这个高度把整车托起来。
 const FLOAT_HEIGHT := 1.2
 ## 浮空展示时的自转速度（rad/s）。
@@ -39,6 +35,7 @@ const ORBIT_HEIGHT := 1.6
 const ORBIT_SPEED := 0.6
 
 const MODE_TEXTS := ["视角：车后", "视角：驾驶位", "视角：绕车", "视角：前机盖"]
+const MODE_NAMES := ["车后", "驾驶位", "绕车", "前机盖"]
 
 ## 车库 / 设置面板的 CanvasLayer 层级：HUD / TouchOverlay 各占一层（默认 1），
 ## 弹层要盖在它们上面。设置再盖住车库。
@@ -103,6 +100,7 @@ func _ready() -> void:
 	_settings_button.pressed.connect(_on_settings_button_pressed)
 	_lobby_button.pressed.connect(_on_lobby_button_pressed)
 	GameSettings.changed.connect(_on_setting_changed)
+	I18n.language_changed.connect(_on_language_changed)
 	GameInput.push_nav_handler(_handle_nav)
 	GameInput.device_changed.connect(_on_device_changed)
 	GameInput.gyro_changed.connect(_on_gyro_changed)
@@ -185,10 +183,17 @@ func _on_gyro_changed(_available: bool, _enabled: bool) -> void:
 	_update_hud()
 
 
+func _on_language_changed(_locale: String) -> void:
+	_update_device_hint()
+	_update_hud()
+	_build_touch_controls()
+
+
 func _update_device_hint() -> void:
 	_device_hint = GameInput.hint_text()
 	if GameInput.is_touch_device():
-		_device_hint += "\n触屏转向：" + ("滑杆 + 倾斜" if GameInput.gyro_enabled else "底部滑杆")
+		_device_hint += "\n" + I18n.t("触屏转向：%s", [
+				I18n.t("滑杆 + 倾斜" if GameInput.gyro_enabled else "底部滑杆")])
 
 ## 打开默认车目录并把主模型实例化进 `CarPivot`。
 func _load_default_car() -> void:
@@ -437,22 +442,18 @@ func _update_camera(delta: float) -> void:
 
 
 func _update_hud() -> void:
-	_mode_button.text = MODE_TEXTS[_camera_mode]
-	_info_label.text = (
-		"车辆：%s\n"
-		+ "油门：%d%%    刹车：%d%%    转向：%+d%%\n"
-		+ "视角：%s（按钮 / C / 手柄 Y）\n"
-		+ "车轮角速度：%.1f rad/s\n"
-		+ "%s"
-	) % [
-		_car_name,
-		int(roundf(_throttle * 100.0)),
-		int(roundf(_brake * 100.0)),
-		int(roundf(_steer * 100.0)),
-		MODE_TEXTS[_camera_mode].trim_prefix("视角："),
-		_wheel_spin,
-		_device_hint,
-	]
+	_mode_button.text = I18n.t(MODE_TEXTS[_camera_mode])
+	_info_label.text = I18n.t(
+		"车辆：%s\n油门：%d%%    刹车：%d%%    转向：%+d%%\n视角：%s（按钮 / C / 手柄 Y）\n车轮角速度：%.1f rad/s\n%s",
+		[
+			_car_name,
+			int(roundf(_throttle * 100.0)),
+			int(roundf(_brake * 100.0)),
+			int(roundf(_steer * 100.0)),
+			I18n.t(MODE_NAMES[_camera_mode]),
+			_wheel_spin,
+			_device_hint,
+		])
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -542,7 +543,7 @@ func _build_touch_controls() -> void:
 	box.add_theme_constant_override("separation", 2)
 	margin.add_child(box)
 	var label := Label.new()
-	label.text = "转向（触摸滑杆）"
+	label.text = I18n.t("转向（触摸滑杆）")
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 14)
 	box.add_child(label)

@@ -124,6 +124,17 @@
 - [ ] 性能分析（解析、网格上传、物理 step）
 - [ ] 文档：格式、API、迁移指南
 
+## Phase 9：显示管线与引擎扩展（进行中）
+
+- [x] 统一 `DisplayPipeline`：能力探测、上采样器解析、动态分辨率、VRS/XR
+- [x] stock 4.7：FSR1 / FSR2 / MetalFX Spatial / MetalFX Temporal
+- [x] VRS 纹理（中心清晰密度图）与 `VRS_XR`
+- [x] 动态分辨率：目标帧率、滞回、时域上采样最低 0.5 比例
+- [x] `engine/` 落点：补丁序列、能力契约、扩展 manifest 与桥接契约
+- [ ] FSR3.1 引擎补丁（Viewport 枚举或 `VetturaEngineMod` 桥接）
+- [ ] FSR3.1 帧生成（需要独立 UI/HUD 与延迟预算）
+- [ ] 每平台自动档位（按 GPU/分辨率给默认 upscaler）
+
 ## 非目标（当前阶段）
 
 - 自研渲染器

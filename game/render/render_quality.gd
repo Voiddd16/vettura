@@ -20,26 +20,16 @@ const CLOUD_UPDATE_HZ := 10.0
 
 ## 全屏自动分辨率：3D 内部目标宽度约 1440 px，按实际窗口宽度换算初始比例，
 ## 再用帧率在 [0.35, 1.0] 之间缓慢调整。UI/后处理仍在原生分辨率，只有 3D
-## 走 MetalFX（macOS）/FSR（其他 Forward+）上采样，避免整屏都糊。
+## 走上采样（FSR1/FSR2/MetalFX/引擎补丁的 FSR3.1），避免整屏都糊。
+##
+## 上采样器选择、动态分辨率与 VRS 的 Viewport 写入都委托给 autoload
+## `DisplayPipeline`；本脚本只负责“什么时候应用”和“同时调整 MSAA/后处理”。
 signal adaptive_changed(scale: float, fps: float)
-
-const ADAPTIVE_MIN := 0.35
-const ADAPTIVE_MAX := 1.0
-const ADAPTIVE_LOW_FPS := 50.0
-const ADAPTIVE_HIGH_FPS := 59.0
 
 var _sky_material: ShaderMaterial
 var _default_env: Environment
 var _cloud_offset := Vector2.ZERO
 var _cloud_accum := 0.0
-
-var _adaptive := false
-var _adaptive_scale := 1.0
-var _adaptive_timer := 0.0
-var _low_time := 0.0
-var _high_time := 0.0
-var _cooldown := 0.0
-var _last_fps := 0.0
 
 func _ready() -> void:
 	var env := load("res://game_environment.tres") as Environment
@@ -64,25 +54,31 @@ func _ready() -> void:
 		_sky_material = env.sky.sky_material as ShaderMaterial
 		_default_env = env
 	GameSettings.changed.connect(_on_settings_changed)
+	DisplayPipeline.scale_changed.connect(_on_display_scale_changed)
 	_apply_fullscreen_profile()
 	call_deferred("_apply_fullscreen_profile")
-	# 云漂移与全屏自适应都靠 `_process`。
+	# 云漂移仍由本脚本推进；动态分辨率在 DisplayPipeline 的 `_process` 里。
 	set_process(true)
-	print("[render-quality] method=%s ssao=%s ssr=%s fullscreen_adaptive=%s" % [
+	print("[render-quality] method=%s ssao=%s ssr=%s upscaler=%s vrs=%s" % [
 		RenderingServer.get_current_rendering_method(),
-		str(env.ssao_enabled), str(env.ssr_enabled), str(_adaptive)])
+		str(env.ssao_enabled), str(env.ssr_enabled),
+		DisplayPipeline.active_upscaler(), String(DisplayPipeline.state().get("vrs", "off"))])
 
 
 func _on_settings_changed(section: String, key: String, _value: Variant) -> void:
 	if section == "video" and (key == "window_mode" or key == "fullscreen_adaptive" \
-			or key == "render_scale"):
+			or key == "render_scale" or key == "upscaler" or key == "vrs" \
+			or key == "dynamic_target_fps"):
 		call_deferred("_apply_fullscreen_profile")
+
+
+func _on_display_scale_changed(scale: float, fps: float) -> void:
+	adaptive_changed.emit(scale, fps)
 
 
 ## 默认环境的云层漂移（没有天气系统的场景也保持云在动）。
 func _process(delta: float) -> void:
 	_process_clouds(delta)
-	_process_adaptive(delta)
 
 
 func _process_clouds(delta: float) -> void:
@@ -104,133 +100,55 @@ func _process_clouds(delta: float) -> void:
 	_sky_material.set_shader_parameter("cloud_offset", _cloud_offset)
 
 
-func _process_adaptive(delta: float) -> void:
-	if not _adaptive or OS.has_feature("mobile"):
-		return
-	if not GameSettings.is_fullscreen():
-		return
-	_cooldown = maxf(0.0, _cooldown - delta)
-	_adaptive_timer -= delta
-	if _adaptive_timer > 0.0:
-		return
-	_adaptive_timer = 0.5
-	var fps := Engine.get_frames_per_second()
-	if fps <= 0.0:
-		return
-	_last_fps = fps
-	adaptive_changed.emit(_adaptive_scale, fps)
-	if fps < ADAPTIVE_LOW_FPS:
-		_low_time += 0.5
-		_high_time = 0.0
-		if _low_time >= 1.0 and _cooldown <= 0.0:
-			_set_adaptive_scale(_adaptive_scale - 0.05)
-			_low_time = 0.0
-			_cooldown = 1.5
-	elif fps >= ADAPTIVE_HIGH_FPS:
-		_high_time += 0.5
-		_low_time = 0.0
-		if _high_time >= 3.0 and _cooldown <= 0.0:
-			_set_adaptive_scale(_adaptive_scale + 0.05)
-			_high_time = 0.0
-			_cooldown = 3.0
-	else:
-		_low_time = 0.0
-		_high_time = 0.0
-
-
-func _set_adaptive_scale(scale: float) -> void:
-	var clamped := clampf(scale, ADAPTIVE_MIN, ADAPTIVE_MAX)
-	if absf(clamped - _adaptive_scale) < 0.001:
-		return
-	_adaptive_scale = clamped
-	var viewport := get_viewport()
-	if viewport != null:
-		viewport.scaling_3d_scale = _adaptive_scale
-	adaptive_changed.emit(_adaptive_scale, _last_fps)
-
-
 func adaptive_scale() -> float:
-	return _adaptive_scale
+	return DisplayPipeline.scale()
 
 
 func is_adaptive() -> bool:
-	return _adaptive
+	return DisplayPipeline.is_dynamic()
 
 
 ## 窗口尺寸变化 / 全屏切换后重设 3D 放大策略。
+##
+## 分辨率/上采样/VRS 全部交给 DisplayPipeline；这里只负责 MSAA、屏幕空间
+## AA、去色带和后处理性能档位——这些和“用哪种上采样器”是两件事。
 func _apply_fullscreen_profile() -> void:
 	var viewport := get_viewport()
 	if viewport == null:
 		return
-	var forward_plus := RenderingServer.get_current_rendering_method() == "forward_plus"
 	var mobile := OS.has_feature("mobile")
-	if mobile:
-		_adaptive = false
-		_call_render_fx(false)
-		return
-
 	var fullscreen := GameSettings.is_fullscreen()
-	var render_scale := clampf(float(GameSettings.get_value("video", "render_scale", 1.0)), 0.5, 1.0)
+
+	if mobile:
+		# 移动端的 scaling_3d_scale 由 RainSystem 画质档位管理，DisplayPipeline
+		# 只换上采样模式/VRS，不抢 scale。
+		_call_render_fx(false)
+		DisplayPipeline.apply_profile()
+		adaptive_changed.emit(DisplayPipeline.scale(), 0.0)
+		return
+
 	if not fullscreen:
-		_adaptive = false
-		viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
-		viewport.scaling_3d_scale = render_scale
 		viewport.msaa_3d = Viewport.MSAA_4X
 		viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 		viewport.use_debanding = true
 		_call_render_fx(false)
-		adaptive_changed.emit(render_scale, 0.0)
-		return
-
-	_adaptive = bool(GameSettings.get_value("video", "fullscreen_adaptive", true))
-	if not _adaptive:
-		viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
-		viewport.scaling_3d_scale = render_scale
-		viewport.msaa_3d = Viewport.MSAA_4X
+	else:
+		# 全屏像素多，MSAA 2x 已经足够；4x 的带宽在 4K 上代价过高。
+		viewport.msaa_3d = Viewport.MSAA_2X
 		viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 		viewport.use_debanding = true
-		_call_render_fx(false)
-		adaptive_changed.emit(render_scale, 0.0)
-		return
+		_call_render_fx(true)
 
-	# Forward+ 桌面：macOS 用 MetalFX Spatial，其他平台用 FSR1；两者都比
-	# 双线性清晰，且不会像 FSR2 那样在全屏低比例下引入额外时域开销。
-	if forward_plus:
-		viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_METALFX_SPATIAL \
-			if OS.get_name() == "macOS" else Viewport.SCALING_3D_MODE_FSR
-	else:
-		viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
-	# 全屏像素多，MSAA 2x 已经足够；4x 的带宽在 4K 上代价过高。
-	viewport.msaa_3d = Viewport.MSAA_2X
-	viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
-	viewport.use_debanding = true
-	if forward_plus:
-		# `canvas_items` 会把根视口放大到窗口的若干倍；按真实 3D 纹理宽度
-		# 换算，内部 3D 先落在屏幕宽度的 90% 左右（上限 2880），再交给
-		# MetalFX/FSR 上采样；根视口尺寸还没更新时用 0.4 的安全初值，
-		# 避免一进全屏先按 1.0 跑十几秒再慢慢降。
-		var window_width := maxf(float(DisplayServer.window_get_size().x), 1280.0)
-		var texture_width := get_viewport().get_texture().get_size().x
-		if texture_width <= 0.0 or texture_width < window_width * 0.95:
-			_adaptive_scale = 0.40
-		else:
-			var base_width := maxf(texture_width, window_width)
-			if base_width <= window_width * 1.05:
-				_adaptive_scale = 1.0
-			else:
-				var target_width := minf(window_width * 0.90, 2880.0)
-				_adaptive_scale = clampf(target_width / base_width,
-					ADAPTIVE_MIN, ADAPTIVE_MAX)
-	else:
-		_adaptive_scale = render_scale
-	viewport.scaling_3d_scale = _adaptive_scale
-	_low_time = 0.0
-	_high_time = 0.0
-	_cooldown = 1.0
-	_adaptive_timer = 0.5
-	_call_render_fx(true)
-	adaptive_changed.emit(_adaptive_scale, 0.0)
-	print("[render-quality] fullscreen adaptive scale=%.2f msaa=2x" % _adaptive_scale)
+	DisplayPipeline.apply_profile()
+	var state := DisplayPipeline.state()
+	adaptive_changed.emit(float(state.get("scale", 1.0)), 0.0)
+	print("[render-quality] fullscreen=%s upscaler=%s scale=%.2f vrs=%s msaa=%s" % [
+		str(fullscreen),
+		String(state.get("active_upscaler", "native")),
+		float(state.get("scale", 1.0)),
+		String(state.get("vrs", "off")),
+		"2x" if fullscreen else "4x",
+	])
 
 
 func _call_render_fx(performance: bool) -> void:

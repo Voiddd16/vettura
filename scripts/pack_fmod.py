@@ -6,9 +6,9 @@
 依赖的 Distance Filter DSP 插件）复制到可执行文件旁边。
 
     cd scripts
-    uv run pack_fmod.py --platform macos --dest "../dist/Vettura.app"
-    uv run pack_fmod.py --platform windows --dest "../dist/windows"
-    uv run pack_fmod.py --all --dest-root ../dist          # 三个平台各一个子目录
+    python3 pack_fmod.py --platform macos --dest "../dist/Vettura.app"
+    python3 pack_fmod.py --platform windows --dest "../dist/windows"
+    python3 pack_fmod.py --all --dest-root ../dist          # 三个平台各一个子目录
 
 缓存里没有该平台 SDK 时会自动用 `.fmod.env` 里的账号去 fmod.com 下载
 （跨平台打包就在本机拉 Windows/Linux 安装包）；加 `--offline` 则只用缓存。

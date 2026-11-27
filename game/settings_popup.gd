@@ -1,5 +1,5 @@
 extends Control
-## 游戏内设置弹窗：音频 / 画面 / 车库展示 / 输入。
+## 游戏内设置弹窗：音频 / 画面 / 车库展示 / 驾驶辅助 / 输入。
 ##
 ## 一个自包含的模态层：宿主实例化后把它放进自己的 `CanvasLayer` 即可。它会
 ## 盖住整屏并吞掉输入，关闭时发 `closed` 让宿主恢复 HUD。
@@ -31,11 +31,20 @@ const SafeArea := preload("res://game/safe_area.gd")
 @onready var _shadows: CheckBox = %ShadowsCheck
 @onready var _scale: HSlider = %ScaleSlider
 @onready var _scale_value: Label = %ScaleValue
+@onready var _upscaler_option: OptionButton = %UpscalerOption
+@onready var _vrs_option: OptionButton = %VrsOption
+@onready var _target_fps_option: OptionButton = %TargetFpsOption
+@onready var _display_hint: Label = %DisplayHint
 @onready var _orbit_speed: HSlider = %OrbitSpeedSlider
 @onready var _orbit_speed_value: Label = %OrbitSpeedValue
 @onready var _orbit_radius: HSlider = %OrbitRadiusSlider
 @onready var _orbit_radius_value: Label = %OrbitRadiusValue
 @onready var _garage_hint: Label = %GarageHint
+@onready var _abs_check: CheckBox = %AbsCheck
+@onready var _tc_check: CheckBox = %TcCheck
+@onready var _camera_option: OptionButton = %CameraOption
+@onready var _language_option: OptionButton = %LanguageOption
+@onready var _tabs: TabContainer = $Margin/Center/Panel/PanelMargin/Body/Tabs
 @onready var _input_box: VBoxContainer = %InputBox
 @onready var _reset_button: Button = %ResetButton
 @onready var _apply_button: Button = %ApplyButton
@@ -61,6 +70,9 @@ func _ready() -> void:
 
 	_master.value_changed.connect(_on_master_changed)
 	_scale.value_changed.connect(_on_scale_changed)
+	_upscaler_option.item_selected.connect(_on_upscaler_selected)
+	_vrs_option.item_selected.connect(_on_vrs_selected)
+	_target_fps_option.item_selected.connect(_on_target_fps_selected)
 	_orbit_speed.value_changed.connect(_on_orbit_speed_changed)
 	_orbit_radius.value_changed.connect(_on_orbit_radius_changed)
 	_fullscreen.toggled.connect(_on_fullscreen_toggled)
@@ -68,6 +80,10 @@ func _ready() -> void:
 	_adaptive_check.toggled.connect(_on_adaptive_toggled)
 	_vsync.toggled.connect(_on_vsync_toggled)
 	_shadows.toggled.connect(_on_shadows_toggled)
+	_abs_check.toggled.connect(_on_abs_toggled)
+	_tc_check.toggled.connect(_on_tc_toggled)
+	_camera_option.item_selected.connect(_on_camera_selected)
+	_language_option.item_selected.connect(_on_language_selected)
 	_reset_button.pressed.connect(_on_reset_pressed)
 	_apply_button.pressed.connect(_close)
 	_close_button.pressed.connect(_close)
@@ -79,6 +95,8 @@ func _ready() -> void:
 	GameInput.device_changed.connect(_on_device_changed)
 	GameSettings.changed.connect(_on_external_setting_changed)
 	RenderQuality.adaptive_changed.connect(_on_adaptive_changed)
+	I18n.language_changed.connect(_on_language_changed)
+	_apply_tab_titles()
 	# 弹窗出现时把键盘焦点收到“完成”键，手柄/键盘用户可直接操作。
 	_apply_button.grab_focus()
 
@@ -115,12 +133,12 @@ func _input(event: InputEvent) -> void:
 	var action := _rebind_action
 	_finish_rebind()
 	if conflict.is_empty():
-		_rebind_status.text = "已绑定：%s → %s" % [
-			GameInput.action_label(action), GameInput.binding_text(action)]
+		_rebind_status.text = I18n.t("已绑定：%s → %s", [
+			GameInput.action_label(action), GameInput.binding_text(action)])
 	else:
-		_rebind_status.text = "已绑定：%s → %s（与「%s」冲突，已从对方移除）" % [
+		_rebind_status.text = I18n.t("已绑定：%s → %s（与「%s」冲突，已从对方移除）", [
 			GameInput.action_label(action), GameInput.binding_text(action),
-			GameInput.action_label(conflict)]
+			GameInput.action_label(conflict)])
 	get_viewport().set_input_as_handled()
 
 
@@ -166,10 +184,133 @@ func _load_values() -> void:
 	_vsync.button_pressed = bool(GameSettings.get_value("video", "vsync", true))
 	_shadows.button_pressed = bool(GameSettings.get_value("video", "shadows", true))
 	_scale.value = roundf(float(GameSettings.get_value("video", "render_scale", 1.0)) * 100.0)
+	_fill_display_options()
 	_orbit_speed.value = roundf(float(GameSettings.get_value("garage", "orbit_speed", 0.18)) * 100.0)
 	_orbit_radius.value = roundf(float(GameSettings.get_value("garage", "orbit_radius", 7.0)))
+	_abs_check.button_pressed = bool(GameSettings.get_value("race", "abs", true))
+	_tc_check.button_pressed = bool(GameSettings.get_value("race", "tc", true))
+	_fill_camera_option()
+	_fill_language_option()
 	_syncing = false
 	_refresh_labels()
+
+
+func _fill_camera_option() -> void:
+	_camera_option.clear()
+	_camera_option.add_item(I18n.t("车后追随"))
+	_camera_option.add_item(I18n.t("驾驶位"))
+	_camera_option.add_item(I18n.t("前机盖"))
+	_camera_option.select(clampi(int(GameSettings.get_value("race", "camera", 0)), 0, 2))
+
+
+func _fill_language_option() -> void:
+	_language_option.clear()
+	var current := I18n.language_setting()
+	var options := I18n.language_options()
+	var selected := 0
+	for index in options.size():
+		var option: Dictionary = options[index]
+		var id := String(option.get("id", ""))
+		_language_option.add_item(String(option.get("label", id)))
+		_language_option.set_item_metadata(index, id)
+		if id == current:
+			selected = index
+	_language_option.select(selected)
+
+
+func _apply_tab_titles() -> void:
+	if _tabs == null:
+		return
+	var titles := ["音频", "画面", "界面", "车库", "驾驶", "输入"]
+	for index in mini(titles.size(), _tabs.get_tab_count()):
+		_tabs.set_tab_title(index, I18n.t(String(titles[index])))
+
+
+func _on_language_changed(_locale: String) -> void:
+	_syncing = true
+	_apply_tab_titles()
+	_fill_language_option()
+	_fill_camera_option()
+	_fill_display_options()
+	_syncing = false
+	_refresh_labels()
+	_build_input_tab()
+
+
+func _fill_display_options() -> void:
+	_fill_upscaler_option()
+	_fill_vrs_option()
+	_fill_target_fps_option()
+
+
+func _fill_upscaler_option() -> void:
+	var requested := String(GameSettings.get_value("video", "upscaler", "auto"))
+	var options := DisplayPipeline.upscaler_options()
+	if options.is_empty():
+		return
+	_upscaler_option.clear()
+	var selected := 0
+	for index in options.size():
+		var option: Dictionary = options[index]
+		var id := String(option.get("id", "auto"))
+		_upscaler_option.add_item(I18n.t(String(option.get("label", id))))
+		_upscaler_option.set_item_metadata(index, id)
+		if not bool(option.get("available", false)):
+			_upscaler_option.set_item_disabled(index, true)
+			_upscaler_option.set_item_tooltip(index,
+				I18n.t("当前引擎/平台不可用；选中时运行时会自动回退。"))
+		if id == requested:
+			selected = index
+	if not bool(options[selected].get("available", false)):
+		selected = 0
+	_upscaler_option.select(selected)
+
+
+func _fill_vrs_option() -> void:
+	var requested := String(GameSettings.get_value("video", "vrs", "auto"))
+	var options := DisplayPipeline.vrs_options()
+	if options.is_empty():
+		return
+	_vrs_option.clear()
+	var selected := 0
+	for index in options.size():
+		var option: Dictionary = options[index]
+		var id := String(option.get("id", "auto"))
+		_vrs_option.add_item(I18n.t(String(option.get("label", id))))
+		_vrs_option.set_item_metadata(index, id)
+		if not bool(option.get("available", false)):
+			_vrs_option.set_item_disabled(index, true)
+			_vrs_option.set_item_tooltip(index, I18n.t("当前后端/硬件不支持。"))
+		if id == requested:
+			selected = index
+	if not bool(options[selected].get("available", false)):
+		selected = 0
+	_vrs_option.select(selected)
+
+
+func _fill_target_fps_option() -> void:
+	var requested := int(GameSettings.get_value("video", "dynamic_target_fps", 0))
+	var refresh := DisplayServer.screen_get_refresh_rate()
+	if refresh <= 1.0:
+		refresh = 60.0
+	var options := [
+		{"value": 0, "label": I18n.t("自动（最高 60 FPS）")},
+		{"value": 60, "label": "60 FPS"},
+		{"value": 90, "label": "90 FPS"},
+		{"value": 120, "label": "120 FPS"},
+		{"value": 144, "label": "144 FPS"},
+		{"value": -1, "label": I18n.t("跟随显示器（%d Hz）", [int(roundf(refresh))])},
+	]
+	_target_fps_option.clear()
+	var selected := 0
+	for index in options.size():
+		var option: Dictionary = options[index]
+		var value := int(option.get("value", 0))
+		_target_fps_option.add_item(String(option.get("label", str(value))))
+		_target_fps_option.set_item_metadata(index, value)
+		if value == requested:
+			selected = index
+	_target_fps_option.select(selected)
 
 
 func _refresh_labels() -> void:
@@ -178,27 +319,60 @@ func _refresh_labels() -> void:
 	_orbit_speed_value.text = "%.2f rad/s" % (_orbit_speed.value / 100.0)
 	_orbit_radius_value.text = "%.1f m" % _orbit_radius.value
 	var mod_path := String(GameSettings.get_value("garage", "mod_path", GameSettings.DEFAULT_GARAGE_MOD))
-	_garage_hint.text = "当前车库模组：\n%s" % mod_path
+	_garage_hint.text = I18n.t("当前车库模组：\n%s", [mod_path])
 	_refresh_adaptive_label()
+	_refresh_display_hint()
 
 
 func _refresh_adaptive_label() -> void:
 	if _adaptive_label == null:
 		return
-	if not GameSettings.is_fullscreen():
-		_adaptive_label.text = "窗口模式：使用上方「3D 分辨率」滑杆（50%~100%）。"
+	var state := DisplayPipeline.state()
+	var scale := int(roundf(float(state.get("scale", 1.0)) * 100.0))
+	var upscaler := I18n.t(String(state.get("upscaler_label", "原生")))
+	var min_scale := int(roundf(float(state.get("dynamic_min", 0.35)) * 100.0))
+	var max_scale := int(roundf(float(state.get("dynamic_max", 1.0)) * 100.0))
+	var target := int(roundf(float(state.get("target_fps", 60.0))))
+	if OS.has_feature("mobile"):
+		_adaptive_label.text = I18n.t("移动端：3D 缩放由雨/画质档位管理；上采样 %s。", [upscaler])
+	elif not GameSettings.is_fullscreen():
+		_adaptive_label.text = I18n.t("窗口模式：3D 分辨率 %d%%，上采样 %s；全屏可启用动态分辨率。", [
+			scale, upscaler])
 	elif not bool(GameSettings.get_value("video", "fullscreen_adaptive", true)):
-		_adaptive_label.text = "全屏固定：使用上方「3D 分辨率」滑杆；全屏像素多，建议 70%~85%。"
+		_adaptive_label.text = I18n.t("全屏固定：3D 分辨率 %d%%，上采样 %s。", [scale, upscaler])
 	else:
-		var scale := RenderQuality.adaptive_scale() * 100.0
-		_adaptive_label.text = "全屏自动：当前 3D 渲染 %d%%，按帧率自动调整（35%~100%）。" % int(roundf(scale))
+		_adaptive_label.text = I18n.t("全屏动态：当前 3D %d%%（%s），目标 %d FPS，范围 %d%%~%d%%。", [
+			scale, upscaler, target, min_scale, max_scale])
 
 
-func _on_adaptive_changed(scale: float, _fps: float) -> void:
-	if _adaptive_label == null:
+func _refresh_display_hint() -> void:
+	if _display_hint == null:
 		return
-	if GameSettings.is_fullscreen() and bool(GameSettings.get_value("video", "fullscreen_adaptive", true)):
-		_adaptive_label.text = "全屏自动：当前 3D 渲染 %d%%，按帧率自动调整（35%~100%）。" % int(roundf(scale * 100.0))
+	var caps := DisplayPipeline.capabilities()
+	var state := DisplayPipeline.state()
+	var mods: Array = caps.get("engine_mods", [])
+	var parts := [
+		I18n.t("后端 %s / %s", [String(caps.get("renderer", "")),
+			String(caps.get("driver", ""))]),
+	]
+	if bool(caps.get("xr", false)):
+		parts.append("XR")
+	if mods.size() > 0:
+		parts.append(I18n.t("引擎扩展 %d", [mods.size()]))
+	if not bool(caps.get("vrs", {}).get("texture", false)):
+		parts.append(I18n.t("VRS 纹理不可用"))
+	var requested := String(state.get("requested_upscaler", "auto"))
+	var active := String(state.get("active_upscaler", "native"))
+	if requested != "auto" and requested != active:
+		parts.append(I18n.t("请求 %s → 回退 %s", [
+			I18n.t(DisplayPipeline.label_for(requested)),
+			I18n.t(DisplayPipeline.label_for(active))]))
+	_display_hint.text = I18n.t("%s。FSR 3.1 需要魔改引擎，见 engine/README.md。",
+			[" · ".join(PackedStringArray(parts))])
+
+
+func _on_adaptive_changed(_scale: float, _fps: float) -> void:
+	_refresh_adaptive_label()
 
 
 func _on_master_changed(value: float) -> void:
@@ -213,6 +387,30 @@ func _on_scale_changed(value: float) -> void:
 		return
 	GameSettings.set_value("video", "render_scale", value / 100.0)
 	_refresh_labels()
+
+
+func _on_upscaler_selected(index: int) -> void:
+	if _syncing:
+		return
+	var id := String(_upscaler_option.get_item_metadata(index))
+	GameSettings.set_value("video", "upscaler", id)
+	_refresh_adaptive_label()
+
+
+func _on_vrs_selected(index: int) -> void:
+	if _syncing:
+		return
+	var id := String(_vrs_option.get_item_metadata(index))
+	GameSettings.set_value("video", "vrs", id)
+	_refresh_adaptive_label()
+
+
+func _on_target_fps_selected(index: int) -> void:
+	if _syncing:
+		return
+	var value := int(_target_fps_option.get_item_metadata(index))
+	GameSettings.set_value("video", "dynamic_target_fps", value)
+	_refresh_adaptive_label()
 
 
 func _on_orbit_speed_changed(value: float) -> void:
@@ -270,6 +468,30 @@ func _on_shadows_toggled(enabled: bool) -> void:
 	if _syncing:
 		return
 	GameSettings.set_value("video", "shadows", enabled)
+
+
+func _on_abs_toggled(enabled: bool) -> void:
+	if _syncing:
+		return
+	GameSettings.set_value("race", "abs", enabled)
+
+
+func _on_tc_toggled(enabled: bool) -> void:
+	if _syncing:
+		return
+	GameSettings.set_value("race", "tc", enabled)
+
+
+func _on_camera_selected(index: int) -> void:
+	if _syncing:
+		return
+	GameSettings.set_value("race", "camera", clampi(index, 0, 2))
+
+
+func _on_language_selected(index: int) -> void:
+	if _syncing:
+		return
+	I18n.set_language(String(_language_option.get_item_metadata(index)))
 
 
 func _on_reset_pressed() -> void:
@@ -371,7 +593,7 @@ func _gyro_section() -> void:
 	calibrate.disabled = not GameInput.gyro_available
 	calibrate.pressed.connect(func() -> void:
 		GameInput.calibrate_gyro()
-		_rebind_status.text = "陀螺仪已校准：当前姿态作为中位。")
+		_rebind_status.text = I18n.t("陀螺仪已校准：当前姿态作为中位。"))
 	_input_box.add_child(calibrate)
 
 
@@ -380,7 +602,7 @@ func _bindings_section() -> void:
 	_input_box.add_child(_text_label(
 		"点右侧按钮后按下新键/手柄按钮。键鼠与手柄各保留一个绑定。",
 		16, Color(0.62, 0.70, 0.82)))
-	_rebind_status = _text_label("尚未重绑。", 16, Color(0.72, 0.80, 0.92))
+	_rebind_status = _text_label(I18n.t("尚未重绑。"), 16, Color(0.72, 0.80, 0.92))
 	_input_box.add_child(_rebind_status)
 
 	for action in GameInput.actions_in_order():
@@ -405,7 +627,7 @@ func _bindings_section() -> void:
 		reset.pressed.connect(func() -> void:
 			GameInput.reset_action(action)
 			_refresh_binding_buttons()
-			_rebind_status.text = "已重置：%s" % GameInput.action_label(action))
+			_rebind_status.text = I18n.t("已重置：%s", [GameInput.action_label(action)]))
 		row.add_child(reset)
 		_input_box.add_child(row)
 
@@ -416,7 +638,7 @@ func _bindings_section() -> void:
 	reset_all.pressed.connect(func() -> void:
 		GameInput.reset_all_bindings()
 		_refresh_binding_buttons()
-		_rebind_status.text = "已恢复默认键位。")
+		_rebind_status.text = I18n.t("已恢复默认键位。"))
 	_input_box.add_child(reset_all)
 
 
@@ -424,10 +646,10 @@ func _begin_rebind(action: String) -> void:
 	_rebind_action = action
 	_rebind_started_ms = Time.get_ticks_msec()
 	GameInput.set_capture_input(true)
-	_rebind_status.text = "请按下新键/手柄按钮…（Esc 取消）"
+	_rebind_status.text = I18n.t("请按下新键/手柄按钮…（Esc 取消）")
 	var button: Button = _rebind_buttons.get(action, null)
 	if button != null:
-		button.text = "请按下新键…"
+		button.text = I18n.t("请按下新键…")
 
 
 func _finish_rebind() -> void:
@@ -443,7 +665,7 @@ func _cancel_rebind(update_status: bool = true) -> void:
 	GameInput.set_capture_input(false)
 	_refresh_binding_buttons()
 	if update_status and _rebind_status != null:
-		_rebind_status.text = "已取消重绑。"
+		_rebind_status.text = I18n.t("已取消重绑。")
 
 
 func _refresh_binding_buttons() -> void:
@@ -492,6 +714,22 @@ func _on_external_setting_changed(section: String, key: String, value: Variant) 
 		_syncing = false
 		_refresh_adaptive_label()
 	elif key == "render_scale":
+		_refresh_adaptive_label()
+	elif key == "upscaler":
+		_syncing = true
+		_fill_upscaler_option()
+		_syncing = false
+		_refresh_adaptive_label()
+		_refresh_display_hint()
+	elif key == "vrs":
+		_syncing = true
+		_fill_vrs_option()
+		_syncing = false
+		_refresh_display_hint()
+	elif key == "dynamic_target_fps":
+		_syncing = true
+		_fill_target_fps_option()
+		_syncing = false
 		_refresh_adaptive_label()
 
 

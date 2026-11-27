@@ -296,8 +296,77 @@ impl AiSpline {
             });
         }
 
-        let mut best: Option<(usize, f32, Vec3, f32, f32)> = None;
-        for index in 0..count {
+        let best = self.scan_segments(position, 0, count)?;
+        Some(self.projection_from(position, best))
+    }
+
+    /// Project with the previous frame's segment index as a hint.
+    ///
+    /// An AI car moves only a few metres per frame, so the nearest segment is
+    /// almost always within a small window of the last one. This turns the
+    /// per-frame `O(points)` scan into `O(window)` — on Nürburgring
+    /// (`fast_lane.ai` has 13k points) that is the difference between a
+    /// ~13k-segment scan and a ~129-segment one per car per frame.
+    ///
+    /// The result is identical to [`Self::project`] whenever the answer is
+    /// inside the window. It falls back to the full scan when the hint is
+    /// missing/stale (first call, teleport, reset), when the best candidate
+    /// sits on the window edge, or when the projected point is far away
+    /// (the car has left the hinted part of the track).
+    ///
+    /// `window` is the number of segments searched on each side; it is
+    /// clamped to half the lap. Use [`Self::DEFAULT_PROJECT_WINDOW`] unless
+    /// there is a measured reason to go wider.
+    pub fn project_near(
+        &self,
+        position: Vec3,
+        hint: Option<usize>,
+        window: usize,
+    ) -> Option<AiProjection> {
+        let count = self.points.len();
+        if count == 0 || !position.is_finite() {
+            return None;
+        }
+        if count == 1 {
+            return self.project(position);
+        }
+        let Some(hint) = hint.filter(|index| *index < count) else {
+            return self.project(position);
+        };
+
+        let window = window.min(count / 2).max(1);
+        let len = (2 * window + 1).min(count);
+        if len >= count {
+            // 窗口已经覆盖整圈：直接走全量扫描，平局/顺序与 `project` 完全一致。
+            return self.project(position);
+        }
+        // 提示必须真的在查询点附近。传送、重置、或者多个 AI 车共用同一个
+        // `AiDriver` 时，上一帧的索引可能属于另一段赛道；此时窗口里找到的
+        // “最近点”可能只是局部极小，必须退回全量扫描。
+        let hint_distance_sq = self.segment_distance_sq(position, hint);
+        if hint_distance_sq > HINT_MAX_DISTANCE_M * HINT_MAX_DISTANCE_M {
+            return self.project(position);
+        }
+        let start = (hint + count - window) % count;
+        let best = self.scan_segments(position, start, len)?;
+
+        // 窗口边界上的最优点可能不是全局最优：窗口外面还有更近的段。
+        let first = start;
+        let last = (start + len - 1) % count;
+        let on_boundary = len < count && (best.index == first || best.index == last);
+        if on_boundary || best.distance_sq.sqrt() > NEAR_MAX_DISTANCE_M {
+            return self.project(position);
+        }
+        Some(self.projection_from(position, best))
+    }
+
+    /// Nearest segment over `len` segments starting at `start`, wrapping at
+    /// the end of the lap. Returns `None` only when there is nothing to scan.
+    fn scan_segments(&self, position: Vec3, start: usize, len: usize) -> Option<SegmentBest> {
+        let count = self.points.len();
+        let mut best: Option<SegmentBest> = None;
+        for offset in 0..len {
+            let index = (start + offset) % count;
             let a = self.points[index].position;
             let b = self.points[(index + 1) % count].position;
             let dx = b.x - a.x;
@@ -312,26 +381,68 @@ impl AiSpline {
             let offset_x = position.x - closest.x;
             let offset_z = position.z - closest.z;
             let distance_sq = offset_x * offset_x + offset_z * offset_z;
-            if best.is_none_or(|(_, _, _, _, best_distance)| distance_sq < best_distance) {
-                let along = self.cumulative_m[index] + t * length_sq.sqrt();
-                best = Some((index, t, closest, along, distance_sq));
+            if best.is_none_or(|best| {
+                distance_sq < best.distance_sq
+                    // 与全量扫描的顺序无关地复现同样的平局规则：距离相同时
+                    // 取更小的段索引（全量扫描从头扫，天然保留第一个）。
+                    || (distance_sq == best.distance_sq && index < best.index)
+            }) {
+                best = Some(SegmentBest {
+                    index,
+                    t,
+                    closest,
+                    distance_sq,
+                });
             }
         }
-
-        let (index, t, closest, along_m, distance_sq) = best?;
-        let tangent = self.segment_tangent(index);
-        let right = tangent.cross(Vec3::Y);
-        let lateral_m = (position.x - closest.x) * right.x + (position.z - closest.z) * right.z;
-        Some(AiProjection {
-            index,
-            t,
-            position: closest,
-            tangent,
-            along_m,
-            lateral_m,
-            distance_m: distance_sq.sqrt(),
-        })
+        best
     }
+
+    /// Squared horizontal distance from `position` to the `index` segment.
+    fn segment_distance_sq(&self, position: Vec3, index: usize) -> f32 {
+        let count = self.points.len();
+        let a = self.points[index].position;
+        let b = self.points[(index + 1) % count].position;
+        let dx = b.x - a.x;
+        let dz = b.z - a.z;
+        let length_sq = dx * dx + dz * dz;
+        let t = if length_sq > 1.0e-8 {
+            (((position.x - a.x) * dx + (position.z - a.z) * dz) / length_sq).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let x = a.x + dx * t - position.x;
+        let z = a.z + dz * t - position.z;
+        x * x + z * z
+    }
+
+    fn projection_from(&self, position: Vec3, best: SegmentBest) -> AiProjection {
+        let a = self.points[best.index].position;
+        let b = self.points[(best.index + 1) % self.points.len()].position;
+        let a_to_b = b - a;
+        let horizontal_sq = a_to_b.x * a_to_b.x + a_to_b.z * a_to_b.z;
+        let along = self.cumulative_m[best.index] + best.t * horizontal_sq.sqrt();
+        let tangent = self.segment_tangent(best.index);
+        let right = tangent.cross(Vec3::Y);
+        let lateral_m =
+            (position.x - best.closest.x) * right.x + (position.z - best.closest.z) * right.z;
+        AiProjection {
+            index: best.index,
+            t: best.t,
+            position: best.closest,
+            tangent,
+            along_m: along,
+            lateral_m,
+            distance_m: best.distance_sq.sqrt(),
+        }
+    }
+
+    /// Default per-side segment window for [`Self::project_near`].
+    ///
+    /// 64 segments is ~100 m on Nürburgring's 1.5 m sampling: more than a
+    /// frame of travel at any speed the car can reach, while staying far
+    /// below the 13k-point full scan.
+    pub const DEFAULT_PROJECT_WINDOW: usize = 64;
 
     /// Sample the spline at a cumulative distance, wrapping around the lap.
     pub fn sample_at_distance(&self, distance_m: f32) -> Option<AiSample> {
@@ -463,6 +574,30 @@ impl AiSpline {
         best
     }
 }
+
+/// One candidate from the nearest-segment scan.
+#[derive(Clone, Copy)]
+struct SegmentBest {
+    index: usize,
+    t: f32,
+    closest: Vec3,
+    distance_sq: f32,
+}
+
+/// 提示窗口查询认定结果「离提示路段太远」的距离，米。
+///
+/// 正常行驶时距离是横向误差（几米以内）；超过这个值说明车已经不在上一帧
+/// 的赛道段附近（传送、重置、从缓冲区开回赛道），窗口扫描不再可信，退回
+/// 全量扫描。取 30 m 比任何正常赛道宽度都大，又远小于 Nürburgring 相邻
+/// 路段的常见间距。
+const NEAR_MAX_DISTANCE_M: f32 = 30.0;
+
+/// 提示段本身与查询点的最大允许水平距离，米。
+///
+/// 窗口扫描之前先看“上一帧那一段还在不在车旁边”。正常横向误差远小于这个
+/// 值；超过它说明提示属于另一段赛道（传送/重置/多车共用一个 `AiDriver`），
+/// 直接退回全量扫描，避免窗口里找到只是局部最近的段。
+const HINT_MAX_DISTANCE_M: f32 = 12.0;
 
 /// The result of projecting a point onto an AI spline.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -804,6 +939,47 @@ mod tests {
         points.push(Vec3::new(2.0 * radius, 0.0, -40.0));
         spline_from_points(&points, 30.0, Vec3::new(0.0, 1.0, 0.0))
     }
+    #[test]
+    fn hinted_projection_matches_the_full_scan() {
+        let spline = AiSpline::parse(&circle_spline(40.0)).unwrap();
+        let lap = spline.lap_length_m();
+        let mut hint = None::<usize>;
+        for step in 0..400 {
+            let sample = spline
+                .sample_at_distance(lap * step as f32 / 400.0)
+                .unwrap();
+            let position = sample.position + Vec3::new(1.5, 0.0, -0.7);
+            let full = spline.project(position).unwrap();
+            let near = spline
+                .project_near(position, hint, AiSpline::DEFAULT_PROJECT_WINDOW)
+                .unwrap();
+            assert_eq!(near.index, full.index, "step {step}");
+            assert!((near.along_m - full.along_m).abs() < 1.0e-3, "step {step}");
+            assert!(
+                (near.lateral_m - full.lateral_m).abs() < 1.0e-3,
+                "step {step}"
+            );
+            assert!((near.distance_m - full.distance_m).abs() < 1.0e-3);
+            hint = Some(near.index);
+        }
+    }
+
+    #[test]
+    fn hinted_projection_falls_back_when_the_hint_is_stale() {
+        let spline = AiSpline::parse(&circle_spline(40.0)).unwrap();
+        let lap = spline.lap_length_m();
+        // 车被传送到圆的对面：提示索引离得足够远，窗口里没有正确段。
+        let position =
+            spline.sample_at_distance(lap * 0.5).unwrap().position + Vec3::new(0.0, 0.0, 2.0);
+        let full = spline.project(position).unwrap();
+        let near = spline.project_near(position, Some(0), 4).unwrap();
+        assert_eq!(near.index, full.index);
+        assert!((near.along_m - full.along_m).abs() < 1.0e-3);
+        // 越界的提示按“没有提示”处理。
+        let over = spline.project_near(position, Some(usize::MAX), 4).unwrap();
+        assert_eq!(over.index, full.index);
+    }
+
     #[test]
     fn curvature_of_a_circle_is_the_curvature_that_was_authored() {
         for radius in [15.0f32, 25.0, 40.0, 80.0] {

@@ -1,0 +1,389 @@
+[gd_scene load_steps=6 format=3 uid="uid://bvetturadrive"]
+
+[ext_resource type="Script" path="res://game/drive.gd" id="1_drive"]
+[ext_resource type="PackedScene" path="res://game/render/weather_rig.tscn" id="2_rig"]
+[ext_resource type="PackedScene" path="res://game/fx/fx_runtime.tscn" id="3_fx"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.035, 0.045, 0.06, 0.82)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.28, 0.34, 0.44, 0.55)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_speed"]
+bg_color = Color(0.035, 0.045, 0.06, 0.82)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.28, 0.34, 0.44, 0.55)
+corner_radius_top_left = 14
+corner_radius_top_right = 14
+corner_radius_bottom_right = 14
+corner_radius_bottom_left = 14
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_dim"]
+bg_color = Color(0.015, 0.02, 0.03, 0.92)
+
+[node name="Drive" type="Node3D"]
+script = ExtResource("1_drive")
+
+[node name="WeatherRig" parent="." instance=ExtResource("2_rig")]
+
+[node name="FxRuntime" parent="." instance=ExtResource("3_fx")]
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3, 9)
+current = true
+fov = 70.0
+near = 0.08
+far = 4000.0
+
+[node name="TouchLayer" type="CanvasLayer" parent="."]
+layer = 1
+
+[node name="TouchRoot" type="Control" parent="TouchLayer"]
+unique_name_in_owner = true
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="BrakeArea" type="ColorRect" parent="TouchLayer/TouchRoot"]
+layout_mode = 1
+anchors_preset = 6
+anchor_left = 0.0
+anchor_top = 0.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+grow_vertical = 2
+color = Color(1, 0.2, 0.2, 0.08)
+
+[node name="BrakeButton" type="Button" parent="TouchLayer/TouchRoot/BrakeArea"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+focus_mode = 0
+flat = true
+theme_override_colors/font_color = Color(1, 0.75, 0.75, 0.55)
+theme_override_font_sizes/font_size = 28
+text = "刹车"
+alignment = 1
+
+[node name="ThrottleArea" type="ColorRect" parent="TouchLayer/TouchRoot"]
+layout_mode = 1
+anchors_preset = 10
+anchor_left = 0.5
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_vertical = 2
+color = Color(0.2, 1, 0.3, 0.08)
+
+[node name="ThrottleButton" type="Button" parent="TouchLayer/TouchRoot/ThrottleArea"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+focus_mode = 0
+flat = true
+theme_override_colors/font_color = Color(0.75, 1, 0.78, 0.55)
+theme_override_font_sizes/font_size = 28
+text = "油门"
+alignment = 1
+
+[node name="HUD" type="CanvasLayer" parent="."]
+layer = 2
+
+[node name="Root" type="Control" parent="HUD"]
+unique_name_in_owner = true
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Margin" type="MarginContainer" parent="HUD/Root"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="Layout" type="VBoxContainer" parent="HUD/Root/Margin"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 10
+
+[node name="Top" type="HBoxContainer" parent="HUD/Root/Margin/Layout"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 12
+
+[node name="InfoPanel" type="PanelContainer" parent="HUD/Root/Margin/Layout/Top"]
+custom_minimum_size = Vector2(430, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="InfoMargin" type="MarginContainer" parent="HUD/Root/Margin/Layout/Top/InfoPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 10
+
+[node name="InfoBox" type="VBoxContainer" parent="HUD/Root/Margin/Layout/Top/InfoPanel/InfoMargin"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="CarLabel" type="Label" parent="HUD/Root/Margin/Layout/Top/InfoPanel/InfoMargin/InfoBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 22
+text = "车辆"
+
+[node name="TrackLabel" type="Label" parent="HUD/Root/Margin/Layout/Top/InfoPanel/InfoMargin/InfoBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.72, 0.80, 0.92, 1)
+theme_override_font_sizes/font_size = 16
+text = "赛道"
+
+[node name="LapLabel" type="Label" parent="HUD/Root/Margin/Layout/Top/InfoPanel/InfoMargin/InfoBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.98, 0.78, 0.36, 1)
+theme_override_font_sizes/font_size = 20
+text = "本圈 00:00.000"
+
+[node name="SectorLabel" type="Label" parent="HUD/Root/Margin/Layout/Top/InfoPanel/InfoMargin/InfoBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.70, 0.78, 0.90, 1)
+theme_override_font_sizes/font_size = 15
+text = "上一圈 --    最佳 --"
+
+[node name="Spacer" type="Control" parent="HUD/Root/Margin/Layout/Top"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+
+[node name="Actions" type="HBoxContainer" parent="HUD/Root/Margin/Layout/Top"]
+layout_mode = 2
+theme_override_constants/separation = 8
+alignment = 2
+
+[node name="CameraButton" type="Button" parent="HUD/Root/Margin/Layout/Top/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(122, 44)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "视角：车后"
+
+[node name="ResetButton" type="Button" parent="HUD/Root/Margin/Layout/Top/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 44)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "重置"
+
+[node name="SettingsButton" type="Button" parent="HUD/Root/Margin/Layout/Top/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 44)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "设置"
+
+[node name="LobbyButton" type="Button" parent="HUD/Root/Margin/Layout/Top/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 44)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "大厅"
+
+[node name="Flexible" type="Control" parent="HUD/Root/Margin/Layout"]
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 2
+
+[node name="Bottom" type="HBoxContainer" parent="HUD/Root/Margin/Layout"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 12
+
+[node name="HintPanel" type="PanelContainer" parent="HUD/Root/Margin/Layout/Bottom"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 8
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="HintMargin" type="MarginContainer" parent="HUD/Root/Margin/Layout/Bottom/HintPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 14
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 14
+theme_override_constants/margin_bottom = 8
+
+[node name="HintBox" type="VBoxContainer" parent="HUD/Root/Margin/Layout/Bottom/HintPanel/HintMargin"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="HintLabel" type="Label" parent="HUD/Root/Margin/Layout/Bottom/HintPanel/HintMargin/HintBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.76, 0.83, 0.94, 1)
+theme_override_font_sizes/font_size = 15
+text = "W/S 油门刹车 · A/D 转向 · C 视角 · R 重置 · Esc 设置"
+autowrap_mode = 3
+
+[node name="AssistLabel" type="Label" parent="HUD/Root/Margin/Layout/Bottom/HintPanel/HintMargin/HintBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.64, 0.78, 1)
+theme_override_font_sizes/font_size = 13
+text = "ABS · TC · 自动挡"
+
+[node name="SpeedPanel" type="PanelContainer" parent="HUD/Root/Margin/Layout/Bottom"]
+custom_minimum_size = Vector2(260, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_speed")
+
+[node name="SpeedMargin" type="MarginContainer" parent="HUD/Root/Margin/Layout/Bottom/SpeedPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 18
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 18
+theme_override_constants/margin_bottom = 10
+
+[node name="SpeedBox" type="VBoxContainer" parent="HUD/Root/Margin/Layout/Bottom/SpeedPanel/SpeedMargin"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="SpeedRow" type="HBoxContainer" parent="HUD/Root/Margin/Layout/Bottom/SpeedPanel/SpeedMargin/SpeedBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="SpeedLabel" type="Label" parent="HUD/Root/Margin/Layout/Bottom/SpeedPanel/SpeedMargin/SpeedBox/SpeedRow"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 54
+text = "0"
+
+[node name="UnitLabel" type="Label" parent="HUD/Root/Margin/Layout/Bottom/SpeedPanel/SpeedMargin/SpeedBox/SpeedRow"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.65, 0.72, 0.84, 1)
+theme_override_font_sizes/font_size = 16
+text = "km/h"
+vertical_alignment = 2
+
+[node name="GearLabel" type="Label" parent="HUD/Root/Margin/Layout/Bottom/SpeedPanel/SpeedMargin/SpeedBox/SpeedRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 8
+theme_override_colors/font_color = Color(0.98, 0.78, 0.36, 1)
+theme_override_font_sizes/font_size = 34
+text = "N"
+horizontal_alignment = 2
+
+[node name="RpmBar" type="ProgressBar" parent="HUD/Root/Margin/Layout/Bottom/SpeedPanel/SpeedMargin/SpeedBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 8)
+layout_mode = 2
+value = 0.0
+show_percentage = false
+
+[node name="RpmLabel" type="Label" parent="HUD/Root/Margin/Layout/Bottom/SpeedPanel/SpeedMargin/SpeedBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.70, 0.82, 1)
+theme_override_font_sizes/font_size = 13
+text = "0 rpm"
+horizontal_alignment = 2
+
+[node name="Loading" type="Control" parent="HUD/Root"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Dim" type="Panel" parent="HUD/Root/Loading"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_dim")
+
+[node name="Center" type="CenterContainer" parent="HUD/Root/Loading"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Stack" type="VBoxContainer" parent="HUD/Root/Loading/Center"]
+custom_minimum_size = Vector2(460, 0)
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="LoadingTitle" type="Label" parent="HUD/Root/Loading/Center/Stack"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 36
+text = "VETTURA"
+horizontal_alignment = 1
+
+[node name="LoadingLabel" type="Label" parent="HUD/Root/Loading/Center/Stack"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.80, 0.86, 0.96, 1)
+theme_override_font_sizes/font_size = 18
+text = "正在准备赛道…"
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="LoadingBar" type="ProgressBar" parent="HUD/Root/Loading/Center/Stack"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 12)
+layout_mode = 2
+value = 0.0
+show_percentage = false
+
+[node name="LoadingBackButton" type="Button" parent="HUD/Root/Loading/Center/Stack"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(0, 46)
+layout_mode = 2
+theme_override_font_sizes/font_size = 19
+text = "返回大厅"

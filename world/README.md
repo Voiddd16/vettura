@@ -51,6 +51,7 @@ Vettura 物理帧（`+X` 右/`+Y` 上/`-Z` 前，转换走 `vettura_physics::coo
 ```bash
 cargo test -p vettura-world                                  # 单元 + 集成（60+ 例）
 cargo test -p vettura-assets --test track_module -- --ignored # 真赛道（需 mods/daytona_2017）
+cargo bench -p vettura-world --bench step                    # 物理步进吞吐（可选真赛道/真车）
 ```
 
 ## 相关文档

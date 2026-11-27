@@ -263,7 +263,7 @@ fn main() {
     let Some(sdk) = locate_sdk() else {
         if feature_enabled {
             println!("cargo:warning=未找到 FMOD SDK，`fmod` feature 将以 stub 模式编译");
-            println!("cargo:warning=请先在 Godot 主工程执行：cd scripts && uv run fetch_fmod.py");
+            println!("cargo:warning=请先在 Godot 主工程执行：cd scripts && python3 fetch_fmod.py");
             println!("cargo:warning=或在 build.rs 定位位置参见 docs/build.md 的 FMOD 小节");
         }
         println!("cargo:rustc-cfg=fmod_sdk_missing");

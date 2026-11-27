@@ -12,11 +12,11 @@ DXT1 贴图 ≈ 66 MiB，接近真实 mod 车）分别测量
 
 用法：
 
-    uv run scripts/load_probe.py                 # 默认规模
-    uv run scripts/load_probe.py --meshes 64 --vertices 1024
-    uv run scripts/load_probe.py --keep           # 只跑探针，复用已生成的模型
+    python3 scripts/load_probe.py                 # 默认规模
+    python3 scripts/load_probe.py --meshes 64 --vertices 1024
+    python3 scripts/load_probe.py --keep           # 只跑探针，复用已生成的模型
 
-只需 Python 3.11+（纯标准库）；Godot 可执行文件用 `--godot` 指定，
+只需 Python 3.10+（纯标准库）；Godot 可执行文件用 `--godot` 指定，
 默认按平台探测 `/Applications/Godot.app/Contents/MacOS/Godot`。
 """
 
@@ -34,11 +34,13 @@ TARGET_DIR = ROOT / "target" / "probe"
 MODEL = TARGET_DIR / "car.kn5"
 PROBE_SCENE = "res://gdext/load_probe.tscn"
 
-# 平台默认的 Godot 可执行文件；都找不到时用 `--godot` 指定。
+# 平台默认的 Godot 可执行文件；`$GODOT` 优先，都找不到时用 `--godot` 指定。
 GODOT_CANDIDATES = (
+    os.environ.get("GODOT"),
+    shutil.which("godot"),
+    shutil.which("godot4"),
     "/Applications/Godot.app/Contents/MacOS/Godot",
     "/usr/local/bin/godot",
-    shutil.which("godot"),
 )
 
 

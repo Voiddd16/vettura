@@ -47,6 +47,7 @@ let wet = Weather::wet(0.6);
 
 ```bash
 cargo test -p vettura-track
+cargo bench -p vettura-track --bench spline   # AI 线投影全量 vs 提示窗口
 ```
 
 ## 相关文档
